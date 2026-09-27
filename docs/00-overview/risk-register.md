@@ -39,8 +39,9 @@
 | R-05 | 当前无 Quartus / ModelSim / 上板证据 | S1 | 未开始 | 任何“已上板/已通过综合”声明 | 属于本项目的 Fitter/TimeQuest 报告 + 一次可观测的板级 bring-up |
 | R-06 | 当前 NMI 端到端覆盖缺口 | S1 | 未解决 | v1 功能完成声明 | 系统级 NMI TB 通过，NMI 形式在 CPU 合同中有明确约定 |
 | R-07 | 50 MHz 到 NTSC/VGA/音频时钟未实现、未验证 | S0 | 未开始 | 所有视频/音频时序、平台/综合阶段 | PLL IP 已生成并由 TimeQuest 确认；绝对频率与 3:1 比例都有断言和实测证据 |
+| R-08 | 精灵 slot 选择的组合开销（每 `ce` 一次 64 项 OAM 范围扫描） | S0 | 未解决 | 外部 CHR 精灵通路的时序收敛、`ppu-ext-chr-tb` 回归时长 | 把扫描移到稀疏拍或改为按行预算一次；Fitter 报告给出面积/时序数字且回归耗时回落 |
 
-与 `docs/00-overview/verification-plan.md` 的对应关系：R-01/R-03/R-04 是 L5 的前置条件；R-06 是 L1/L4 的覆盖缺口；R-05 决定 L5 能否从“未开始”进入进行中；R-07 同样是 L5 的前置条件，因为它决定平台顶层的时钟结构。
+与 `docs/00-overview/verification-plan.md` 的对应关系：R-01/R-03/R-04 是 L5 的前置条件；R-06 是 L1/L4 的覆盖缺口；R-05 决定 L5 能否从“未开始”进入进行中；R-07 同样是 L5 的前置条件，因为它决定平台顶层的时钟结构；R-08 阻断的是外部 CHR 精灵通路在接近时序收敛前的可用性，同时也是 `ppu-ext-chr-tb` 回归时长已经占到全量 45.26% 的直接原因。
 
 ## 3. S0 风险
 
@@ -250,10 +251,10 @@
 
 **影响**
 
-- 现在唯一可重复的证据是 Icarus Verilog 下的三个自包含 testbench。没有任何综合、布局布线、时序分析、板级电气或上板行为证据。
+- 现在唯一可重复的证据是 Icarus Verilog 下的 **34 个**自包含 testbench（`tools/sim_all.ps1` 的 `$allTargets` 实际求值实测 50 个目标 = 16 个 compile-only + 34 个仿真）。**没有任何综合、布局布线、时序分析、板级电气或上板行为证据。**
 - 因此以下判断目前**全部无证据**：资源够不够、fmax 够不够、BRAM 能否推断、SDC 是否完整、引脚与 IO standard 是否正确、复位与 PLL 是否稳定、画面与声音是否正确。
 - 这直接限制 R-01/R-03/R-04 的关闭方式：它们无法靠仿真关闭。
-- 证据工具本身还有两个缺口：PPU 与系统 testbench 没有脚本入口；`tools/sim_cpu.ps1` 的 `rtl` 与 `pure` 两个模式实际执行同一条命令。
+- 证据工具本身还有一个缺口：只有 Icarus 一个行为仿真器，`run_*.do` 只覆盖 `tb/cpu/`、`tb/ppu/`、`tb/system/`、`tb/apu/`，其余目录没有 ModelSim 入口脚本；`tools/sim_cpu.ps1` 的 `rtl` 与 `pure` 两个模式实际执行同一条命令。
 - `docs/hardware/` 中出现的 BRAM、PLL、乘法器数字来自**厂商例程**的 Fitter 报告，不能当作本项目工程的资源结论。
 
 **证据**
@@ -261,7 +262,7 @@
 - 【事实】`rtl/` 下已有 `nes_core/{cpu,ppu,system,video,bus,apu,mapper,controller,cart,peripheral}` 与 `platform/ep4ce10/`（3 个 `.v`），平台顶层 `nes_ep4ce10_top` 存在。
 - 【事实】仓库内已有 `quartus/op_fpga_emu.{qpf,qsf,sdc}` 工程骨架：`.qsf` 声明 `DEVICE EP4CE10F17C8` 与 `TOP_LEVEL_ENTITY nes_ep4ce10_top`，`.sdc` 含 3 条 `create_clock`（50 MHz `sys_clk`、21.477272 MHz `clk_ntsc`、25 MHz `clk_vga`）与 2 条 `set_false_path`。但 `set_location_assignment` 0 条、`create_generated_clock` 0 条（altpll 未生成）、`set_input_delay`/`set_output_delay` 各 0 条，且三个文件**从未在 Quartus 中打开或编译**；仓库内仍无 `.qip`、`.sdf`、`.stp`、`.srf`。实测数字见 `quartus/README.md` 第 0.1 节。
 - 【审查】`tb/ppu/README.md` 与 `tb/system/README.md` 均写明“当前仓库没有 ModelSim、Quartus 或 EP4CE10 上板证据；该脚本未被本版本验证”。
-- 【审查】`docs/00-overview/verification-plan.md` 第 4 节 L5 明确“当前没有 NES 顶层和平台顶层，因此此层状态是未开始，而不是失败或通过”；第 3.3 节说明 ModelSim 通过也只增加独立工具证据，不代表 EP4CE10 适配完成。
+- 【审查】`docs/00-overview/verification-plan.md` 第 4 节 L5 的结论是"此层状态是未开始，而不是失败或通过"，并已明确记录"**骨架不是结果**"：`quartus/` 下三个文件存在、平台顶层 `nes_ep4ce10_top.v` 存在但**未综合**、`.qpf`/`.qsf`/`.sdc` **从未在 Quartus 中打开或编译过**；同文档第 3.3 节说明 ModelSim 通过也只增加独立工具证据，不代表 EP4CE10 适配完成。
 - 【事实】`tools/sim_cpu.ps1:3` 的 `ValidateSet` 为 `rtl|pure|integration|bus|all`，其中 `rtl` 与 `pure` 都调用 `-Top nes_cpu6502` 加同一份源文件；`:14-15` 把工具路径硬编码为 `C:\iverilog\bin`。
 - 【事实】`tb/ppu/README.md` 与 `tb/system/README.md` 的期望运行时间分别约为几十秒和约 9 秒，说明仿真规模已经不小，进一步的证据补齐需要规划时间预算。
 
@@ -410,7 +411,7 @@
 - 【事实】`rtl/nes_core/video/nes_line_buffer_vga.v` 用 `wr_clk` / `rd_clk` 两个独立时钟，只让 1 bit 的 `line_ready_toggle` 过两级同步器；像素数据不出双口 RAM。
 - 【事实】`docs/modules/line-buffer-vga.md` 第 3.5 节记录读端速率必须 ≥ 写端速率的 4 倍：NTSC 写端 5.369318 MHz 的 4 倍是 21.48 MHz，低于 VGA 的 25 MHz，余量约 16%。第 5.5 节记录该模块没有背压，写端领先 2 行以上会静默丢行。
 - 【事实】`docs/hardware/08-wm8978-audio.md` 第 3 节记录例程 MCLK 为 12 MHz，并记录 12 MHz 在 256× 配置下只能得到 46.875 kHz，不是标准采样率。
-- 【审查】`docs/00-overview/decision-log.md` 与 `docs/00-overview/architecture.md` 均未记录时钟方案决策，`rtl/platform/ep4ce10/` 目录不存在（见 R-05）。
+- 【审查】`docs/00-overview/decision-log.md` 与 `docs/00-overview/architecture.md` 均未记录时钟方案决策。**`rtl/platform/ep4ce10/` 目录存在**（`nes_ep4ce10_top.v`、`nes_ep4ce10_pll_stub.v`、`nes_ep4ce10_qsf_if.v` 三个文件），其中 PLL 仍是占位 stub、`nes_ep4ce10_qsf_if` 只是可编译的引脚封装层，都**未综合**（见 R-05）。
 - 【推断】PLL 可达频率是离散的，21.477272 MHz 从 50 MHz 出发**无法精确得到**；器件的 VCO 范围与乘数/分频上限必须从 Cyclone IV E 手册查，本条不给出具体数值。频率误差能做到多小取决于可达组合，属于未测量。
 - 【推断】帧长 341 × 262 = 89,342 个 dot 不能被 3 整除（mod 3 = 2），因此 CPU 与 PPU 的相对对齐每帧漂移 2/3 个 CPU 周期、以 3 帧循环。这是硬件性质，当前没有任何断言记录它。
 
@@ -431,3 +432,53 @@
 - 存在 SDC，其中 50 MHz 输入、全部派生时钟、异步时钟分组与 `ce_cpu` / `ce_ppu` 多周期路径约束齐备，每条 `false_path` 有书面理由。
 - TimeQuest 报告中未约束端点为 0 或每条有解释；最差 slack 有数值记录。
 - 在以上条件满足之前，任何文档、README 或状态报告都不得出现“帧率正确”“音画同步”“时钟方案可行”“已通过 STA”等表述；本文第 3 节的候选值不得被引用为设计值。
+
+---
+
+## 9. S0 风险（续）
+
+### R-08 精灵 slot 选择的组合开销：每 `ce` 一次 64 项 OAM 范围扫描
+
+**等级/状态：** S0 / 未解决
+
+**负责人：** PPU 集成层（`rtl/nes_core/ppu/nes_ppu2c02.v`）
+
+**验证证据：** 没有任何综合报告。唯一的量化证据是 `tools/sim_all.ps1 -Mode all` 的逐目标耗时：同一条 RTL 在接与不接精灵 slot 选择这两版之间，`ppu-ext-chr-tb` 从 143.7 s 涨到 821.6 s。**这不是综合数字，只是量级信号。**
+
+**风险**
+
+`nes_ppu2c02.v` 的 `g_chr_external` 分支（`EXTERNAL_CHR = 1`）里，为了在每个 `ce` 上给出"当前该用哪个 sprite slot"，有一段组合逻辑（`:494-520`）必须**每 `ce` 求值一次 64 项 OAM 范围扫描**：`sp_in_range` 遍历 64 个 OAM 项做 Y 范围比较并累加 `range_count`，随后对 8 个候选 slot 各调一次 `sp_nth_set`（它自己又扫一遍 64 bit 向量）。与之相邻的还有一段同形状的 slot 选择逻辑在 `nes_ppu_sprite.v` 内部（`EXTERNAL_CHR = 0` 路径），所以这条成本在两条路径上都存在，只是 `EXTERNAL_CHR = 0` 的目标没有精灵 `chr_sh`/shadow 那条敏感的组合链，代价没有被放大到同量级。
+
+**影响**
+
+- **面积**：64 项范围比较 + 8 次 64 bit 优先编码展开，在 Cyclone IV E 上是数百个 LE 量级的组合逻辑。EP4CE10 全部只有 10,320 LE（`docs/hardware/01-ep4ce10-board.md` 引用的厂商例程数字），**本项目从未综合过，所以真实占用未知**。
+- **时序**：这段逻辑挂在 `chr_sh` → `nes_ppu_sprite` 的 `s_plane_lo`/`s_plane_hi` → `slot_opaque` → `sprite_pixel` 路径上，也就是**每个 PPU dot 的精灵像素输出**都在等它。它和背景像素通路（`/30`、`%30`、两级 RAM 读，见 R-03）叠在同一个 `pixel_index` 收敛点上。
+- **回归时长**：`ppu-ext-chr-tb` 占全量从 15.0 % 升到 **45.26 %**，与 `chr-feasibility-tb` 合计 **51.0 %**；全量从 958.0 s 涨到 1815.3 s（**+89 %**）。**一半以上的回归墙钟压在两个目标上**，继续加逐帧断言的边际成本已经很高。
+- **真实开销与假象必须分开**：本机这一轮整体慢约 **×1.17~×1.35**（用**不含 `nes_ppu2c02`** 的目标测得：`mapper-combined` ×1.35、`cpu-integration` ×1.31、`cpu-inc` ×1.26）。扣除抖动带后，`ppu-ext-chr-tb` 仍有约 **×4.7 的纯结构倍数**；`chr-feasibility-tb` 残差约 ×1.14、`ppu-integration` 约 ×1.11、`system-v3` 约 ×1.10、`system-v2` 约 ×1.08；`system-v0`/`v0-nmi`/`v1-audio`/`v4`/`v5`/`platform-tb` 落在抖动带内（残差 ≈ ×0.93~×0.97），**测不出结构性成本**。Icarus 报出的 `@* is sensitive to all 256 words in array 'oam_ram'` 警告与这个判断一致。
+
+**证据**
+
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:494-520`：`always @*` 块里 `for (sp_si = 0; sp_si < 64; ...)` 按 `scanline` 与 `oam_ram[{sp_si[5:0], 2'b00}]` 做 9 bit 减法并比较 `< sp_height`，得到 64 bit `sp_in_range` 与 `sp_range_count`；随后 `for (sp_gi = 0; sp_gi < 8; ...)` 对每个 slot 调 `sp_nth_set`（`:471-492`，内部 `for (b = 0; b < 64; b = b + 1)`），再用 `oam_ram[{sp_idx[5:0], 2'b11}]` 算 `sp_xoff` 判水平覆盖。整个 `always @*` 的输出 `sp_slot` 直接决定 `sp_base_lo`/`sp_base_hi`（`:524-525`）→ `sp_plane_lo`/`sp_plane_hi`（`:526-527`）→ `sp_chr_sh`（`:528`）→ `u_sprite` 的 `chr_sh`（`:552`）。
+- 【事实】同文件 `:16-48` 的模块头注释记录了这套组合 mux 成立的**前提**：背景最后一个请求拍在 dot 250、从 dot 253 起占有总线；精灵占 dot 257..291；下一个背景预取在 dot 324。注释同时写明一旦前提被破坏，**背景请求拍会被静默丢弃且没有背压**。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:582-583`：`assign chr_req = sp_bus_sel ? sp_chr_req : bg_chr_req;` / `assign chr_addr = sp_bus_sel ? sp_chr_addr : bg_chr_addr;`，`sp_bus_sel = sp_busy`（`:523`）——纯组合优先级，**没有 ready/valid**。
+- 【事实】`rtl/nes_core/ppu/nes_ppu_sprite.v` 内部有同形状的 64 项 OAM 范围扫描与 nth-set 优先编码（每 dot 组合重算），`docs/modules/ppu-sprites.md` 与 `README.md` 的模块表都把这一点写进"每 dot 组合重算的并行 sprite 通路"。
+- 【推断】LE 数与 fmax **完全未知**：本仓库没有任何 PPU 单独综合报告，R-03 的门槛（"存在一次 PPU 单独综合的 Quartus 报告"）尚未满足，因此本条无法用综合数据关闭。
+- 【事实】实测耗时：`ppu-ext-chr-tb` 143.7 s → **821.6 s**（占全量 15.0 % → **45.26 %**）、`chr-feasibility-tb` 74.9 s → **104.1 s**（5.73 %）、全量 958.0 s → **1815.3 s**（约 16.0 min → 30.3 min，**+89 %**）。同一次全量的四行输出与上一轮**逐字节相同**（`A1 total compared pixels=921600`、`A2 lines_checked=3930 total_requests=337450 total_plane_latches=32487`、`A3 verified request addresses=337450 verified latched plane pairs=126546`），即**帧数、断言条数一条都没变**。
+
+**缓解路线**（尚未实施，也尚未决定采用哪一条）
+
+1. **把 slot 选择从"每 `ce` 求值"改成"每行预算一次"**：在 dot 257 之前那几个没有 CHR 请求的 `ce` 上把 8 个 slot 的选择算好并锁存，整行只查表。代价是 sprite 的水平位置判定从组合变成一次预计算，需要在行首重算，并处理 pre-render 行与 vblank 行。
+2. **把 64 项扫描挪到稀疏拍上**：只在需要的那一拍（或少数几拍）驱动扫描，其余 `ce` 保持寄存器值。等价于 1 的一种实现。
+3. **让 `nes_ppu_sprite` 直接导出它内部已经算好的 slot 索引**，PPU 层不再重算一遍同一件事。这条最干净，但会改 `nes_ppu_sprite` 的端口形状，而该模块的端口**已被 `tb/ppu/tb_nes_ppu_sprite.v` 锁定**。
+4. 任何改动都必须**先重推 `nes_ppu2c02.v:16-48` 的三个仲裁窗口**（背景 253 / 精灵 257..291 / 背景 324），否则会引入"背景请求拍被静默丢弃"这条无背压的失效模式。
+
+**验证方式**
+
+- **Fitter 报告**：存在一份 PPU（或至少含 `g_chr_external` 的层次）的 Quartus 报告，给出该段的 LE 数与最差 slack，并与本条记录的上界估算对照。
+- **回归耗时回落**：改动后重跑 `.\tools\sim_all.ps1 -Mode all`，`ppu-ext-chr-tb` 的耗时从 821.6 s 明显回落（目标是回到与 `chr-feasibility-tb` 同量级，即 100 s 上下），且 `ppu-ext-chr-tb` 打印的三个 A 行**保持逐字节不变**。
+- **行为不回归**：背景的 921,600 次逐 `ce` 逐 dot 像素比对仍然全部一致，精灵的每行 16 次请求断言仍然成立（这两条已经是 `ppu-ext-chr-tb` 里的断言，不需要新写）。
+
+**进入下一阶段前的门槛**
+
+- 上述"Fitter 报告"与"回归耗时回落"两条同时满足，且 `docs/modules/ppu-external-chr.md` 第 11.3.8 节与本条同步更新。
+- 在此之前，**不得**宣称外部 CHR 精灵通路"接近时序收敛"或"代价可接受"，`verification-plan.md` 7.1 的"精灵 CHR 取数已实现 / 外部模式能渲染精灵"一行继续有效。
