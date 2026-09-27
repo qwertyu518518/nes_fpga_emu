@@ -26,11 +26,45 @@
 //   scanline >= 240 (vblank and the pre-render line) and whenever dot >= 256,
 //   because in all of those states pixel_active is low and sprite_pixel,
 //   sprite_priority and sprite0_hit are already forced to zero without
-//   consulting the pattern planes, so a parent may substitute a zero byte for
+//   consulting the pattern planes, so a parent may substitute a zero word for
 //   the whole slot without changing any output of this unit. sprite_overflow
 //   is not gated by dot or by reset, and cur_slot_o carries no overflow
 //   information. cur_slot_o is also independent of mask: it reports the dot's
 //   position, not whether the left-8 clip suppresses the pixel.
+//
+// chr_sh : both pattern planes of one sprite row, 16 bits wide
+//   Only the EXTERNAL_CHR=1 generate branch reads this port. The EXTERNAL_CHR=0
+//   branch never looks at it and indexes the flat 65536-bit chr vector itself,
+//   so a parent must tie chr_sh off in that configuration (nes_ppu2c02 drives
+//   16'h0000 there), and tb_nes_ppu_sprite.v legitimately leaves it
+//   unconnected. Fixed bit assignment, agreed with the g_chr_external generate:
+//       chr_sh[7:0]   plane 0, the low  plane
+//       chr_sh[15:8]  plane 1, the high plane
+//   16 bits is the minimum that can carry the two planes and there is no
+//   slack in it: the internal branch reads two DIFFERENT CHR bytes for a given
+//   row (byte s_pat_addr and byte s_pat_addr+8), and a sprite pattern value is
+//   {plane1[bit], plane0[bit]} per pixel. An 8-bit port can express only one of
+//   the two planes, so no wiring of it can reproduce the internal path's pixel
+//   for any tile whose planes differ. Collapsing the pair into one byte (their
+//   OR, or handing the same byte to both planes) does keep the silhouette exact,
+//   but it forces every opaque pixel to palette index 3, which is a different
+//   image rather than an approximation of the same one, so it can never be
+//   pixel-compared against the internal path. Two planes of 8 pixels is 16 bits,
+//   so 16 is also exactly the width the data needs and nothing more.
+//
+//   Correspondence with the internal flat-bus indexing, same layout expressed
+//   with different arithmetic:
+//       internal low  plane   chr[{s_pat_addr, 3'b000} +: 8]
+//       internal high plane   chr[({s_pat_addr, 3'b000} + 13'd64) +: 8]
+//   {s_pat_addr, 3'b000} is s_pat_addr times 8 BITS, so the part-select base is
+//   bit s_pat_addr*8 and the low plane lands on BYTE s_pat_addr. +13'd64 is +64
+//   BITS = +8 BYTES, so the high plane part-selects the matching position inside
+//   the next 8 bytes of the same 16-byte tile. An external fetcher therefore
+//   delivers, for the tile row at byte address s_pat_addr, the two bytes
+//   CHR[s_pat_addr] and CHR[s_pat_addr+8] packed as
+//   {CHR[s_pat_addr+8], CHR[s_pat_addr]}. The high plane goes in the UPPER byte
+//   because s_pat = {s_plane_hi[s_xbit], s_plane_lo[s_xbit]}: bit 3 of a sprite
+//   pattern is the high plane, on both paths.
 //
 
 // Sprite pattern byte addresses
@@ -68,7 +102,7 @@ module nes_ppu_sprite #(
     input  wire           ce,
     input  wire [2047:0]  oam,
     input  wire [65535:0] chr,
-    input  wire [7:0]     chr_sh,
+    input  wire [15:0]    chr_sh,
     input  wire [7:0]     ctrl,
     input  wire [7:0]     mask,
     input  wire [8:0]     scanline,
@@ -184,8 +218,8 @@ module nes_ppu_sprite #(
                 assign s_plane_lo = chr[{s_pat_addr, 3'b000} +: 8];
                 assign s_plane_hi = chr[({s_pat_addr, 3'b000} + 13'd64) +: 8];
             end else begin : g_chr_external
-                assign s_plane_lo = chr_sh;
-                assign s_plane_hi = chr_sh;
+                assign s_plane_lo = chr_sh[7:0];
+                assign s_plane_hi = chr_sh[15:8];
             end
             assign s_xoff = {2'b00, dot[7:0]} - {2'b00, slot_x[g]};
             assign s_xbit = slot_attr[g][6] ? s_xoff[2:0] : (3'd7 - s_xoff[2:0]);

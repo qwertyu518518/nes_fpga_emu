@@ -48,9 +48,10 @@
 //   to re-derive the windows above before it can be trusted.
 //
 // Sprite shadow -> chr_sh (EXTERNAL_CHR=1)
-//   nes_ppu_sprite's external generate hands every slot the same 8-bit chr_sh for
-//   both planes (`assign s_plane_lo = chr_sh; assign s_plane_hi = chr_sh;`), so
-//   the PPU has to choose the byte. The slot index is taken from that unit's
+//   nes_ppu_sprite's external generate splits one 16-bit chr_sh into the two
+//   pattern planes (`assign s_plane_lo = chr_sh[7:0]; assign s_plane_hi =
+//   chr_sh[15:8];`), so the PPU has to supply BOTH bytes of the row, not one
+//   byte standing in for both. The slot index is taken from that unit's
 //   cur_slot_o, which is the positional slot it already selected for this dot:
 //   the lowest of its 0..7 in-range slots whose 8-pixel horizontal window covers
 //   `dot`, or 4'h8 when nothing covers it. Recomputing that scan here would have
@@ -62,10 +63,16 @@
 //   vblank and reset, where nes_ppu_sprite has already forced sprite_pixel,
 //   sprite_priority and sprite0_hit to zero without consulting chr_sh. For that
 //   slot shadow[g*16 +: 8] is the low plane and shadow[g*16+8 +: 8] the high
-//   plane. One byte has to serve both planes, so their OR is presented: that
-//   makes the sprite silhouette exact and forces every opaque pixel to palette
-//   index 3, whereas a single plane would shrink the silhouette to that plane's
-//   bits and the high plane cannot be delivered at all through the 8-bit port.
+//   plane, which are the same two bytes the internal path reaches as byte
+//   s_pat_addr and byte s_pat_addr+8 of the tile. They are CONCATENATED here,
+//   {sp_plane_hi, sp_plane_lo}, not combined: chr_sh[15:8] carries
+//   CHR[s_pat_addr+8] and chr_sh[7:0] carries CHR[s_pat_addr], because
+//   s_pat = {s_plane_hi[s_xbit], s_plane_lo[s_xbit]} makes bit 3 of a sprite
+//   pattern the high plane on both paths. Presenting their OR (or the same byte
+//   to both planes) would have kept the silhouette exact while forcing every
+//   opaque pixel to palette index 3, which is a different image rather than an
+//   approximation of the same one, and it could never be pixel-compared against
+//   the internal path.
 //   sp_shadow_valid gates the mux because nes_sprite_chr_fetch's shadow register
 //   has no reset: before the first completed line it is X, and X on chr_sh would
 //   make slot_opaque / sprite_pixel X inside nes_ppu_sprite and corrupt the pixel.
@@ -340,7 +347,7 @@ generate
             .ce(ce),
             .oam(sprite_oam_bus),
             .chr(sprite_chr_bus),
-            .chr_sh(8'h00),
+            .chr_sh(16'h0000),
             .ctrl(control_reg),
             .mask(mask_reg),
             .scanline(scanline),
@@ -462,7 +469,7 @@ generate
         wire [6:0]  sp_base_hi;
         wire [7:0]  sp_plane_lo;
         wire [7:0]  sp_plane_hi;
-        wire [7:0]  sp_chr_sh;
+        wire [15:0] sp_chr_sh;
 
         assign sp_start = (dot == 9'd257);
         assign sp_bus_sel = sp_busy;
@@ -470,7 +477,7 @@ generate
         assign sp_base_hi = {sp_slot[2:0], 4'b1000};
         assign sp_plane_lo = (sp_slot == 4'h8) ? 8'h00 : sp_shadow[sp_base_lo +: 8];
         assign sp_plane_hi = (sp_slot == 4'h8) ? 8'h00 : sp_shadow[sp_base_hi +: 8];
-        assign sp_chr_sh = sp_shadow_valid ? (sp_plane_lo | sp_plane_hi) : 8'h00;
+        assign sp_chr_sh = sp_shadow_valid ? {sp_plane_hi, sp_plane_lo} : 16'h0000;
 
         nes_sprite_chr_fetch u_sprite_chr_fetch (
             .clk(clk),
