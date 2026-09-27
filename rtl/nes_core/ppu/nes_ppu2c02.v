@@ -28,9 +28,12 @@
 //     pulses chr_req at start+2 .. start+33 and drops busy at start+35, i.e.
 //     dots 259..290 with busy high across dots 257..291.
 //   * 253 < 257 and 291 < 324, so the sprite window [257,291] is disjoint from
-//     both background windows ([.., 253] and [326, ..]). No background request
-//     beat is ever masked by the sprite, which is why the priority order does
-//     not change any background behaviour today.
+//     both background windows ([.., 253] and [324, ..]); the 324 is
+//     bg_fetch_pre_first = (dot == 9'd324) in g_chr_external, and the two
+//     pre-render carries it starts are at dots 324+2..324+4 and
+//     (340-fine_x)+2..(340-fine_x)+4, i.e. inside [326, ..]. No background
+//     request beat is ever masked by the sprite, which is why the priority order
+//     does not change any background behaviour today.
 //
 // What breaks if the non-overlap assumption is violated (a new background
 // trigger inside dot 257..291, a different sprite start dot, a ce budget change
@@ -77,22 +80,51 @@
 //   has no reset: before the first completed line it is X, and X on chr_sh would
 //   make slot_opaque / sprite_pixel X inside nes_ppu_sprite and corrupt the pixel.
 //
-// Two hazards this integration inherits rather than creates:
-//   * pat_addr_o is computed from scanline_sel, which the PPU wires to the current
-//     scanline, and the prefetch that latches it only completes at dot 292 of the
-//     same line. The shadow a line's own pixels consume is therefore the one
-//     latched at the previous line's dot 257, i.e. one line off. Closing that
-//     needs pat_addr_o evaluated for the next scanline, or start issued a line
-//     early; both are nes_ppu_sprite / integration changes, not this mux.
-//   * nes_sprite_chr_fetch drives chr_addr = {pat_addr[10:0] + plane*8, 3'b000},
-//     i.e. pattern address times 8, while nes_ppu_sprite's internal path indexes
-//     its flat chr bus at {s_pat_addr, 3'b000} and therefore reads byte
-//     s_pat_addr, and nes_chr_fetch_unit likewise uses the pattern address
-//     directly. The sprite prefetcher is therefore 8x above the address the
-//     internal sprite path and the background fetcher use. The two conventions
-//     have to be reconciled in nes_sprite_chr_fetch (or by pre-scaling pat_addr,
-//     which is impossible for a pattern address that is not a multiple of 8)
-//     before the fetched shadow can be pixel-compared against the internal path.
+// Sprite prefetch timing: the start dot and the address line are separate axes
+//   pat_addr_o is a NEXT-LINE address. nes_ppu_sprite hands out the pattern
+//   addresses of scanline + 1 (wrapping 261 -> 0), and sp_start stays at dot 257
+//   of the line whose hblank the fetch actually runs in. The two facts only
+//   combine into the right schedule read together:
+//     dot 257 of line L   sp_start pulses, the fetch unit latches pat_addr_o,
+//                         which is line L+1's address set
+//     dot 259..290        the 16 chr_req beats at line L+1's addresses
+//     dot 292 of line L   shadow_valid rises holding line L+1's planes
+//     dot 0..255 of L+1   the pixels of line L+1 consume that shadow
+//   shadow_valid cannot rise before dot 292 of line L, and dots 0..255 of line L
+//   are already displayed by then, so a line-L address latched at line L's own
+//   dot 257 could never serve line L: it would always be one line late. The
+//   retiming therefore lives in the address, not in the start dot, and sp_start
+//   stays at (dot == 9'd257) on every scanline. Moving the start dot back to
+//   line L-1's 257 would look equivalent and is not: it slides the whole
+//   [257,291] window measured above onto line L-1's hblank without changing the
+//   fetch latency, and it would no longer be the window derived from dot 257 that
+//   the non-collision argument rests on. The cost of the duplicated next-line
+//   derivation in nes_ppu_sprite is one extra 64-entry OAM range scan and 8 more
+//   nth_set walks, both of which re-evaluate only when the scanline or OAM
+//   changes, so it is a per-line rather than a per-dot cost.
+//
+// CHR address convention (EXTERNAL_CHR=1): the three notations now agree
+//   All three fetchers name the same CHR byte with the same number, expressed
+//   three ways:
+//     nes_ppu_sprite, internal : chr[{s_pat_addr, 3'b000} +: 8] and
+//                               chr[({s_pat_addr, 3'b000} + 13'd64) +: 8]. These
+//                               are BIT part-selects into a 65536-bit vector, so
+//                               their base is bit s_pat_addr*8, which is byte
+//                               s_pat_addr, and 13'd64 bits is +8 bytes.
+//     nes_ppu_sprite, external : slot g low plane at shadow[g*16 +: 8], high
+//                               plane at shadow[g*16+8 +: 8]
+//     nes_sprite_chr_fetch     : chr_addr = pat_addr + plane*8, computed in 14
+//                               bits and masked with 14'h3FFF
+//   There is no *8 scaling on the sprite side any more. pat_addr is already
+//   tile*16 + fine after the 13-bit truncation, the two planes are 8 bytes
+//   apart, and chr_addr[13] is driven by pat_addr[12] so a pattern in
+//   0x1FF8..0x1FFF reaches the upper 8 KiB of a 16 KiB CHR; an 8 KiB CHR bus
+//   mirrors that range back to 0x0000 rather than wrapping. nes_chr_fetch_unit
+//   already drove the background pattern address unscaled the same way, so all
+//   three agree. tb_nes_ppu2c02_ext_chr.v checks every sprite request address
+//   and every shadow byte against its CHR model, and any reintroduction of a
+//   *8 here surfaces there as an 8x-too-high address and a fatal, so the old
+//   "sprite prefetcher is 8x above" hazard no longer exists.
 
 `timescale 1ns/1ps
 

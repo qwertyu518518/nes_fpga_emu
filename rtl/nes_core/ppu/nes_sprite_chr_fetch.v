@@ -38,10 +38,16 @@
 //     0x1FF8..0x1FFF reaches the upper 8 KiB of a 16 KiB CHR; pat_addr is 13 bits,
 //     so that is the top of the range. A CHR bus only 8 KiB wide mirrors that range
 //     back to 0x0000 instead of wrapping.
-//   * Prefetch runs a full line ahead of the pixels that use it: pat_addr must be
-//     the value computed from the NEXT line's scanline_sel (nes_ppu_sprite feeds
-//     scanline_sel into pat_addr_o) and start must be issued one scanline early.
-//     Prefetching with the current line's pat_addr latches the wrong row.
+//   * Prefetch runs one line ahead of the pixels that use it, and it is the
+//     ADDRESS that has to lead, not the start dot. shadow_valid rises 35 ce
+//     after start, which lands at dot 292 of the issuing line, i.e. after
+//     that line's dots 0..255 have already been displayed. So a same-line
+//     address can never serve that line's own pixels, at any start dot.
+//     pat_addr therefore must already be the NEXT line's addresses when it
+//     arrives here, which is what pat_addr_o now provides, and start stays at
+//     dot 257 of every line. Issuing start a line earlier is NOT equivalent:
+//     pat_addr derives from the scanline port, so at line L-1 it would still
+//     carry line L-1's addresses and fetch one line too early.
 //   * shadow_valid stays high until the next start; shadow itself is not cleared
 //     by reset, only by the 16 writes of the current fetch.
 

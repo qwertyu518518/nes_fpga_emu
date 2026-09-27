@@ -9,6 +9,29 @@
 //   dot. pat_addr_o exposes the 8 per-slot pattern addresses as 8 x 13 bits
 //   for a parent that wants to prefetch them ahead of the line.
 //
+// pat_addr_o : the pattern addresses of the NEXT scanline, not of this one
+//   pat_addr_o[g*13 +: 13] is the byte address the parent must have prefetched
+//   for slot g of the scanline that follows the one on the `scanline` port. The
+//   width, the 13-bit truncation and the slot ordering are unchanged; only the
+//   scanline the address is derived from is one further on. It is
+//   scanline + 1, wrapping 261 -> 0 at the end of the frame, so the pre-render
+//   line 261 hands out line 0's addresses and the vblank lines hand out the
+//   following line's addresses, which nothing renders anyway.
+//   The parent issues its prefetch start at dot 257 and needs shadow_valid 35 ce
+//   later, at dot 292 of that same line, which is after dots 0..255 have already
+//   been displayed. A same-line address latched at dot 257 therefore cannot serve
+//   the pixels of its own line; the pixels of line L need the fetch started at
+//   dot 257 of line L-1, and an address that is already for line L is what makes
+//   that work. Address and start dot are therefore split: the start dot stays
+//   where the parent's bus arbitration assumes it, and only the address moves
+//   forward. Feeding the next scanline in through `scanline`/`scanline_sel`
+//   instead is not available here, because the same chain also selects
+//   s_pat_addr, and s_pat_addr is what the EXTERNAL_CHR=0 path renders this dot
+//   from. retiming `scanline_sel` to the next line would move the pattern row
+//   of every internally rendered pixel, so the next-line chain is duplicated
+//   (a second 64-entry range scan, a second 8-way nth_set walk, and a second
+//   row/tile/fine derivation) instead of being shared.
+//
 // cur_slot_o : observation-only export of which slot this dot is positioned on.
 //   4 bits wide, purely positional, and it never feeds back into any other
 //   signal in this module, so it is safe to consume from a parent that drives
@@ -147,6 +170,9 @@ module nes_ppu_sprite #(
     wire [8:0] scanline_chain;
     assign scanline_chain = (^scanline_sel === 1'bx) ? scanline : scanline_sel;
 
+    wire [8:0] scanline_next;
+    assign scanline_next = (scanline == 9'd261) ? 9'd0 : (scanline + 9'd1);
+
     reg  [63:0] in_range;
     reg  [6:0]  range_count;
     reg  [8:0]  scan_addr;
@@ -168,6 +194,26 @@ module nes_ppu_sprite #(
             in_range[si] = scan_hit;
             if (scan_hit)
                 range_count = range_count + 7'd1;
+        end
+    end
+
+    reg  [63:0] nl_in_range;
+    reg  [8:0]  nl_scan_addr;
+    reg  [11:0] nl_scan_bit;
+    reg  [7:0]  nl_scan_y;
+    reg  [9:0]  nl_scan_row;
+    reg         nl_scan_hit;
+    integer     ni;
+
+    always @* begin
+        nl_in_range = 64'd0;
+        for (ni = 0; ni < 64; ni = ni + 1) begin
+            nl_scan_addr = {1'b0, ni[5:0], 2'b00};
+            nl_scan_bit = {3'b000, nl_scan_addr} << 3;
+            nl_scan_y = (nl_scan_addr > 9'd255) ? 8'h00 : oam[nl_scan_bit +: 8];
+            nl_scan_row = {1'b0, scanline_next} - {2'b0, nl_scan_y};
+            nl_scan_hit = (nl_scan_row < {1'b0, sprite_height});
+            nl_in_range[ni] = nl_scan_hit;
         end
     end
 
@@ -197,8 +243,19 @@ module nes_ppu_sprite #(
             wire [7:0]  s_plane_lo;
             wire [7:0]  s_plane_hi;
             wire [3:0]  s_pat;
-            wire [9:0]  s_xoff;
-            wire [2:0]  s_xbit;
+            wire [9:0] s_xoff;
+            wire [2:0] s_xbit;
+            wire [5:0]  nl_idx;
+            wire [8:0]  nl_addr;
+            wire [11:0] nl_bit0;
+            wire [7:0]  nl_y;
+            wire [7:0]  nl_tile_byte;
+            wire [7:0]  nl_attr;
+            wire [9:0]  nl_row;
+            wire [2:0]  nl_tile;
+            wire        nl_table;
+            wire [9:0]  nl_fine;
+            wire [12:0] nl_pat_addr;
 
             assign s_idx = nth_set(in_range, SLOT_PICK);
             assign slot_index[g] = {2'b00, s_idx};
@@ -213,7 +270,18 @@ module nes_ppu_sprite #(
             assign s_tile = ctrl[5] ? (s_tile_byte[3:1] + {2'b00, s_row[3]}) : s_tile_byte[2:0];
             assign s_fine = slot_attr[g][7] ? ({1'b0, sprite_height} - 10'd1 - s_row) : s_row;
             assign s_pat_addr = {s_table, 5'b00000, s_tile, 1'b0, s_fine[2:0]};
-            assign pat_addr_o[g*13 +: 13] = s_pat_addr;
+            assign nl_idx = nth_set(nl_in_range, SLOT_PICK);
+            assign nl_addr = {1'b0, nl_idx, 2'b00};
+            assign nl_bit0 = {3'b000, nl_addr} << 3;
+            assign nl_y = (nl_addr > 9'd255) ? 8'h00 : oam[nl_bit0 +: 8];
+            assign nl_tile_byte = ((nl_addr + 9'd1) > 9'd255) ? 8'h00 : oam[(nl_bit0 + 12'd8) +: 8];
+            assign nl_attr = ((nl_addr + 9'd2) > 9'd255) ? 8'h00 : oam[(nl_bit0 + 12'd16) +: 8];
+            assign nl_row = {1'b0, scanline_next} - {2'b0, nl_y};
+            assign nl_table = ctrl[5] ? nl_tile_byte[0] : ctrl[3];
+            assign nl_tile = ctrl[5] ? (nl_tile_byte[3:1] + {2'b00, nl_row[3]}) : nl_tile_byte[2:0];
+            assign nl_fine = nl_attr[7] ? ({1'b0, sprite_height} - 10'd1 - nl_row) : nl_row;
+            assign nl_pat_addr = {nl_table, 5'b00000, nl_tile, 1'b0, nl_fine[2:0]};
+            assign pat_addr_o[g*13 +: 13] = nl_pat_addr;
             if (!EXTERNAL_CHR) begin : g_chr_internal
                 assign s_plane_lo = chr[{s_pat_addr, 3'b000} +: 8];
                 assign s_plane_hi = chr[({s_pat_addr, 3'b000} + 13'd64) +: 8];
