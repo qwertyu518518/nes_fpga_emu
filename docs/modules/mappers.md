@@ -54,7 +54,7 @@ rtl/nes_core/mapper/
 | 端口 | 宽度 | 含义 |
 |---|---|---|
 | `prg_bank_offset` | `PRG_ADDR_BITS`（默认 17） | PRG ROM 内部字节偏移，memory owner 用它索引 PRG ROM |
-| `chr_bank_offset` | `CHR_ADDR_BITS`（默认 16） | CHR ROM 内部字节偏移 |
+| `chr_bank_offset` | `CHR_ADDR_BITS`（默认 17） | **最终** CHR 字节地址（不是位移），memory owner 直接用它索引 CHR ROM |
 | `mirroring` | 3 | 0=horizontal、1=vertical、2=single lower、3=single upper、4=four screen |
 | `nametable_map` | 8 | `{NT3,NT2,NT1,NT0}`，每项 2 bit 物理 nametable 索引 |
 | `prg_ram_enable` | 1 | `$6000-$7FFF` 是否有 PRG RAM |
@@ -84,7 +84,7 @@ rtl/nes_core/mapper/
 ### 2.3 地址宽度参数的取值范围
 
 - `PRG_ADDR_BITS` 默认 17，可寻址 128 KiB PRG。要覆盖 iNES 常规上限用 17；`> 17` 只会让 `prg_bank_offset` 变宽，不改变译码逻辑。
-- `CHR_ADDR_BITS` 默认 16，可寻址 64 KiB CHR。MMC1 的 5 bit CHR bank 在 4 KiB 粒度下需要 17 bit；本项目按 NES2 的 CHR 上限 64 KiB 取 16 bit，TB 也只用 4 KiB 粒度下编号 ≤ 15 的值。若要覆盖 MMC1 的全部 32 个 4 KiB bank，把 `CHR_ADDR_BITS` 提到 17。
+- `CHR_ADDR_BITS` 默认 17，可寻址 128 KiB CHR。MMC1 的 5 bit CHR bank 在 4 KiB 粒度下需要 17 bit，所以默认值已经是 17（`nes_mapper.v:10` 与 `nes_system_v5.v:11`）。
 - 移位在 Verilog 中按左操作数自定宽度，所以 RTL 一律先做零扩展再左移（`bank_ext << 13`），不依赖隐式截断。
 
 ---

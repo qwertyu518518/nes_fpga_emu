@@ -39,6 +39,11 @@ assign chr_bank_ext = {{(CHR_ADDR_BITS-CNROM_BANK_BITS){1'b0}}, chr_bank_select}
 
 assign prg_bank_offset = {{(PRG_ADDR_BITS-14){1'b0}}, cpu_addr[13:0]};
 assign chr_bank_offset = (chr_bank_ext << 13) | {{(CHR_ADDR_BITS-13){1'b0}}, ppu_addr[12:0]};
+// chr_bank_offset is the FINAL CHR byte address, not a displacement to be added
+// to somewhere else. ppu_addr must be the LOCAL CHR byte address the PPU presents
+// on its chr_addr port; the bank window is applied here, and the memory owner
+// indexes CHR with the result directly. ppu_addr[13] (PPUCTRL[4]/[5], the
+// pattern-table select) is deliberately dropped: it is a PPU-internal decode.
 assign mirroring = HEADER_MIRRORING;
 assign prg_ram_enable = 1'b0;
 assign chr_ram_enable = 1'b0;

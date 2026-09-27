@@ -258,8 +258,7 @@ module tb_nes_ppu2c02_ext_chr;
         .chr_addr(addr_b),
         .chr_we(we_b),
         .chr_wdata(wdata_b),
-        .chr_rdata(chr_rdata_q),
-        .chr_bank_offset(17'd0)
+        .chr_rdata(chr_rdata_q)
     );
 
     always #5 clk = ~clk;
@@ -761,9 +760,9 @@ module tb_nes_ppu2c02_ext_chr;
 
             if (req_b === 1'b1) begin
                 if (dut_b.g_chr_external.sp_bus_sel === 1'b1) begin
-                    if (addr_b !== dut_b.g_chr_external.sp_chr_addr)
+                    if (addr_b !== dut_b.g_chr_external.sp_chr_addr_raw)
                         $fatal(1, "A3 line %0d dot %0d: sprite beat chr_addr %0d != sp_chr_addr %0d (arbitration mux corrupted the owner address)",
-                               sl_b, dot_b, addr_b, dut_b.g_chr_external.sp_chr_addr);
+                               sl_b, dot_b, addr_b, dut_b.g_chr_external.sp_chr_addr_raw);
                     if (sf_beat > 15)
                         $fatal(1, "S2 line %0d dot %0d: sprite beat %0d exceeds the 16 byte budget",
                                sl_b, dot_b, sf_beat);
@@ -786,9 +785,9 @@ module tb_nes_ppu2c02_ext_chr;
                         $fatal(1, "A3 line %0d dot %0d req %0d (parity %0d): chr_addr %0d != expected %0d; trigger was %0d:%0d name %02h base %0d, fetch latched base %0d (live A name %02h cxsum %0d)",
                                sl_b, dot_b, req_idx, req_idx[0], addr_b, x_addr,
                                trig_sl, trig_dot, trig_name, trig_base, req_base, dut_a.bg_name, dut_a.bg_coarse_x_sum);
-                    if (addr_b !== dut_b.g_chr_external.bg_chr_addr)
+                    if (addr_b !== dut_b.g_chr_external.bg_chr_addr_raw)
                         $fatal(1, "A3 line %0d dot %0d: background beat chr_addr %0d != bg_chr_addr %0d (arbitration mux corrupted the owner address)",
-                               sl_b, dot_b, addr_b, dut_b.g_chr_external.bg_chr_addr);
+                               sl_b, dot_b, addr_b, dut_b.g_chr_external.bg_chr_addr_raw);
                     if (run_bg)
                         addr_checked = addr_checked + 1;
                     if (req_idx[0] == 1'b0)

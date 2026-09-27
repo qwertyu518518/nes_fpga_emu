@@ -126,8 +126,12 @@ assign scanline_chain = (^scanline_sel === 1'bx) ? scanline : scanline_sel;
 
 ### 2.2 地址合成（**仍未实现**）
 
-- mapper 侧的 bank offset 由**组合**方式叠加：`chr_addr_final = chr_bank_offset + ppu_local_addr`。PPU 只负责给出 `ppu_local_addr[13:0]`，不负责 bank 选择。**这一条没有实现**——`nes_system_v5` 的 `ppu_addr` 仍绑 0，见 11.3.6。
-- **`chr_addr[13]` 驱动 0。** 内部模式的 `ppu_space_read` 用的是 `chr_ram[address[12:0]]`，只有 13 bit，也就是 8 KiB 镜像；外部模式驱动 bit13 = 0 才能和它**逐位等价**。这条不是为了省一根线，是等价性要求。**当前成立**：`nes_chr_fetch_unit` 的 `chr_addr` 由 13 bit `tile_base` 加 8 bit 以内的平面偏移构成，bit13 恒 0（TB 的期望地址也只算到 `base + 8`）。
+- **chr_bank_offset 是最终 CHR 字节地址，不是"再加一次"的位移。** mapper 侧的 bank 合成是**翻译**模型，不是加法模型：`chr_bank_offset` 直接由 `ppu_addr` 组合产生（`nes_mapper_cnrom.v:41` 的 `(chr_bank_ext << 13) | ppu_addr[12:0]`、`nes_mapper_mmc1.v:65`、`nes_mapper_mmc3.v:135` 同构），memory owner 直接拿它当索引（mapper TB 里的 `chr_rom[chr_bank_offset[15:0]]`）。PPU 侧的 `chr_addr[13:0]` 是**局部**地址，也就是 mapper 应当看到的 `ppu_addr`，PPU **不加任何 bank 偏移**。
+  - 写成 `chr_addr_final = chr_bank_offset + ppu_local_addr` 是错的，决定性理由是**组合环**：mapper 的 `chr_bank_offset` 本身就是 `ppu_addr` 的组合函数，一旦系统级把 PPU 的 `chr_addr` 接到 `mapper.ppu_addr`，就得到 `chr_addr -> mapper.ppu_addr -> chr_bank_offset -> chr_addr` 的**零延迟组合环**。`nes_system_v5.v:212` 现在用 `wire [13:0] mapper_ppu_addr = 14'h0000;` 掩盖着这个环，所以它是潜伏的而不是已展开的，但一旦 `ppu_addr` 真正接线就立刻存在。mapper 侧本来就是翻译模型（有 4 个 mapper TB 的期望值保护），PPU 侧加法是唯一异类。
+  - **这一条没有实现**——`nes_system_v5` 的 `ppu_addr` 仍绑 0，见 11.3.6。
+- **`chr_addr[13]` 是 pattern table 选择位，不是 bank 位，所有 mapper 都不看它。** 背景侧是 PPUCTRL[4]（`bg_tile_base = {control_reg[4], bg_name_target, 4'b0000} + fine_y`），精灵侧是 PPUCTRL[5] 经 `s_table`（8x16 的 tile 对选择位）。四个 mapper 表达式都把它丢掉：cnrom/nrom/uxrom 只取 `ppu_addr[12:0]`、mmc1 只取 `ppu_addr[11:0]`、mmc3 只取 `ppu_addr[9:0]`。这是对的——pattern table 选择是 PPU 对同一 8 KiB 的内部译码，卡带不该看见它。
+  - 由此得到两条对 TB 和未来 CHR memory owner 的约束：(a) CHR 映像按 8 KiB 镜像，因为 14 位的 `chr_addr` 窗口在 bit 13 回卷，8 KiB CHR RAM 必须用 `chr_addr[12:0]` 索引——`tb_nes_ppu2c02_ext_chr.v` 的 `chr_mem[addr_b[12:0]]` 与内部模式的 `chr_ram[address[12:0]]` 正是这样，也正因为如此精灵侧 bit13 允许为 1 而 A/B 仍然一致；(b) 内部模式的 `ppu_space_read` 用 `chr_ram[address[12:0]]` 天然镜像掉 bit13，与外部模式不需要"驱动 bit13 = 0"来凑等价性——**原先"外部模式必须驱动 bit13 = 0 才能逐位等价"的说法不成立，已删除**。
+  - 精灵侧 tile 编号在 `chr_addr[6:4]`、背景侧在 `chr_addr[11:4]`，这个不对称**只记录不修改**：`ppu-ext-chr-tb` 的期望地址按背景约定且 bit13 恒 0 计算，统一它会让每个精灵请求地址都变并让 A3/S2 失败。
 
 ---
 

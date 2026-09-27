@@ -133,6 +133,13 @@ assign chr_window_ext = {{(CHR_ADDR_BITS-8){1'b0}}, chr_window_bank};
 
 assign prg_bank_offset = (prg_window_ext << 13) | {{(PRG_ADDR_BITS-13){1'b0}}, cpu_addr[12:0]};
 assign chr_bank_offset = (chr_window_ext << 10) | {{(CHR_ADDR_BITS-10){1'b0}}, ppu_addr[9:0]};
+// chr_bank_offset is the FINAL CHR byte address, not a displacement to be added
+// to somewhere else. ppu_addr must be the LOCAL CHR byte address the PPU presents
+// on its chr_addr port; the 1 KiB window placement is applied here and the memory
+// owner indexes CHR with the result directly. ppu_addr[13] (PPUCTRL[4]/[5], the
+// pattern-table select) is deliberately dropped: it is a PPU-internal decode, not
+// a cartridge address bit. The same dropping is what makes ppu_addr[12] -- the
+// A12 line the scanline IRQ counter clocks from -- a distinct, lower address bit.
 assign mirroring = mirroring_r;
 assign prg_ram_enable = ram_enable_r;
 assign chr_ram_enable = MMC3_CHR_RAM;

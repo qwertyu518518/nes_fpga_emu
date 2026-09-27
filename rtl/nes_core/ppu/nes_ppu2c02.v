@@ -126,39 +126,64 @@
 //   *8 here surfaces there as an 8x-too-high address and a fatal, so the old
 //   "sprite prefetcher is 8x above" hazard no longer exists.
 //
-// CHR banking window: chr_bank_offset (EXTERNAL_CHR=1 only)
-//   chr_bank_offset is the mapper's ABSOLUTE offset, not an addable bank number.
-//   Every mapper drives it as `(<bank> << K) | ppu_local_addr` -- for example
-//   nes_mapper_cnrom.v:41 is `(chr_bank_ext << 13) | ppu_addr[12:0]` -- so the
-//   window displacement is already OR'ed in and the value is what a memory owner
-//   indexes with (`chr_rom[chr_bank_offset[15:0]]` in the mapper TBs). The PPU
-//   therefore ADDS it to its own local address; it must not ask the mapper for a
-//   bank number and must not re-shift the value.
-//   It is added in exactly two places, both on the 14-bit chr_addr that the port
-//   carries, both reduced modulo 2**14:
-//     * background: the address nes_chr_fetch_unit emits from bg_tile_base, which
-//       is the g_chr_external counterpart of the internal path's bg_pattern_addr
-//       (= tile*16 + fine); the bias is taken after the unit has added
-//       idx*16 + plane*8, so the two planes of a tile stay 8 bytes apart.
-//     * sprite: the address nes_sprite_chr_fetch emits from its pat_addr, which
-//       is pat + plane*8 and is already masked with 14'h3FFF inside the unit.
-//   Both biases sit on the units' chr_addr OUTPUT rather than on their address
-//   input, for two reasons. tile_base is only 13 bits, so a 17-bit offset added
-//   there would be truncated to its low 13 bits and would lose bank bits above
-//   bit 12; and pat_addr is the NEXT scanline's render address (see the timing
-//   note above), so biasing pat_addr_o or any scanline-derived chain would
-//   contaminate nes_ppu_sprite's rendering path, which must keep consuming pure
-//   13-bit render addresses.
-//   The modulo is 2**14 because chr_addr is 14 bits: the port addresses ONE
-//   16 KiB CHR window, so only the window displacement chr_bank_offset[13:0] can
-//   select anything, and the 3 upper bits of the 17-bit offset describe a CHR
-//   size this PPU cannot reach. The port is 17 bits purely to match
-//   CHR_ADDR_BITS=17 and be able to carry a 128 KiB CHR address; masking the sum
-//   to 14 bits is what turns that absolute address into a window displacement.
-//   g_chr_internal deliberately does NOT read chr_bank_offset. It renders from
-//   the on-chip chr_ram[0:8191] and never forms an external address, so every
-//   EXTERNAL_CHR=0 instance (all of nes_system_v0..v5, the platform, and 8 of the
-//   9 TB instances) may leave the port unconnected without pulling z anywhere.
+// chr_addr is a LOCAL CHR byte address, and the mapper translates it
+//   chr_addr is 14 bits and names a byte inside ONE 16 KiB CHR window. It is
+//   NOT a CHR ROM/RAM address: the mapper is what turns it into the final one.
+//   Every mapper's chr_bank_offset is already that final address, produced as
+//   `(<bank> << K) | <local bits of ppu_addr>` -- nes_mapper_cnrom.v:41 is
+//   `(chr_bank_ext << 13) | ppu_addr[12:0]`, nes_mapper_mmc1.v:65 is
+//   `(chr_bank_ext << 12) | ppu_addr[11:0]`, nes_mapper_mmc3.v:135 is
+//   `(chr_window_ext << 10) | ppu_addr[9:0]` -- and a memory owner indexes CHR
+//   with it directly (`chr_rom[chr_bank_offset[15:0]]` in the mapper TBs). So
+//   ppu_addr must be driven with the LOCAL address this port presents, and the
+//   PPU adds no bank offset of any kind. A `chr_addr_final = chr_bank_offset +
+//   ppu_local_addr` style adder on this side would be wrong twice over.
+//   The mapper output is a COMBINATIONAL function of ppu_addr. Wiring
+//   chr_addr -> mapper.ppu_addr -> chr_bank_offset -> back into chr_addr would
+//   therefore be a zero-delay combinational loop through this PPU, which is the
+//   whole reason the adder must not exist here. nes_system_v5.v currently hides
+//   the loop behind `wire [13:0] mapper_ppu_addr = 14'h0000;`, so the loop is
+//   latent rather than elaborated, but it exists the moment ppu_addr is wired
+//   for real. The translation model is the hardware one: a cartridge mapper
+//   decodes the PPU address bus, it does not post-add to it.
+//
+// chr_addr[13] is the pattern-table select, and no mapper looks at it
+//   Background: chr_addr[13] is PPUCTRL[4] (bg_tile_base = {control_reg[4],
+//   bg_name_target, 4'b0000} + fine_y). Sprite: chr_addr[13] is PPUCTRL[5] via
+//   s_table, i.e. the 8x16 tile-pair bit. Every mapper drops it: the cnrom
+//   expression keeps only ppu_addr[12:0], mmc1 only ppu_addr[11:0], mmc3 only
+//   ppu_addr[9:0], nrom/uxrom only ppu_addr[12:0]. That is correct, because the
+//   pattern table select is a PPU-internal decode of the same 8 KiB, and the
+//   mapper has no business seeing it. A consequence for testbenches and for a
+//   future CHR memory owner is that a CHR image is mirrored per 8 KiB: the
+//   16-bit window chr_addr addresses wraps at bit 13, so an 8 KiB CHR RAM must
+//   index on chr_addr[12:0]. tb_nes_ppu2c02_ext_chr.v already does exactly that
+//   (`chr_rdata_q <= chr_mem[addr_b[12:0]]`), which is what g_chr_internal's
+//   `chr_ram[address[12:0]]` does too, and it is why bit 13 is allowed to be 1
+//   on the sprite side without the A/B comparison diverging.
+//
+// Known asymmetry between the two fetchers -- recorded, deliberately NOT fixed
+//   The background tile index lands in chr_addr[11:4] (256 tiles at 16 B needs
+//   8 index bits), while the sprite tile index lands in chr_addr[6:4], because
+//   nes_ppu_sprite forms s_pat_addr as {s_table, 5'b00000, s_tile, 1'b0,
+//   s_fine[2:0]}, i.e. a 13-bit value whose low 8 bits are the 128-tile
+//   half-table the 8x8 sprite table actually has. So the two fetchers number
+//   tiles differently and there is no single CHR layout on which both agree.
+//   Do NOT unify them: tb_nes_ppu2c02_ext_chr.v's expected addresses are
+//   recomputed on the background convention with bit 13 clear, so unifying the
+//   sprite side onto the background's 8 index bits would move every sprite
+//   request address and fail A3/S2. The asymmetry is a property of the sprite
+//   pattern addressing on the 2C02 and is left as is.
+//
+// chr_addr is stale outside a request beat; the memory side must register
+//   Both units REGISTER their chr_addr: nes_chr_fetch_unit latches it one ce
+//   ahead of the beat and nes_sprite_chr_fetch does the same, so between beats
+//   the port keeps presenting the previous address rather than a defined idle
+//   value. chr_req is the only qualification of the address. A memory owner must
+//   therefore register the read and gate it with chr_req, exactly as
+//   tb_nes_ppu2c02_ext_chr.v does with its one-ce-late `chr_rdata_q`; a
+//   combinational read of chr_addr would return the wrong byte for every beat
+//   that follows an idle gap.
 
 `timescale 1ns/1ps
 
@@ -193,8 +218,7 @@ module nes_ppu2c02 #(
     output wire [13:0] chr_addr,
     output wire chr_we,
     output wire [7:0] chr_wdata,
-    input wire [7:0] chr_rdata,
-    input wire [16:0] chr_bank_offset
+    input wire [7:0] chr_rdata
 );
 
 reg [7:0] control_reg;
@@ -524,10 +548,8 @@ generate
 
         wire        bg_chr_req;
         wire [13:0] bg_chr_addr_raw;
-        wire [13:0] bg_chr_addr;
         wire        sp_chr_req;
         wire [13:0] sp_chr_addr_raw;
-        wire [13:0] sp_chr_addr;
         wire [127:0] sp_shadow;
         wire        sp_shadow_valid;
         wire        sp_busy;
@@ -601,11 +623,8 @@ generate
             .busy(chr_fetch_busy)
         );
 
-        assign bg_chr_addr = ({3'b000, bg_chr_addr_raw} + chr_bank_offset) & 14'h3FFF;
-        assign sp_chr_addr = ({3'b000, sp_chr_addr_raw} + chr_bank_offset) & 14'h3FFF;
-
         assign chr_req = sp_bus_sel ? sp_chr_req : bg_chr_req;
-        assign chr_addr = sp_bus_sel ? sp_chr_addr : bg_chr_addr;
+        assign chr_addr = sp_bus_sel ? sp_chr_addr_raw : bg_chr_addr_raw;
 
         assign chr_we = 1'b0;
         assign chr_wdata = 8'h00;
