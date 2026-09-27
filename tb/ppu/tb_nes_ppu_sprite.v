@@ -39,6 +39,18 @@ module tb_nes_ppu_sprite;
     reg [9:0] cs_xoff;
     reg [2:0] cs_opaque_src;
 
+    integer tr_i;
+    integer tr_j;
+    integer tr_c;
+    integer tr_lit;
+    reg [8:0] tr_y9;
+    reg [8:0] tr_x9;
+    reg [7:0] tr_exp;
+    reg [7:0] tr_tile [0:11];
+    reg [7:0] tr_pair  [0:3];
+    reg [7:0] tr_byte  [0:1];
+    reg [8*96-1:0] tr_name;
+
     nes_ppu_sprite dut (
         .clk(clk),
         .reset(reset),
@@ -122,6 +134,33 @@ module tb_nes_ppu_sprite;
             chr_bus[(base + 8) * 8 +: 8] = hi;
         end
     endtask
+
+    task fill_tile_number_table;
+        input [12:0] table_base;
+        integer tn;
+        begin
+            for (tn = 0; tn < 256; tn = tn + 1)
+                fill_tile(table_base, tn[7:0], tn[7:0], ~tn[7:0]);
+        end
+    endtask
+
+    function [3:0] tr_pixel;
+        input [7:0] t;
+        input [2:0] xbit;
+        begin
+            tr_pixel = {2'b00, ~t[xbit], t[xbit]};
+        end
+    endfunction
+
+    function [31:0] tr_row_sig;
+        input [7:0] t;
+        integer k;
+        begin
+            tr_row_sig = 32'd0;
+            for (k = 0; k < 8; k = k + 1)
+                tr_row_sig[k * 4 +: 4] = tr_pixel(t, 3'd7 - k[2:0]);
+        end
+    endfunction
 
     task probe;
         input [8:0] line;
@@ -316,7 +355,8 @@ module tb_nes_ppu_sprite;
             fill_tile(13'd0, 8'd0, 8'h80, 8'h00);
             fill_tile(13'd0, 8'd1, 8'h40, 8'h00);
             fill_tile(13'd4096, 8'd1, 8'h80, 8'h00);
-            fill_tile(13'd4096, 8'd2, 8'h40, 8'h00);
+            fill_tile(13'd4096, 8'd2, 8'h81, 8'h00);
+            fill_tile(13'd4096, 8'd3, 8'h42, 8'h00);
             set_sprite(6'd0, 8'd40, 8'h00, 8'h00, 8'd40);
             set_sprite(6'd1, 8'd72, 8'h01, 8'h00, 8'd72);
             set_sprite(6'd2, 8'd72, 8'h03, 8'h00, 8'd104);
@@ -335,12 +375,119 @@ module tb_nes_ppu_sprite;
             probe(9'd80, 9'd72);
             expect_all("8x16 odd tile bottom half lit", 4'h1, 4'h0, 1'b0, 1'b0);
             probe(9'd72, 9'd104);
-            expect_all("8x16 tile 3 top half lit", 4'h1, 4'h0, 1'b0, 1'b0);
+            expect_all("8x16 pair 2/3 top half reads table1 tile2", 4'h1, 4'h0, 1'b0, 1'b0);
             probe(9'd80, 9'd105);
-            expect_all("8x16 tile 3 bottom half lit", 4'h1, 4'h0, 1'b0, 1'b0);
+            expect_all("8x16 pair 2/3 bottom half reads table1 tile3", 4'h1, 4'h0, 1'b0, 1'b0);
+            $display("SPRITE 8x16 pair 2/3 from tile byte 03: table1 tile2 low plane %02h bit7 at xoffset 0 gives %01h, table1 tile3 low plane %02h bit6 at xoffset 1 gives %01h", 8'h81, 4'h1, 8'h42, 4'h1);
             probe(9'd88, 9'd104);
             expect_all("8x16 past 16 pixel height", 4'h0, 4'h0, 1'b0, 1'b0);
             $display("SPRITE 8x16 tile pair, table from tile bit0, PPUCTRL[3] ignored PASS");
+        end
+    endtask
+
+    task test_8x8_tile_range;
+        begin
+            clear_scene;
+            fill_tile_number_table(13'd0);
+            tr_tile[0]  = 8'd0;
+            tr_tile[1]  = 8'd6;
+            tr_tile[2]  = 8'd7;
+            tr_tile[3]  = 8'd8;
+            tr_tile[4]  = 8'd9;
+            tr_tile[5]  = 8'd15;
+            tr_tile[6]  = 8'd16;
+            tr_tile[7]  = 8'd63;
+            tr_tile[8]  = 8'd127;
+            tr_tile[9]  = 8'd128;
+            tr_tile[10] = 8'd200;
+            tr_tile[11] = 8'd255;
+            for (tr_i = 0; tr_i < 12; tr_i = tr_i + 1)
+                for (tr_j = tr_i + 1; tr_j < 12; tr_j = tr_j + 1)
+                    if (tr_row_sig(tr_tile[tr_i]) === tr_row_sig(tr_tile[tr_j]))
+                        $fatal(1, "8x8 tile range: tiles %0d and %0d would expect the same 8 pixel row",
+                               tr_tile[tr_i], tr_tile[tr_j]);
+            if (tr_row_sig(tr_tile[0]) === tr_row_sig(tr_tile[3]))
+                $fatal(1, "8x8 tile range: tile 0 and tile 8 would expect the same 8 pixel row");
+            if (tr_row_sig(tr_tile[2]) === tr_row_sig(tr_tile[11]))
+                $fatal(1, "8x8 tile range: tile 7 and tile 255 would expect the same 8 pixel row");
+            $display("SPRITE 8x8 tile range: table 0 tiles 0..255 each have low plane equal to the tile number and high plane equal to its complement, tiles 0 6 7 8 9 15 16 63 127 128 200 255 checked, tile 8 differs from tile 0 and tile 255 differs from tile 7");
+            ctrl = 8'h00;
+            tr_lit = 0;
+            for (tr_i = 0; tr_i < 12; tr_i = tr_i + 1) begin
+                tr_y9 = 9'd32 + tr_i[8:0] * 9'd8;
+                set_sprite(tr_i[5:0], tr_y9[7:0], tr_tile[tr_i], 8'h00, 8'd32);
+                for (tr_c = 0; tr_c < 8; tr_c = tr_c + 1) begin
+                    $sformat(tr_name, "8x8 tile %0d column %0d", tr_tile[tr_i], tr_c);
+                    probe(tr_y9, 9'd32 + tr_c[8:0]);
+                    expect_all(tr_name, tr_pixel(tr_tile[tr_i], 3'd7 - tr_c[2:0]), 4'h0, 1'b0, 1'b0);
+                    if (sprite_pixel !== 4'h0)
+                        tr_lit = tr_lit + 1;
+                end
+                $sformat(tr_name, "8x8 tile %0d past last column", tr_tile[tr_i]);
+                probe(tr_y9, 9'd40);
+                expect_all(tr_name, 4'h0, 4'h0, 1'b0, 1'b0);
+            end
+            if (tr_lit != 96)
+                $fatal(1, "8x8 tile range: %0d of 96 probed sprite pixels were opaque, expected 96",
+                       tr_lit);
+            $display("SPRITE 8x8 tile number 0..255 each reads its own 8 pixel row, %0d opaque pixels PASS", tr_lit);
+        end
+    endtask
+
+    task test_8x16_tile_pair_range;
+        begin
+            clear_scene;
+            fill_tile_number_table(13'd0);
+            tr_byte[0] = 8'hFE;
+            tr_byte[1] = 8'h80;
+            for (tr_i = 0; tr_i < 2; tr_i = tr_i + 1) begin
+                tr_exp = {tr_byte[tr_i][7:1], 1'b0};
+                tr_pair[tr_i * 2]     = tr_exp;
+                tr_pair[tr_i * 2 + 1] = tr_exp + 8'd1;
+            end
+            for (tr_i = 0; tr_i < 4; tr_i = tr_i + 1) begin
+                for (tr_j = tr_i + 1; tr_j < 4; tr_j = tr_j + 1)
+                    if (tr_row_sig(tr_pair[tr_i]) === tr_row_sig(tr_pair[tr_j]))
+                        $fatal(1, "8x16 pair: tiles %0d and %0d would expect the same 8 pixel row",
+                               tr_pair[tr_i], tr_pair[tr_j]);
+                for (tr_j = 0; tr_j < 8; tr_j = tr_j + 1)
+                    if (tr_row_sig(tr_pair[tr_i]) === tr_row_sig(tr_j[7:0]))
+                        $fatal(1, "8x16 pair: tile %0d would be indistinguishable from tile %0d, so a truncated tile field could not be caught",
+                               tr_pair[tr_i], tr_j);
+            end
+            $display("SPRITE 8x16 pair range: tile byte FE pairs 254/255, tile byte 80 pairs 64/65, all four rows differ from each other and from every tile 0..7");
+            ctrl = 8'h20;
+            tr_lit = 0;
+            for (tr_i = 0; tr_i < 2; tr_i = tr_i + 1) begin
+                if (tr_i == 0) begin
+                    tr_y9 = 9'd32;
+                    tr_x9 = 9'd32;
+                end else begin
+                    tr_y9 = 9'd64;
+                    tr_x9 = 9'd72;
+                end
+                set_sprite(tr_i[5:0], tr_y9[7:0], tr_byte[tr_i], 8'h00, tr_x9[7:0]);
+                for (tr_j = 0; tr_j < 16; tr_j = tr_j + 1) begin
+                    for (tr_c = 0; tr_c < 8; tr_c = tr_c + 1) begin
+                        $sformat(tr_name, "8x16 tile byte %02h row %0d column %0d",
+                                 tr_byte[tr_i], tr_j, tr_c);
+                        probe(tr_y9 + tr_j[8:0], tr_x9 + tr_c[8:0]);
+                        if (tr_j < 8)
+                            expect_all(tr_name, tr_pixel(tr_pair[tr_i * 2], 3'd7 - tr_c[2:0]), 4'h0, 1'b0, 1'b0);
+                        else
+                            expect_all(tr_name, tr_pixel(tr_pair[tr_i * 2 + 1], 3'd7 - tr_c[2:0]), 4'h0, 1'b0, 1'b0);
+                        if (sprite_pixel !== 4'h0)
+                            tr_lit = tr_lit + 1;
+                    end
+                end
+                $sformat(tr_name, "8x16 tile byte %02h past 16 pixel height", tr_byte[tr_i]);
+                probe(tr_y9 + 9'd16, tr_x9);
+                expect_all(tr_name, 4'h0, 4'h0, 1'b0, 1'b0);
+            end
+            if (tr_lit != 256)
+                $fatal(1, "8x16 pair: %0d of 256 probed sprite pixels were opaque, expected 256",
+                       tr_lit);
+            $display("SPRITE 8x16 tile pairs 254/255 and 64/65 read their own 8 pixel rows, %0d opaque pixels PASS", tr_lit);
         end
     endtask
 
@@ -1037,6 +1184,8 @@ module tb_nes_ppu_sprite;
         test_8x8;
         test_pattern_table;
         test_8x16;
+        test_8x8_tile_range;
+        test_8x16_tile_pair_range;
         test_flips;
         test_palette_and_priority;
         test_left8_clip;

@@ -91,11 +91,34 @@
 //
 
 // Sprite pattern byte addresses
-//   s_pat_addr is {table, 5'b0, tile[2:0], 1'b0, fine[2:0]}, which is
-//   table*0x1000 + tile*16 + fine after the 13-bit truncation. A tile occupies
-//   16 bytes, so the byte addresses of the two planes are:
+//   s_pat_addr is {table, tile[7:0], 1'b0, fine[2:0]}, 13 bits, and equals
+//   table*0x1000 + tile*16 + fine with nothing truncated: the largest value is
+//   1*0x1000 + 255*16 + 7 = 8183 = 8192-9, so all 2 x 256 tiles of a table stay
+//   inside one 4 KiB pattern table. Its bit layout, from bit 12 down:
+//       s_pat_addr[12]    pattern table: ctrl[5] ? tile_byte[0] : ctrl[3]
+//       s_pat_addr[11:4]  tile number within that table, 0..255
+//       s_pat_addr[3]     always 0, the tile is 16-byte aligned
+//       s_pat_addr[2:0]   fine Y, the row inside the tile, 0..7
+//   A tile occupies 16 bytes because that is the 2C02 pattern-table layout, not
+//   an arbitrary choice: 2 tables x 256 tiles x 16 B = 8 KiB, and within a tile
+//   plane 0 occupies bytes 0..7 and plane 1 occupies bytes 8..15. So the byte
+//   addresses of the two planes are:
 //       low  plane = tile*16 + fine
 //       high plane = tile*16 + fine + 8
+//   The tile number therefore has to be 8 bits wide. With only 3 bits (or 3 bits
+//   of usable range for 8x16) the address can only reach tiles 0..7, and every
+//   tile 8 and above aliases onto tiles 0..7: a 3-bit add cannot carry, so the
+//   8x16 upper half of tile 7 would also land back on tile 0.
+//   Tile number source, and why:
+//     8x8  (ctrl[5] == 0)   tile[7:0] of the OAM tile byte, the full 0..255
+//     8x16 (ctrl[5] == 1)   {tile[7:1], row[3]}
+//   For 8x16 the sprite covers two vertically adjacent tiles, a 32-byte block,
+//   selected by the OAM tile number rounded DOWN to a multiple of 2, so
+//   tile[0] only picks the pattern table and never enters the tile number.
+//   {tile[7:1], row[3]} implements that: row 0..7 (top half) reads the even
+//   tile, row 8..15 (bottom half) the next one, and fine = row[2:0] selects
+//   within the 16-byte tile. Concatenation, not addition, so nothing can carry
+//   or wrap out of the 8 bits.
 //   This is the same layout the background path uses (nes_ppu2c02 reads
 //   chr_ram[bg_pattern_addr] and chr_ram[bg_pattern_addr + 13'd8], and
 //   nes_chr_fetch_unit computes
@@ -237,7 +260,7 @@ module nes_ppu_sprite #(
             wire [7:0]  s_tile_byte;
             wire [9:0]  s_row;
             wire [9:0]  s_fine;
-            wire [2:0]  s_tile;
+            wire [7:0]  s_tile;
             wire        s_table;
             wire [12:0] s_pat_addr;
             wire [7:0]  s_plane_lo;
@@ -252,7 +275,7 @@ module nes_ppu_sprite #(
             wire [7:0]  nl_tile_byte;
             wire [7:0]  nl_attr;
             wire [9:0]  nl_row;
-            wire [2:0]  nl_tile;
+            wire [7:0]  nl_tile;
             wire        nl_table;
             wire [9:0]  nl_fine;
             wire [12:0] nl_pat_addr;
@@ -267,9 +290,9 @@ module nes_ppu_sprite #(
             assign slot_x[g] = ((s_addr + 9'd3) > 9'd255) ? 8'h00 : oam[(s_bit0 + 12'd24) +: 8];
             assign s_row = {1'b0, scanline_chain} - {2'b0, s_y};
             assign s_table = ctrl[5] ? s_tile_byte[0] : ctrl[3];
-            assign s_tile = ctrl[5] ? (s_tile_byte[3:1] + {2'b00, s_row[3]}) : s_tile_byte[2:0];
+            assign s_tile = ctrl[5] ? {s_tile_byte[7:1], s_row[3]} : s_tile_byte[7:0];
             assign s_fine = slot_attr[g][7] ? ({1'b0, sprite_height} - 10'd1 - s_row) : s_row;
-            assign s_pat_addr = {s_table, 5'b00000, s_tile, 1'b0, s_fine[2:0]};
+            assign s_pat_addr = {s_table, s_tile, 1'b0, s_fine[2:0]};
             assign nl_idx = nth_set(nl_in_range, SLOT_PICK);
             assign nl_addr = {1'b0, nl_idx, 2'b00};
             assign nl_bit0 = {3'b000, nl_addr} << 3;
@@ -278,9 +301,9 @@ module nes_ppu_sprite #(
             assign nl_attr = ((nl_addr + 9'd2) > 9'd255) ? 8'h00 : oam[(nl_bit0 + 12'd16) +: 8];
             assign nl_row = {1'b0, scanline_next} - {2'b0, nl_y};
             assign nl_table = ctrl[5] ? nl_tile_byte[0] : ctrl[3];
-            assign nl_tile = ctrl[5] ? (nl_tile_byte[3:1] + {2'b00, nl_row[3]}) : nl_tile_byte[2:0];
+            assign nl_tile = ctrl[5] ? {nl_tile_byte[7:1], nl_row[3]} : nl_tile_byte[7:0];
             assign nl_fine = nl_attr[7] ? ({1'b0, sprite_height} - 10'd1 - nl_row) : nl_row;
-            assign nl_pat_addr = {nl_table, 5'b00000, nl_tile, 1'b0, nl_fine[2:0]};
+            assign nl_pat_addr = {nl_table, nl_tile, 1'b0, nl_fine[2:0]};
             assign pat_addr_o[g*13 +: 13] = nl_pat_addr;
             if (!EXTERNAL_CHR) begin : g_chr_internal
                 assign s_plane_lo = chr[{s_pat_addr, 3'b000} +: 8];
