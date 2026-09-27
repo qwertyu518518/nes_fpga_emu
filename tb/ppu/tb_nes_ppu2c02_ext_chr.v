@@ -258,7 +258,8 @@ module tb_nes_ppu2c02_ext_chr;
         .chr_addr(addr_b),
         .chr_we(we_b),
         .chr_wdata(wdata_b),
-        .chr_rdata(chr_rdata_q)
+        .chr_rdata(chr_rdata_q),
+        .chr_bank_offset(17'd0)
     );
 
     always #5 clk = ~clk;

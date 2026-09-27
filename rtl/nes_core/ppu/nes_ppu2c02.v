@@ -125,6 +125,40 @@
 //   and every shadow byte against its CHR model, and any reintroduction of a
 //   *8 here surfaces there as an 8x-too-high address and a fatal, so the old
 //   "sprite prefetcher is 8x above" hazard no longer exists.
+//
+// CHR banking window: chr_bank_offset (EXTERNAL_CHR=1 only)
+//   chr_bank_offset is the mapper's ABSOLUTE offset, not an addable bank number.
+//   Every mapper drives it as `(<bank> << K) | ppu_local_addr` -- for example
+//   nes_mapper_cnrom.v:41 is `(chr_bank_ext << 13) | ppu_addr[12:0]` -- so the
+//   window displacement is already OR'ed in and the value is what a memory owner
+//   indexes with (`chr_rom[chr_bank_offset[15:0]]` in the mapper TBs). The PPU
+//   therefore ADDS it to its own local address; it must not ask the mapper for a
+//   bank number and must not re-shift the value.
+//   It is added in exactly two places, both on the 14-bit chr_addr that the port
+//   carries, both reduced modulo 2**14:
+//     * background: the address nes_chr_fetch_unit emits from bg_tile_base, which
+//       is the g_chr_external counterpart of the internal path's bg_pattern_addr
+//       (= tile*16 + fine); the bias is taken after the unit has added
+//       idx*16 + plane*8, so the two planes of a tile stay 8 bytes apart.
+//     * sprite: the address nes_sprite_chr_fetch emits from its pat_addr, which
+//       is pat + plane*8 and is already masked with 14'h3FFF inside the unit.
+//   Both biases sit on the units' chr_addr OUTPUT rather than on their address
+//   input, for two reasons. tile_base is only 13 bits, so a 17-bit offset added
+//   there would be truncated to its low 13 bits and would lose bank bits above
+//   bit 12; and pat_addr is the NEXT scanline's render address (see the timing
+//   note above), so biasing pat_addr_o or any scanline-derived chain would
+//   contaminate nes_ppu_sprite's rendering path, which must keep consuming pure
+//   13-bit render addresses.
+//   The modulo is 2**14 because chr_addr is 14 bits: the port addresses ONE
+//   16 KiB CHR window, so only the window displacement chr_bank_offset[13:0] can
+//   select anything, and the 3 upper bits of the 17-bit offset describe a CHR
+//   size this PPU cannot reach. The port is 17 bits purely to match
+//   CHR_ADDR_BITS=17 and be able to carry a 128 KiB CHR address; masking the sum
+//   to 14 bits is what turns that absolute address into a window displacement.
+//   g_chr_internal deliberately does NOT read chr_bank_offset. It renders from
+//   the on-chip chr_ram[0:8191] and never forms an external address, so every
+//   EXTERNAL_CHR=0 instance (all of nes_system_v0..v5, the platform, and 8 of the
+//   9 TB instances) may leave the port unconnected without pulling z anywhere.
 
 `timescale 1ns/1ps
 
@@ -159,7 +193,8 @@ module nes_ppu2c02 #(
     output wire [13:0] chr_addr,
     output wire chr_we,
     output wire [7:0] chr_wdata,
-    input wire [7:0] chr_rdata
+    input wire [7:0] chr_rdata,
+    input wire [16:0] chr_bank_offset
 );
 
 reg [7:0] control_reg;
@@ -488,8 +523,10 @@ generate
         assign bg_pattern_high = (bg_ready && bg_pa_enable) ? bg_hi_q : 8'h00;
 
         wire        bg_chr_req;
+        wire [13:0] bg_chr_addr_raw;
         wire [13:0] bg_chr_addr;
         wire        sp_chr_req;
+        wire [13:0] sp_chr_addr_raw;
         wire [13:0] sp_chr_addr;
         wire [127:0] sp_shadow;
         wire        sp_shadow_valid;
@@ -518,7 +555,7 @@ generate
             .start(sp_start),
             .pat_addr(sprite_pat_addr_bus),
             .chr_req(sp_chr_req),
-            .chr_addr(sp_chr_addr),
+            .chr_addr(sp_chr_addr_raw),
             .chr_rdata(chr_rdata),
             .shadow(sp_shadow),
             .shadow_valid(sp_shadow_valid),
@@ -556,13 +593,16 @@ generate
             .tile_base(bg_tile_base),
             .tile_count(6'd1),
             .chr_req(bg_chr_req),
-            .chr_addr(bg_chr_addr),
+            .chr_addr(bg_chr_addr_raw),
             .chr_rdata(chr_rdata),
             .bg_lo(chr_fetch_bg_lo),
             .bg_hi(chr_fetch_bg_hi),
             .bg_valid(chr_fetch_bg_valid),
             .busy(chr_fetch_busy)
         );
+
+        assign bg_chr_addr = ({3'b000, bg_chr_addr_raw} + chr_bank_offset) & 14'h3FFF;
+        assign sp_chr_addr = ({3'b000, sp_chr_addr_raw} + chr_bank_offset) & 14'h3FFF;
 
         assign chr_req = sp_bus_sel ? sp_chr_req : bg_chr_req;
         assign chr_addr = sp_bus_sel ? sp_chr_addr : bg_chr_addr;
