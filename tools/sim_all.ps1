@@ -13,7 +13,7 @@ param(
         'controller-tb',
         'cart-ines-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
-        'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5',
+        'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6',
         'platform-core', 'platform-tb', 'qsf-if-core',
         'peripheral-core', 'peripheral-i2c', 'sd-spi-cmd-core', 'sd-spi-cmd-tb',
         'cdc-fifo-core', 'cdc-fifo-tb',
@@ -111,6 +111,7 @@ $systemV2Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v2.v'
 $systemV3Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v3.v'
 $systemV4Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v4.v'
 $systemV5Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v5.v'
+$systemV6Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v6.v'
 
 $platformTopRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_top.v'
 $platformPllRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_pll_stub.v'
@@ -123,7 +124,7 @@ $i2sShifterRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_i2s_shifter.v'
 $audioI2sRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_audio_i2s.v'
 
 $cpuSources = @($cpuRtl)
-$ppuSources = @($ppuSpriteRtl, $ppuRtl)
+$ppuSources = @($ppuSpriteRtl, $ppuRtl, $chrFetchUnitRtl, $spriteChrFetchRtl)
 $ppuSpriteSources = @($ppuSpriteRtl)
 $oamDmaSources = @($oamDmaRtl)
 $chrFetchUnitSources = @($chrFetchUnitRtl)
@@ -142,6 +143,7 @@ $systemV2Sources = @($systemV2Rtl) + $ppuSources + $apuSources + $busSources + $
 $systemV3Sources = @($systemV3Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $cpuSources
 $systemV4Sources = @($systemV4Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $cpuSources
 $systemV5Sources = @($systemV5Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources
+$systemV6Sources = @($systemV6Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources + @($systemV5Rtl)
 $platformSources = @($platformTopRtl, $platformPllRtl, $platformQsfIfRtl)
 $platformElabSources = $platformSources + $systemV4Sources + $lineBufferVgaSources + $vgaTimingSources
 $peripheralSources = @($wm8978I2cRtl)
@@ -255,7 +257,7 @@ $allTargets = @(
         Group       = 'ppu'
         Label       = 'PPU external CHR A/B pixel-equivalence tb'
         Top         = 'tb_nes_ppu2c02_ext_chr'
-           Sources     = $ppuSources + $chrFetchUnitSources + $spriteChrFetchSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_ppu2c02_ext_chr.v')
+           Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_ppu2c02_ext_chr.v')
         Standard    = '2012'
         Run         = $true
     },
@@ -481,6 +483,15 @@ $allTargets = @(
         Label       = 'System v5 mapper tb'
         Top         = 'tb_nes_system_v5'
         Sources     = $systemV5Sources + (Join-Path $repoRoot 'tb\system\tb_nes_system_v5.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'system-v6'
+        Group       = 'system'
+        Label       = 'System v6 external CHR tb'
+        Top         = 'tb_nes_system_v6'
+        Sources     = $systemV6Sources + (Join-Path $repoRoot 'tb\system\tb_nes_system_v6.v')
         Standard    = '2012'
         Run         = $true
     },
