@@ -51,21 +51,21 @@ module tb_nes_sprite_chr_fetch;
     task set_expected;
         input [103:0] pa;
         reg   [12:0] f13;
-        reg   [16:0] wide;
+        reg   [14:0] acc;
         reg   [13:0] lo, hi;
         integer m2, n2, off;
         begin
             exp_shadow = 128'd0;
             for (m2 = 0; m2 < 16; m2 = m2 + 1) begin
                 f13  = pa[(m2 >> 1) * 13 +: 13];
-                wide = {1'b0, f13, 3'b000};
-                lo   = wide[13:0];
-                hi   = (lo + 14'd64) & 14'h3FFF;
+                acc  = {2'b00, f13} + (m2[0] ? 15'd8 : 15'd0);
+                lo   = acc[13:0] & 14'h3FFF;
+                hi   = ({1'b0, f13} + 14'd8) & 14'h3FFF;
                 off  = (m2 >> 1) * 16 + (m2[0] ? 8 : 0);
                 exp_addr[m2] = m2[0] ? hi : lo;
                 exp_byte[m2] = chr_mem[exp_addr[m2][12:0]];
                 exp_shadow[off +: 8] = exp_byte[m2];
-                if (hi < lo) wrap_seen = 1'b1;
+                if (acc[14] || acc[13]) wrap_seen = 1'b1;
             end
             for (m2 = 0; m2 < 16; m2 = m2 + 1)
                 for (n2 = m2 + 1; n2 < 16; n2 = n2 + 1)
@@ -179,11 +179,11 @@ module tb_nes_sprite_chr_fetch;
                 chr_mem[(t * 8 + 64) % 8192 + m] = (t % 256) ^ 8'h5A ^ m;
 
         pats[0*8+0]=13'd0;    pats[0*8+1]=13'd340;  pats[0*8+2]=13'd1408; pats[0*8+3]=13'd216;
-        pats[0*8+4]=13'd1459; pats[0*8+5]=13'd114;  pats[0*8+6]=13'd2041; pats[0*8+7]=13'd511;
-        pats[1*8+0]=13'd657;  pats[1*8+1]=13'd2042; pats[1*8+2]=13'd1068; pats[1*8+3]=13'd700;
+        pats[0*8+4]=13'd1459; pats[0*8+5]=13'd114;  pats[0*8+6]=13'd4100; pats[0*8+7]=13'd511;
+        pats[1*8+0]=13'd8184; pats[1*8+1]=13'd2042; pats[1*8+2]=13'd1068; pats[1*8+3]=13'd700;
         pats[1*8+4]=13'd1566; pats[1*8+5]=13'd865;  pats[1*8+6]=13'd706;  pats[1*8+7]=13'd1705;
         pats[2*8+0]=13'd344;  pats[2*8+1]=13'd1782; pats[2*8+2]=13'd2043; pats[2*8+3]=13'd262;
-        pats[2*8+4]=13'd1507; pats[2*8+5]=13'd1500; pats[2*8+6]=13'd272;  pats[2*8+7]=13'd32;
+        pats[2*8+4]=13'd1507; pats[2*8+5]=13'd2054; pats[2*8+6]=13'd272;  pats[2*8+7]=13'd32;
         pats[3*8+0]=13'd291;  pats[3*8+1]=13'd1687; pats[3*8+2]=13'd1057; pats[3*8+3]=13'd2044;
         pats[3*8+4]=13'd737;  pats[3*8+5]=13'd1301; pats[3*8+6]=13'd549;  pats[3*8+7]=13'd676;
         pats[4*8+0]=13'd320;  pats[4*8+1]=13'd589;  pats[4*8+2]=13'd317;  pats[4*8+3]=13'd746;
@@ -206,14 +206,17 @@ module tb_nes_sprite_chr_fetch;
         $write("A3  set0 observed addrs:");
         for (m = 0; m < 16; m = m + 1) $write(" %04h", obs_addr[m]);
         $display("");
-        $display("A3  all 16 equal the spec sequence: slot0 %04h/%04h, slot6 %04h/%04h (14-bit wrap), slot7 %04h/%04h, wrap_seen=%b",
-                 exp_addr[0], exp_addr[1], exp_addr[12], exp_addr[13], exp_addr[14], exp_addr[15], wrap_seen);
+        $display("A3  all 16 equal the spec byte-address sequence: slot0 %04h/%04h, slot6 %04h/%04h, slot7 %04h/%04h (hi = lo+8, 16 bytes per tile)",
+                 exp_addr[0], exp_addr[1], exp_addr[12], exp_addr[13], exp_addr[14], exp_addr[15]);
         $write("A4  set0 observed shadow bytes lo/hi per slot:");
         for (n = 0; n < 8; n = n + 1) $write(" %02h/%02h", shadow[n*16 +: 8], shadow[n*16+8 +: 8]);
         $display("");
         $display("A4  all 16 bytes equal the CHR model, shadow_valid=%b busy=%b", shadow_valid, busy);
 
         run_fetch(1, 3, 0, 0, 1'b0);
+        if (!wrap_seen) $fatal(1, "A3: no fetch drove chr_addr bit 13, the 2**14 address field is untested");
+        $display("A3  14-bit field load-bearing: set1 slot0 %04h/%04h leaves the 13-bit pattern window, wrap_seen=%b",
+                 obs_addr[0], obs_addr[1], wrap_seen);
         $display("A5  ce=0 for 4 clk at req %0d: all outputs frozen, row still finished with %0d reqs",
                  3, cnt_req);
 

@@ -255,7 +255,7 @@ $allTargets = @(
         Group       = 'ppu'
         Label       = 'PPU external CHR A/B pixel-equivalence tb'
         Top         = 'tb_nes_ppu2c02_ext_chr'
-        Sources     = $ppuSources + $chrFetchUnitSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_ppu2c02_ext_chr.v')
+           Sources     = $ppuSources + $chrFetchUnitSources + $spriteChrFetchSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_ppu2c02_ext_chr.v')
         Standard    = '2012'
         Run         = $true
     },

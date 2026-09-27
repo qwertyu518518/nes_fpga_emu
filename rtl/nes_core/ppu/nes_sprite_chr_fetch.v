@@ -6,11 +6,20 @@
 //   * Byte order is fixed: slot0.lo, slot0.hi, slot1.lo, slot1.hi, ... slot7.hi.
 //   * Shadow landing: slot g low plane -> shadow[g*16 +: 8],
 //                    slot g high plane -> shadow[g*16+8 +: 8].
-//   * Address per slot: low  plane = {1'b0, pat_addr[g*13 +: 13], 3'b000}
-//                       high plane = low plane + 64, reduced modulo 2**14.
+//   * Address per slot: chr_addr is a byte address into CHR, 14 bits wide, and one
+//     tile is 16 bytes, so the two planes of a tile are 8 bytes apart:
+//                       low  plane = pat_addr[g*13 +: 13]
+//                       high plane = pat_addr[g*13 +: 13] + 8, reduced modulo 2**14.
 //     pat_addr[g*13 +: 13] is {table, 5'b0, tile[2:0], 1'b0, fine[2:0]} as produced
-//     by nes_ppu_sprite, so fine is the row and the *8 scaling is done here.
-//     Example pat 0x1FF: low = 0x0FF8, low+64 = 0x1038, modulo 2**14 = 0x0038.
+//     by nes_ppu_sprite, i.e. it is already tile*16 + fine, with fine the row
+//     inside the tile. No scaling is applied here: this unit drives the same byte
+//     address that nes_chr_fetch_unit drives for the background.
+//     Example pat 0x1FF: low = 0x01FF, high = 0x0207.
+//     Same two bytes, other notation: nes_ppu_sprite's internal path reads them
+//     from its flat 65536-bit chr bus as chr[{pat,3'b000} +: 8] and
+//     chr[{pat,3'b000} + 13'd64 +: 8]. That is a *bit* index taken 8 bits at a
+//     time, so {pat,3'b000} bits is byte pat and +13'd64 bits is +8 bytes. Both
+//     notations name the same bytes; only this unit's output is a byte address.
 //
 // Timing in ce cycles, numbering the start-accepting edge as edge 1
 //   edge 1          : start latched, busy=1, shadow_valid=0.
@@ -25,10 +34,10 @@
 //   shared CHR bus needs no change when both fetchers are instantiated.
 //
 // Integration limits
-//   * chr_addr[13] is always 0, so pat_addr bits [12:10] (the pattern table
-//     select) never reach the bus and a pattern above 0x1FF*8 mirrors inside the
-//     internal 8 KiB CHR window. Driving the upper 8 KiB of an external 16 KiB
-//     CHR needs address bit 13, which this unit cannot produce.
+//   * chr_addr[13] is pat_addr[12] lifted into the byte domain, so a pattern in
+//     0x1FF8..0x1FFF reaches the upper 8 KiB of a 16 KiB CHR; pat_addr is 13 bits,
+//     so that is the top of the range. A CHR bus only 8 KiB wide mirrors that range
+//     back to 0x0000 instead of wrapping.
 //   * Prefetch runs a full line ahead of the pixels that use it: pat_addr must be
 //     the value computed from the NEXT line's scanline_sel (nes_ppu_sprite feeds
 //     scanline_sel into pat_addr_o) and start must be issued one scanline early.
@@ -64,11 +73,11 @@ module nes_sprite_chr_fetch (
     input [2:0]   g;
     input         p;
     reg   [12:0]  pat;
-    reg   [10:0]  rom;
+    reg   [13:0]  sum;
     begin
-      pat       = pa[g * 13 +: 13];
-      rom       = pat[10:0] + (p ? 11'd8 : 11'd0);
-      plane_byte = {rom, 3'b000};
+      pat        = pa[g * 13 +: 13];
+      sum        = {1'b0, pat} + (p ? 14'd8 : 14'd0);
+      plane_byte = sum & 14'h3FFF;
     end
   endfunction
 
