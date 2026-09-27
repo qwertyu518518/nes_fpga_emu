@@ -17,6 +17,7 @@ module tb_nes_ppu_sprite;
     wire [3:0]     sprite_priority;
     wire           sprite0_hit;
     wire           sprite_overflow;
+    wire [3:0]     cur_slot;
 
     reg [2047:0]  oam_bus;
     reg [65535:0] chr_bus;
@@ -27,6 +28,16 @@ module tb_nes_ppu_sprite;
 
     integer scan_row;
     integer probe_i;
+    integer cs_i;
+    integer cs_j;
+
+    reg [3:0] cs_exp;
+    reg [3:0] cs_found;
+    reg [3:0] cs_only;
+    reg [3:0] cs_cover;
+    reg [2:0] cs_pick;
+    reg [9:0] cs_xoff;
+    reg [2:0] cs_opaque_src;
 
     nes_ppu_sprite dut (
         .clk(clk),
@@ -42,7 +53,8 @@ module tb_nes_ppu_sprite;
         .sprite_pixel(sprite_pixel),
         .sprite_priority(sprite_priority),
         .sprite0_hit(sprite0_hit),
-        .sprite_overflow(sprite_overflow)
+        .sprite_overflow(sprite_overflow),
+        .cur_slot_o(cur_slot)
     );
 
     assign oam = oam_bus;
@@ -770,6 +782,243 @@ module tb_nes_ppu_sprite;
         end
     endtask
 
+    task expect_cur_slot;
+        input [8*96-1:0] name;
+        input [3:0] expected;
+        begin
+            if (cur_slot !== expected)
+                $fatal(1, "%0s: cur_slot_o got %0d expected %0d at %0d:%0d",
+                       name, cur_slot, expected, scanline, dot);
+        end
+    endtask
+
+    task expect_cur_slot_derived;
+        input [8*96-1:0] name;
+        begin
+            cs_exp = 4'h8;
+            if (!reset && (scanline < 9'd240) && (dot < 9'd256)) begin
+                for (cs_i = 0; cs_i < 8; cs_i = cs_i + 1) begin
+                    cs_pick = cs_i[2:0];
+                    cs_xoff = {2'b00, dot[7:0]} - {2'b00, dut.slot_x[cs_pick]};
+                    if ((cs_exp == 4'h8) && (cs_pick < {1'b0, dut.range_count})
+                        && (cs_xoff[9:3] == 8'd0))
+                        cs_exp = {1'b0, cs_pick};
+                end
+            end
+            if (cur_slot !== cs_exp)
+                $fatal(1, "%0s: cur_slot_o got %0d expected %0d at %0d:%0d",
+                       name, cur_slot, cs_exp, scanline, dot);
+        end
+    endtask
+
+    task expect_cur_slot_opaque_source;
+        input [8*96-1:0] name;
+        begin
+            cs_found = 4'h8;
+            cs_only = 4'h8;
+            cs_cover = 4'h0;
+            for (cs_i = 0; cs_i < 8; cs_i = cs_i + 1) begin
+                cs_pick = cs_i[2:0];
+                cs_xoff = {2'b00, dot[7:0]} - {2'b00, dut.slot_x[cs_pick]};
+                if ((cs_pick < {1'b0, dut.range_count}) && (cs_xoff[9:3] == 8'd0)) begin
+                    cs_cover = cs_cover + 4'd1;
+                    cs_only = {1'b0, cs_pick};
+                    if (dut.slot_opaque[cs_pick] === 1'b1 && (cs_found == 4'h8))
+                        cs_found = {1'b0, cs_pick};
+                end
+            end
+            if (cs_cover === 4'h0) begin
+                if (cur_slot !== 4'h8)
+                    $fatal(1, "%0s: cur_slot_o got %0d but no slot covers the dot at %0d:%0d",
+                           name, cur_slot, scanline, dot);
+            end else begin
+                if (cur_slot === 4'h8)
+                    $fatal(1, "%0s: cur_slot_o is the none sentinel but %0d slots cover the dot at %0d:%0d",
+                           name, cs_cover, scanline, dot);
+                if (cur_slot >= 4'h8)
+                    $fatal(1, "%0s: cur_slot_o got %0d, only 0..7 are real slots at %0d:%0d",
+                           name, cur_slot, scanline, dot);
+                if (cur_slot >= {1'b0, dut.range_count})
+                    $fatal(1, "%0s: cur_slot_o got %0d but range_count is %0d at %0d:%0d",
+                           name, cur_slot, dut.range_count, scanline, dot);
+                cs_xoff = {2'b00, dot[7:0]} - {2'b00, dut.slot_x[cur_slot[2:0]]};
+                if (cs_xoff[9:3] !== 8'd0)
+                    $fatal(1, "%0s: cur_slot_o got %0d but its x window misses the dot at %0d:%0d",
+                           name, cur_slot, scanline, dot);
+                if ((cs_cover === 4'h1) && (cur_slot !== cs_only))
+                    $fatal(1, "%0s: exactly one slot covers the dot but cur_slot_o got %0d and the covering slot is %0d at %0d:%0d",
+                           name, cur_slot, cs_only, scanline, dot);
+            end
+            if (sprite_pixel[1:0] !== 2'b00) begin
+                if (cs_found === 4'h8)
+                    $fatal(1, "%0s: sprite_pixel %01h is opaque but no slot_opaque is set at %0d:%0d",
+                           name, sprite_pixel, scanline, dot);
+                if (cur_slot === 4'h8)
+                    $fatal(1, "%0s: sprite_pixel %01h is opaque but cur_slot_o is the none sentinel at %0d:%0d",
+                           name, sprite_pixel, scanline, dot);
+                if (cur_slot > cs_found)
+                    $fatal(1, "%0s: cur_slot_o got %0d above the opaque source slot %0d at %0d:%0d",
+                           name, cur_slot, cs_found, scanline, dot);
+                if (cur_slot === cs_found) begin
+                    cs_opaque_src = {1'b0, cur_slot[2:0]};
+                    if (dut.slot_opaque[cs_opaque_src[2:0]] !== 1'b1)
+                        $fatal(1, "%0s: cur_slot_o names the opaque source slot %0d but slot_opaque is low at %0d:%0d",
+                               name, cs_opaque_src, scanline, dot);
+                    if (sprite_pixel
+                        !== {dut.slot_attr[cs_opaque_src[2:0]][1:0],
+                             dut.slot_pat[cs_opaque_src[2:0]][1:0]})
+                        $fatal(1, "%0s: sprite_pixel %01h is not the slot %0d pattern/attr at %0d:%0d",
+                               name, sprite_pixel, cs_opaque_src, scanline, dot);
+                end
+            end
+        end
+    endtask
+
+    task test_cur_slot_gating;
+        begin
+            clear_scene;
+            fill_tile(13'd0, 8'd0, 8'hFF, 8'hFF);
+            set_sprite(6'd0, 8'd32, 8'd0, 8'h00, 8'd32);
+            set_sprite(6'd1, 8'd32, 8'd0, 8'h00, 8'd40);
+            probe(9'd32, 9'd32);
+            expect_cur_slot("visible dot names slot 0", 4'd0);
+            expect_cur_slot_derived("visible dot derived");
+            probe(9'd32, 9'd39);
+            expect_cur_slot("last column still names slot 0", 4'd0);
+            probe(9'd32, 9'd40);
+            expect_cur_slot("second sprite window names slot 1", 4'd1);
+            probe(9'd32, 9'd255);
+            expect_cur_slot_derived("dot 255 derived");
+            probe(9'd32, 9'd256);
+            expect_cur_slot("dot 256 is the none sentinel", 4'h8);
+            probe(9'd32, 9'd257);
+            expect_cur_slot("dot 257 is the none sentinel", 4'h8);
+            probe(9'd32, 9'd340);
+            expect_cur_slot("dot 340 is the none sentinel", 4'h8);
+            probe(9'd32, 9'd511);
+            expect_cur_slot("dot 511 is the none sentinel", 4'h8);
+            probe(9'd239, 9'd32);
+            expect_cur_slot_derived("last visible scanline derived");
+            probe(9'd240, 9'd32);
+            expect_cur_slot("vblank scanline 240 is the none sentinel", 4'h8);
+            probe(9'd241, 9'd32);
+            expect_cur_slot("vblank scanline 241 is the none sentinel", 4'h8);
+            probe(9'd255, 9'd32);
+            expect_cur_slot("vblank scanline 255 is the none sentinel", 4'h8);
+            probe(9'd261, 9'd32);
+            expect_cur_slot("pre-render scanline 261 is the none sentinel", 4'h8);
+            probe(9'd511, 9'd32);
+            expect_cur_slot("scanline 511 is the none sentinel", 4'h8);
+            probe(9'd32, 9'd32);
+            expect_cur_slot("reset released names slot 0", 4'd0);
+            reset = 1'b1;
+            probe(9'd32, 9'd32);
+            expect_cur_slot("reset high is the none sentinel", 4'h8);
+            probe(9'd32, 9'd32);
+            expect_cur_slot("reset high stays the none sentinel", 4'h8);
+            reset = 1'b0;
+            probe(9'd32, 9'd32);
+            expect_cur_slot("reset release restores slot 0", 4'd0);
+            mask = 8'h18;
+            probe(9'd32, 9'd32);
+            expect_cur_slot("left-8 clip does not gate the positional slot", 4'd0);
+            expect_cur_slot_derived("left-8 clip derived");
+            mask = 8'h1C;
+            $display("SPRITE cur_slot_o dot>=256, vblank and reset gating PASS");
+        end
+    endtask
+
+    task test_cur_slot_priority_encode;
+        begin
+            clear_scene;
+            for (probe_i = 0; probe_i < 8; probe_i = probe_i + 1) begin
+                fill_tile(13'd0, probe_i[7:0] + 8'd1, 8'h80, 8'h00);
+                set_sprite(probe_i[5:0], 8'd32, probe_i[7:0] + 8'd1, 8'h00,
+                           8'd16 * probe_i[7:0]);
+            end
+            probe(9'd32, 9'd16);
+            expect_cur_slot("encode slot 1 first column", 4'd1);
+            expect_cur_slot_opaque_source("encode slot 1 first column source");
+            probe(9'd32, 9'd23);
+            expect_cur_slot("encode slot 1 last column", 4'd1);
+            expect_cur_slot_opaque_source("encode slot 1 last column source");
+            probe(9'd32, 9'd24);
+            expect_cur_slot("gap before slot 2 is the none sentinel", 4'h8);
+            probe(9'd32, 9'd31);
+            expect_cur_slot("gap before slot 2 stays the none sentinel", 4'h8);
+            probe(9'd32, 9'd32);
+            expect_cur_slot("encode slot 2 first column", 4'd2);
+            probe(9'd32, 9'd48);
+            expect_cur_slot("encode slot 3 first column", 4'd3);
+            probe(9'd32, 9'd64);
+            expect_cur_slot("encode slot 4 first column", 4'd4);
+            probe(9'd32, 9'd80);
+            expect_cur_slot("encode slot 5 first column", 4'd5);
+            probe(9'd32, 9'd96);
+            expect_cur_slot("encode slot 6 first column", 4'd6);
+            probe(9'd32, 9'd112);
+            expect_cur_slot("encode slot 7 first column", 4'd7);
+            expect_cur_slot_opaque_source("encode slot 7 first column source");
+            probe(9'd32, 9'd119);
+            expect_cur_slot("encode slot 7 last column", 4'd7);
+            probe(9'd32, 9'd120);
+            expect_cur_slot("gap after slot 7 is the none sentinel", 4'h8);
+            probe(9'd32, 9'd16);
+            expect_cur_slot_derived("eight in range derived");
+            set_sprite(6'd7, 8'd32, 8'd1, 8'h00, 8'd112);
+            set_sprite(6'd8, 8'd32, 8'd1, 8'h00, 8'd128);
+            probe(9'd32, 9'd112);
+            expect_cur_slot("ninth in range keeps slot 7 at x=112", 4'd7);
+            probe(9'd32, 9'd128);
+            expect_cur_slot("ninth in range sprite is dropped", 4'h8);
+            expect_cur_slot_derived("nine in range derived");
+            probe(9'd32, 9'd16);
+            expect_cur_slot_opaque_source("nine in range slot 1 source");
+            probe(9'd32, 9'd32);
+            expect_cur_slot_opaque_source("nine in range slot 2 source");
+            $display("SPRITE cur_slot_o lowest-covering-slot encode over 8 slots PASS");
+        end
+    endtask
+
+    task test_cur_slot_opaque_source;
+        begin
+            clear_scene;
+            fill_tile(13'd0, 8'd1, 8'hFF, 8'h00);
+            fill_tile(13'd0, 8'd2, 8'h80, 8'h00);
+            set_sprite(6'd0, 8'd32, 8'd1, 8'h01, 8'd32);
+            set_sprite(6'd1, 8'd32, 8'd2, 8'h02, 8'd32);
+            probe(9'd32, 9'd32);
+            expect_all("single covering slot 0 is the opaque source", 4'h5, 4'h0, 1'b0, 1'b0);
+            expect_cur_slot("single covering slot names slot 0", 4'd0);
+            expect_cur_slot_opaque_source("single covering slot is the opaque source");
+            probe(9'd32, 9'd39);
+            expect_all("single covering slot 0 last column", 4'h5, 4'h0, 1'b0, 1'b0);
+            expect_cur_slot_opaque_source("single covering slot last column source");
+            set_sprite(6'd0, 8'd32, 8'd2, 8'h01, 8'd32);
+            set_sprite(6'd1, 8'd32, 8'd1, 8'h02, 8'd32);
+            probe(9'd32, 9'd33);
+            expect_all("slot 0 transparent at xoffset 1, slot 1 supplies", 4'h9, 4'h0, 1'b0, 1'b0);
+            expect_cur_slot("overlapping pair names the lower slot 0", 4'd0);
+            expect_cur_slot_opaque_source("opaque source is at or above cur_slot_o");
+            set_sprite(6'd1, 8'd32, 8'd2, 8'h02, 8'd32);
+            probe(9'd32, 9'd33);
+            expect_all("transparent covering slot has no opaque source", 4'h0, 4'h0, 1'b0, 1'b0);
+            expect_cur_slot("transparent covering slot is still named", 4'd0);
+            expect_cur_slot_opaque_source("transparent covering slot has no opaque source");
+            set_sprite(6'd1, 8'd32, 8'd1, 8'h00, 8'd32);
+            probe(9'd32, 9'd33);
+            expect_all("slot 1 supplies the opaque pixel", 4'h1, 4'h0, 1'b0, 1'b0);
+            expect_cur_slot("overlapping pair names the lower slot 0", 4'd0);
+            expect_cur_slot_opaque_source("opaque source is at or above cur_slot_o");
+            set_sprite(6'd0, 8'd32, 8'd1, 8'h00, 8'd24);
+            probe(9'd32, 9'd33);
+            expect_all("slot 0 no longer covers the dot", 4'h1, 4'h0, 1'b0, 1'b0);
+            expect_cur_slot("sole covering slot moves to slot 1", 4'd1);
+            expect_cur_slot_opaque_source("sole covering slot 1 is the opaque source");
+            $display("SPRITE cur_slot_o agrees with the slot_opaque/sprite_pixel source PASS");
+        end
+    endtask
+
     initial begin
         clk = 1'b0;
         reset = 1'b1;
@@ -796,6 +1045,9 @@ module tb_nes_ppu_sprite;
         test_dot_vblank_and_reset_masking;
         test_oam_boundaries;
         test_mask_ctrl_and_bg_isolation;
+        test_cur_slot_gating;
+        test_cur_slot_priority_encode;
+        test_cur_slot_opaque_source;
         $display("PASS nes_ppu_sprite");
         $finish;
     end

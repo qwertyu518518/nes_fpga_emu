@@ -9,6 +9,29 @@
 //   dot. pat_addr_o exposes the 8 per-slot pattern addresses as 8 x 13 bits
 //   for a parent that wants to prefetch them ahead of the line.
 //
+// cur_slot_o : observation-only export of which slot this dot is positioned on.
+//   4 bits wide, purely positional, and it never feeds back into any other
+//   signal in this module, so it is safe to consume from a parent that drives
+//   chr_sh from data derived from it (EXTERNAL_CHR=1). It is deliberately NOT
+//   the pattern-dependent winner below, because that would close a combinational
+//   loop chr_sh -> s_pat -> slot_opaque -> cur_slot_o -> chr_sh. The positional
+//   rule is the first two terms of slot_opaque: the lowest g in 0..7 that is in
+//   range for this scanline (g < range_count) and whose 8-pixel window covers
+//   dot. Because slot_opaque adds a third term (s_pat != 0), the opaque source
+//   slot is always >= cur_slot_o, and cur_slot_o == the opaque source whenever
+//   no earlier slot covers the dot.
+//     0..7   the slot this dot is positioned on, per the rule above
+//     4'h8   no sprite covers this dot, or the index is not meaningful
+//   4'h8 is also driven unconditionally whenever reset is high, whenever
+//   scanline >= 240 (vblank and the pre-render line) and whenever dot >= 256,
+//   because in all of those states pixel_active is low and sprite_pixel,
+//   sprite_priority and sprite0_hit are already forced to zero without
+//   consulting the pattern planes, so a parent may substitute a zero byte for
+//   the whole slot without changing any output of this unit. sprite_overflow
+//   is not gated by dot or by reset, and cur_slot_o carries no overflow
+//   information. cur_slot_o is also independent of mask: it reports the dot's
+//   position, not whether the left-8 clip suppresses the pixel.
+//
 
 // Sprite pattern byte addresses
 //   s_pat_addr is {table, 5'b0, tile[2:0], 1'b0, fine[2:0]}, which is
@@ -56,7 +79,8 @@ module nes_ppu_sprite #(
     output reg  [3:0]     sprite_priority,
     output reg            sprite0_hit,
     output reg            sprite_overflow,
-    output wire [103:0]   pat_addr_o
+    output wire [103:0]   pat_addr_o,
+    output wire [3:0]     cur_slot_o
 );
 
     function [5:0] nth_set;
@@ -197,5 +221,26 @@ module nes_ppu_sprite #(
         if (frame_active && (range_count > 7'd8))
             sprite_overflow = 1'b1;
     end
+
+    reg  [3:0] cur_slot;
+    reg  [9:0] cur_xoff;
+    reg  [2:0] cur_pick;
+    reg        cur_cover;
+    integer    k;
+
+    always @* begin
+        cur_slot = 4'h8;
+        for (k = 0; k < 8; k = k + 1) begin
+            cur_pick = k[2:0];
+            cur_xoff = {2'b00, dot[7:0]} - {2'b00, slot_x[cur_pick]};
+            cur_cover = (cur_pick < {1'b0, range_count}) && (cur_xoff[9:3] == 8'd0);
+            if (cur_cover && (cur_slot == 4'h8))
+                cur_slot = {1'b0, cur_pick};
+        end
+        if (!(frame_active && (dot < 9'd256)))
+            cur_slot = 4'h8;
+    end
+
+    assign cur_slot_o = cur_slot;
 
 endmodule

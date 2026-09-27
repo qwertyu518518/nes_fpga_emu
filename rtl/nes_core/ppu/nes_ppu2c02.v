@@ -50,16 +50,22 @@
 // Sprite shadow -> chr_sh (EXTERNAL_CHR=1)
 //   nes_ppu_sprite's external generate hands every slot the same 8-bit chr_sh for
 //   both planes (`assign s_plane_lo = chr_sh; assign s_plane_hi = chr_sh;`), so
-//   the PPU has to choose the byte. The slot index is recomputed here with the
-//   same rule the sprite unit applies internally: scan the 64 OAM entries for the
-//   ones whose vertical range covers `scanline` (in_range / range_count), let the
-//   g-th set bit be slot g's OAM index (nth_set), then take the lowest g with
-//   g < range_count whose 8-pixel horizontal window covers `dot`. For that slot
-//   shadow[g*16 +: 8] is the low plane and shadow[g*16+8 +: 8] the high plane.
-//   One byte has to serve both planes, so their OR is presented: that makes the
-//   sprite silhouette exact and forces every opaque pixel to palette index 3,
-//   whereas a single plane would shrink the silhouette to that plane's bits and
-//   the high plane cannot be delivered at all through the 8-bit port.
+//   the PPU has to choose the byte. The slot index is taken from that unit's
+//   cur_slot_o, which is the positional slot it already selected for this dot:
+//   the lowest of its 0..7 in-range slots whose 8-pixel horizontal window covers
+//   `dot`, or 4'h8 when nothing covers it. Recomputing that scan here would have
+//   duplicated the 64-entry range scan and the 8 nth_set walks nes_ppu_sprite
+//   already performs, which roughly doubled the external-CHR simulation cost
+//   for a result that is bit-identical by construction: cur_slot_o is the same
+//   (slot_index, x-window) rule, driven by the same sprite_oam_bus and the same
+//   dot, and the 4'h8 sentinel only replaces the shadow bytes at dot >= 256,
+//   vblank and reset, where nes_ppu_sprite has already forced sprite_pixel,
+//   sprite_priority and sprite0_hit to zero without consulting chr_sh. For that
+//   slot shadow[g*16 +: 8] is the low plane and shadow[g*16+8 +: 8] the high
+//   plane. One byte has to serve both planes, so their OR is presented: that
+//   makes the sprite silhouette exact and forces every opaque pixel to palette
+//   index 3, whereas a single plane would shrink the silhouette to that plane's
+//   bits and the high plane cannot be delivered at all through the 8-bit port.
 //   sp_shadow_valid gates the mux because nes_sprite_chr_fetch's shadow register
 //   has no reset: before the first completed line it is X, and X on chr_sh would
 //   make slot_opaque / sprite_pixel X inside nes_ppu_sprite and corrupt the pixel.
@@ -451,80 +457,19 @@ generate
         wire        sp_busy;
         wire        sp_start;
         wire        sp_bus_sel;
+        wire [3:0]  sp_slot;
         wire [6:0]  sp_base_lo;
         wire [6:0]  sp_base_hi;
         wire [7:0]  sp_plane_lo;
         wire [7:0]  sp_plane_hi;
         wire [7:0]  sp_chr_sh;
-        reg  [8:0]  sp_height;
-        reg  [63:0] sp_in_range;
-        reg  [6:0]  sp_range_count;
-        reg  [2:0]  sp_slot;
-        reg  [5:0]  sp_idx;
-        reg  [7:0]  sp_xbyte;
-        reg  [9:0]  sp_xoff;
-        reg  [2:0]  sp_pick;
-        reg         sp_taken;
-        reg  [7:0]  sp_si;
-        reg  [7:0]  sp_gi;
-
-        function [5:0] sp_nth_set;
-            input [63:0] vec;
-            input [2:0]  pick;
-            integer      b;
-            reg [6:0]    c;
-            reg          taken;
-            begin
-                sp_nth_set = 6'd0;
-                c = 7'd0;
-                taken = 1'b0;
-                for (b = 0; b < 64; b = b + 1) begin
-                    if (!taken && vec[b]) begin
-                        if (c[2:0] == pick) begin
-                            sp_nth_set = b[5:0];
-                            taken = 1'b1;
-                        end else begin
-                            c = c + 7'd1;
-                        end
-                    end
-                end
-            end
-        endfunction
-
-        always @* begin
-            sp_height = control_reg[5] ? 9'd16 : 9'd8;
-            sp_in_range = 64'd0;
-            sp_range_count = 7'd0;
-            for (sp_si = 8'd0; sp_si < 8'd64; sp_si = sp_si + 8'd1) begin
-                if (({1'b0, scanline} - {2'b00, oam_ram[{sp_si[5:0], 2'b00}]})
-                    < {1'b0, sp_height}) begin
-                    sp_in_range[sp_si[5:0]] = 1'b1;
-                    sp_range_count = sp_range_count + 7'd1;
-                end
-            end
-
-            sp_slot = 3'd0;
-            sp_taken = 1'b0;
-            for (sp_gi = 8'd0; sp_gi < 8'd8; sp_gi = sp_gi + 8'd1) begin
-                if (!sp_taken) begin
-                    sp_pick = sp_gi[2:0];
-                    sp_idx = sp_nth_set(sp_in_range, sp_pick);
-                    sp_xbyte = oam_ram[{sp_idx[5:0], 2'b11}];
-                    sp_xoff = {2'b00, dot[7:0]} - {2'b00, sp_xbyte};
-                    if ((sp_gi < {1'b0, sp_range_count}) && (sp_xoff[9:3] == 8'd0)) begin
-                        sp_slot = sp_gi[2:0];
-                        sp_taken = 1'b1;
-                    end
-                end
-            end
-        end
 
         assign sp_start = (dot == 9'd257);
         assign sp_bus_sel = sp_busy;
-        assign sp_base_lo = {sp_slot, 4'b0000};
-        assign sp_base_hi = {sp_slot, 4'b1000};
-        assign sp_plane_lo = sp_shadow[sp_base_lo +: 8];
-        assign sp_plane_hi = sp_shadow[sp_base_hi +: 8];
+        assign sp_base_lo = {sp_slot[2:0], 4'b0000};
+        assign sp_base_hi = {sp_slot[2:0], 4'b1000};
+        assign sp_plane_lo = (sp_slot == 4'h8) ? 8'h00 : sp_shadow[sp_base_lo +: 8];
+        assign sp_plane_hi = (sp_slot == 4'h8) ? 8'h00 : sp_shadow[sp_base_hi +: 8];
         assign sp_chr_sh = sp_shadow_valid ? (sp_plane_lo | sp_plane_hi) : 8'h00;
 
         nes_sprite_chr_fetch u_sprite_chr_fetch (
@@ -560,7 +505,8 @@ generate
             .sprite_priority(sprite_priority),
             .sprite0_hit(sprite0_hit_raw),
             .sprite_overflow(sprite_overflow_raw),
-            .pat_addr_o(sprite_pat_addr_bus)
+            .pat_addr_o(sprite_pat_addr_bus),
+            .cur_slot_o(sp_slot)
         );
 
         nes_chr_fetch_unit u_chr_fetch (
