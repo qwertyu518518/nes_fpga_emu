@@ -1,6 +1,6 @@
 # Quartus 工程骨架（未验证）
 
-本目录是 `op_fpga_emu` 的 **Quartus 工程骨架**：`op_fpga_emu.qpf`（工程身份）、`op_fpga_emu.qsf`（器件 `EP4CE10F17C8` + 顶层 `nes_ep4ce10_top` + 37 条 Verilog 源）、`op_fpga_emu.sdc`（3 条 `create_clock` + 2 条 `set_false_path`）三个文件都已存在，让 Quartus Prime 能打开一个完整的工程。
+本目录是 `op_fpga_emu` 的 **Quartus 工程骨架**：`op_fpga_emu.qpf`（工程身份）、`op_fpga_emu.qsf`（器件 `EP4CE10F17C8` + 顶层 `nes_ep4ce10_top` + 38 条 Verilog 源）、`op_fpga_emu.sdc`（3 条 `create_clock` + 2 条 `set_false_path`）三个文件都已存在，让 Quartus Prime 能打开一个完整的工程。
 
 **先说最重要的一句：本仓库没有安装 Quartus，这三个文件从未在 Quartus 中打开或编译过，这里没有跑过一次综合、一次 Fit、一次 TimeQuest、一次上板测量。** 下面所有 `.qsf` / `.sdc` / `.qpf` 里的内容都是按仓库文档与厂商例程观察写出来的骨架，**没有一条被 Quartus 解析过或校验过**。打开工程后请以 Quartus 自己的报告为准，不要把这里的数字当作结果引用。
 
@@ -15,7 +15,7 @@ PLL 相关的交叉引用：SDC 第 6 节的 `TODO(PLL)`（状态 A → B 的改
 | 文件 | 作用 | 状态 |
 |---|---|---|
 | `op_fpga_emu.qpf` | 工程身份文件（工程名 + 工程文件格式版本），Quartus 打开工程的入口 | 骨架，版本号是占位 |
-| `op_fpga_emu.qsf` | 全部工程设置：器件、顶层实体、37 条 `VERILOG_FILE`、工程级 IO 电压、TimeQuest 的 SDC 指向 | 骨架，**0 条 `set_location_assignment` / 0 条 `set_io_assignment`（完全没有任何引脚分配）** |
+| `op_fpga_emu.qsf` | 全部工程设置：器件、顶层实体、38 条 `VERILOG_FILE`、工程级 IO 电压、TimeQuest 的 SDC 指向 | 骨架，**0 条 `set_location_assignment` / 0 条 `set_io_assignment`（完全没有任何引脚分配）** |
 | `op_fpga_emu.sdc` | TimeQuest 时序约束：**3 条生效的 `create_clock`**（50 / 21.477272 / 25 MHz）、**0 条 `create_generated_clock`**、IO 标准、**2 条生效的 `set_false_path`**、PLL 生成后的 `TODO(PLL)` 改写清单 | 骨架，**从未被 TimeQuest 解析或校验** |
 | `../rtl/platform/ep4ce10/nes_ep4ce10_qsf_if.v` | 板级引脚封装层：把 `nes_ep4ce10_top` 的端口名映射成板级信号名（`sys_clk` / `sys_rst_n` / `key[3:0]` / `vga_hs` / `vga_vs` / `vga_rgb[15:0]` / `led[3:0]` / `beep`） | 唯一新增的 RTL，已用 Icarus 编译通过（见第 6 节） |
 | `README.md` | 本文：怎么打开、先做哪三步、哪些是未验证的 | — |
@@ -29,15 +29,15 @@ PLL 相关的交叉引用：SDC 第 6 节的 `TODO(PLL)`（状态 A → B 的改
 | 核对项 | 实测 | 怎么数的 |
 |---|---|---|
 | `quartus/op_fpga_emu.qpf` | **存在** | `Test-Path` = True |
-| `quartus/op_fpga_emu.qsf` | **存在**（142 行） | `Test-Path` = True |
+| `quartus/op_fpga_emu.qsf` | **存在**（143 行） | `Test-Path` = True |
 | `quartus/op_fpga_emu.sdc` | **存在**（193 行） | `Test-Path` = True |
 | 仓库里任何 `.qip` | **不存在** | 全仓 `*.qip` 递归搜索，0 结果 |
 | 仓库里任何 `.sdf` | **不存在** | 全仓 `*.sdf` 递归搜索，0 结果 |
 | `.qsf` 里 `set_location_assignment` | **0 条** | 全文搜索，0 命中 → **没有任何引脚分配** |
 | `.qsf` 里 `set_io_assignment` | **0 条** | 全文搜索，0 命中 |
-| `.qsf` 里 `PIN_LOCATION` | **0 条** assignment；1 次出现在注释里（说明"故意留空"） | 唯一命中的第 125 行是注释文本 |
-| `.qsf` 生效的 `set_global_assignment` | **47 条**（10 条非文件 + 37 条 `VERILOG_FILE`） | 逐行匹配行首 `set_global_assignment`；全文另有 1 次命中在第 13 行的格式说明注释里 |
-| `.qsf` 生效的 `VERILOG_FILE` | **37 条** | 逐行匹配行首 `set_global_assignment -name VERILOG_FILE` |
+| `.qsf` 里 `PIN_LOCATION` | **0 条** assignment；1 次出现在注释里（说明"故意留空"） | 唯一命中的第 126 行是注释文本 |
+| `.qsf` 生效的 `set_global_assignment` | **48 条**（10 条非文件 + 38 条 `VERILOG_FILE`） | 逐行匹配行首 `set_global_assignment`；全文另有 1 次命中在第 13 行的格式说明注释里 |
+| `.qsf` 生效的 `VERILOG_FILE` | **38 条** | 逐行匹配行首 `set_global_assignment -name VERILOG_FILE` |
 | `.qsf` 声明的器件 | `FAMILY "Cyclone IV E"` / `DEVICE EP4CE10F17C8` / `DEVICE_FAMILY "Cyclone IV E"` | 第 17–19 行 |
 | `.qsf` 声明的顶层 | `TOP_LEVEL_ENTITY nes_ep4ce10_top` | 第 27 行 |
 | `.sdc` 生效的 `create_clock` | **3 条** | 逐行匹配行首 `create_clock` |
@@ -56,14 +56,15 @@ PLL 相关的交叉引用：SDC 第 6 节的 `TODO(PLL)`（状态 A → B 的改
 
 ### 0.2 清单完整性与自检方法
 
-`rtl/nes_core/` 下实际有 **34** 个 `.v` 文件，`rtl/platform/ep4ce10/` 下有 **3** 个，合计 **37** 个（一文件一模块，37 个模块）；`.qsf` 的 `VERILOG_FILE` 清单**现已与磁盘逐条一致**，37 条对 37 个 `.v`，missing = 0、ghost = 0。
+`rtl/nes_core/` 下实际有 **35** 个 `.v` 文件，`rtl/platform/ep4ce10/` 下有 **3** 个，合计 **38** 个（一文件一模块，38 个模块）；`.qsf` 的 `VERILOG_FILE` 清单**现已与磁盘逐条一致**，38 条对 38 个 `.v`，missing = 0、ghost = 0。
 
-清单历史上漏过两次，两次都已经补齐：
+清单历史上漏过三次，三次都已经补齐：
 
 - 第一次漏了 `peripheral/` 下的 **4** 个模块——`wm8978_i2c.v`、`nes_cdc_fifo.v`、`nes_i2s_shifter.v`、`nes_audio_i2s.v`；
-- 第二次是在那之后**新增**的两个模块没有同步进清单——`ppu/nes_chr_fetch_unit.v` 与 `peripheral/sd_spi_cmd.v`。
+- 第二次是在那之后**新增**的两个模块没有同步进清单——`ppu/nes_chr_fetch_unit.v` 与 `peripheral/sd_spi_cmd.v`；
+- 第三次是本轮**新增**的 `ppu/nes_sprite_chr_fetch.v`（精灵 CHR 预取单元）同样没有同步进清单。
 
-也就是说"上一轮说 35 条"是**当时**的实测值：当时清单与磁盘都是 35 个 `.v`、逐条一致；其后仓库新增了这 2 个模块，清单与磁盘因此短暂分叉（35 对 37，missing = 2），**现已把这两条 `VERILOG_FILE` 补进去**，恢复与磁盘逐条一致。**补清单只是让文件清单自洽，不等于这两个模块被综合过**——见第 6 节，它们仍在层次闭包之外（见第 4.3 节），且本工程从未被 Quartus 编译过。
+也就是说"上一轮说 37 条"是**当时**的实测值：当时清单与磁盘都是 37 个 `.v`、逐条一致；其后仓库新增了这 1 个模块，清单与磁盘因此短暂分叉（37 对 38，missing = 1），**现已把这条 `VERILOG_FILE` 补进去**，恢复与磁盘逐条一致。**补清单只是让文件清单自洽，不等于这个模块被综合过**——见第 6 节，它仍在层次闭包之外（见第 4.3 节），且本工程从未被 Quartus 编译过。
 
 请用下面的命令自行核对清单与磁盘是否一致：
 
@@ -76,7 +77,7 @@ $actual | Where-Object { $qsf -notcontains $_ }   # 应无输出
 $qsf    | Where-Object { -not (Test-Path $_) }   # 应无输出
 ```
 
-本机实测输出是 `qsf=37 disk=37 missing=0 ghost=0`，后两条命令都无输出。
+本机实测输出是 `qsf=38 disk=38 missing=0 ghost=0`，后两条命令都无输出。
 
 `rtl/nes_core/peripheral/` 下的 **5** 个模块（`wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd`）与 `ppu/nes_chr_fetch_unit.v` 都没有被 `nes_ep4ce10_top` 或任何 System 顶层实例化（`README.md` 与 `docs/00-overview/verification-plan.md` 都记着 `wm8978_i2c` 这一点），所以它们不在层次闭包里、也不需要被当前顶层综合——但它们属于仓库实际内容，列进 `VERILOG_FILE` 只是为了清单完整。它们与 `nes_ep4ce10_qsf_if` 一起按第 4.3 节的多顶层处理。**特别地：`nes_chr_fetch_unit` 尚未被 `nes_ppu2c02` 例化，CHR 外部取数通路在硬件上仍未接通**，列进 `.qsf` 不改变这一点。
 
@@ -90,7 +91,7 @@ $qsf    | Where-Object { -not (Test-Path $_) }   # 应无输出
 3. 打开后先不要点 `Start Compilation`，按顺序做第 2 节的三步。
 4. 打开后请立刻在 `Assignments → Settings` 里核对三处，不要假设文件里的字面值被工具接受了：
    - `Devices`：Family = `Cyclone IV E`，Device = `EP4CE10F17C8`
-   - `Design Files`：应该看到 **37** 个 `.v` 文件和 1 个 `.sdc`。清单已与磁盘核对一致（见第 0.2 节的自检脚本），如果你在 Design Files 面板里数到别的数字，说明 `.qsf` 又有新增文件没被列进去
+   - `Design Files`：应该看到 **38** 个 `.v` 文件和 1 个 `.sdc`。清单已与磁盘核对一致（见第 0.2 节的自检脚本），如果你在 Design Files 面板里数到别的数字，说明 `.qsf` 又有新增文件没被列进去
    - `TimeQuest`：SDC 那一行指向 `op_fpga_emu.sdc`
      （**【未验证】** 不同 Quartus 版本这条 assignment 可能显示为 `SDC_FILE` 或 `SOURCE_TSDC_FILE_NAME`，以你版本里实际显示的为准）
 
@@ -198,8 +199,8 @@ $qsf    | Where-Object { -not (Test-Path $_) }   # 应无输出
   - `TOP_LEVEL_ENTITY`；
   - `STRATIX_DEVICE_IO_STANDARD "2.5 V"`（工程级 IO 电压起点，见第 2 节第一步）；
   - `SDC_FILE op_fpga_emu.sdc`（TimeQuest 约束文件）；
-    - `rtl/nes_core/**` 的 34 个 + `rtl/platform/ep4ce10/**` 的 3 个 `VERILOG_FILE`，共 37 条，已与磁盘核对一致，见第 0.2 节；
-   - **0 条** `set_location_assignment`、**0 条** `set_io_assignment`、**0 条** `PIN_LOCATION`（第 125 行只有一句"故意留空"的注释）、没有 PLL 的 `.qip`。理由见第 2 节第二步与第 6 节。
+    - `rtl/nes_core/**` 的 35 个 + `rtl/platform/ep4ce10/**` 的 3 个 `VERILOG_FILE`，共 38 条，已与磁盘核对一致，见第 0.2 节；
+   - **0 条** `set_location_assignment`、**0 条** `set_io_assignment`、**0 条** `PIN_LOCATION`（第 126 行只有一句"故意留空"的注释）、没有 PLL 的 `.qip`。理由见第 2 节第二步与第 6 节。
 - **`op_fpga_emu.sdc`**：
   - 第 0 节 `pick_port`：一份 SDC 同时支持两种顶层；
   - 第 1 节三个 `create_clock`（50 / 21.477272 / 25 MHz）——**当前 altpll 未生成，所以后两个是"独立输入端口"而不是 generated clock**，因此本文件**没有也不能**写 `create_generated_clock`（生效条数实测为 0，唯一一次文本命中在第 11 行的注释里）；
@@ -245,11 +246,11 @@ set_global_assignment -name TOP_LEVEL_ENTITY nes_ep4ce10_qsf_if
 
 ### 4.3 多个顶层实体
 
-`VERILOG_FILE` 列出的是**几乎全仓库**的模块（nes_core 34 个 + platform 3 个 = 37 条，已与磁盘核对一致），而从 `nes_ep4ce10_top` 出发的实际层次闭包只有 **16** 个模块（用 Icarus Verilog 以 `-s nes_ep4ce10_top` 展开后读生成的 vvp 里的 `.scope` 得到；只喂这 16 个文件重新展开也能通过，退出码 0）。37 − 16 = **21** 个模块不在闭包里。Quartus 会把"没有被任何模块实例化"的模块当成候选顶层实体，下面这 21 个都可能各自变成一个额外的顶层实体：
+`VERILOG_FILE` 列出的是**几乎全仓库**的模块（nes_core 35 个 + platform 3 个 = 38 条，已与磁盘核对一致），而从 `nes_ep4ce10_top` 出发的实际层次闭包只有 **16** 个模块（用 Icarus Verilog 以 `-s nes_ep4ce10_top` 展开后读生成的 vvp 里的 `.scope` 得到；只喂这 16 个文件重新展开也能通过，退出码 0）。38 − 16 = **22** 个模块不在闭包里。Quartus 会把"没有被任何模块实例化"的模块当成候选顶层实体，下面这 22 个都可能各自变成一个额外的顶层实体：
 
-`nes_system_v0`、`nes_system_v1`、`nes_system_v2`、`nes_system_v3`、`nes_system_v5`、`nes_mapper` 与 `nes_mapper_nrom` / `nes_mapper_uxrom` / `nes_mapper_cnrom` / `nes_mapper_mmc1` / `nes_mapper_mmc3`、`ines_header_parser`、`nes_video_scaler`、`nes_chr_fetch_unit`、`wm8978_i2c`、`nes_cdc_fifo`、`nes_i2s_shifter`、`nes_audio_i2s`、`sd_spi_cmd`、`nes_ep4ce10_pll_stub`、`nes_ep4ce10_qsf_if`（选默认顶层时）。
+`nes_system_v0`、`nes_system_v1`、`nes_system_v2`、`nes_system_v3`、`nes_system_v5`、`nes_mapper` 与 `nes_mapper_nrom` / `nes_mapper_uxrom` / `nes_mapper_cnrom` / `nes_mapper_mmc1` / `nes_mapper_mmc3`、`ines_header_parser`、`nes_video_scaler`、`nes_chr_fetch_unit`、`nes_sprite_chr_fetch`、`wm8978_i2c`、`nes_cdc_fifo`、`nes_i2s_shifter`、`nes_audio_i2s`、`sd_spi_cmd`、`nes_ep4ce10_pll_stub`、`nes_ep4ce10_qsf_if`（选默认顶层时）。
 
-其中 `wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd` 是补进清单的 `peripheral/` 5 个模块，`nes_chr_fetch_unit` 是补进清单的 `ppu/` 1 个模块（见第 0.2 节）：它们进清单是为了让 `VERILOG_FILE` 与磁盘一致，**并不代表进了层次闭包**。`nes_chr_fetch_unit` 至今**没有被 `nes_ppu2c02` 例化**，CHR 外部取数通路在硬件上仍未接通；`sd_spi_cmd` 同理没有被任何顶层例化，SD 卡通路还是独立模块。另外顶层 `nes_ep4ce10_top` 只把 `audio_sample_valid` / `audio_sample_left` 送到输出端口，WM8978 的 I2C/FIFO/I2S 通路也没接（见 `docs/hardware/08-wm8978-audio.md`）。
+其中 `wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd` 是补进清单的 `peripheral/` 5 个模块，`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` 是补进清单的 `ppu/` 2 个模块（见第 0.2 节）：它们进清单是为了让 `VERILOG_FILE` 与磁盘一致，**并不代表进了层次闭包**。`nes_chr_fetch_unit` 至今**没有被 `nes_ppu2c02` 例化**，CHR 外部取数通路在硬件上仍未接通；`nes_sprite_chr_fetch` 同样**没有被任何模块例化**（既不在 `nes_ppu2c02` 的 `g_chr_external` 分支里，也不在 `nes_ppu_sprite` 里），精灵 CHR 预取单元在硬件上完全没有接线，外部 CHR 模式下精灵仍然不渲染；`sd_spi_cmd` 同理没有被任何顶层例化，SD 卡通路还是独立模块。另外顶层 `nes_ep4ce10_top` 只把 `audio_sample_valid` / `audio_sample_left` 送到输出端口，WM8978 的 I2C/FIFO/I2S 通路也没接（见 `docs/hardware/08-wm8978-audio.md`）。
 
 **【未验证】** 这份清单在 Quartus 里到底会产生几个顶层实体、各自占多少资源，必须看 `Analysis & Synthesis` 报告。三种处理办法（任选其一）：
 
@@ -292,9 +293,9 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 |---|---|
 | 能不能被 Quartus 打开 | `.qpf` / `.qsf` 是按格式手写的，**从没被 Quartus 解析过、更没编译过**（本机没有安装 Quartus）。`QUARTUS_VERSION = "20.1.0"` 与 `ORIGINAL_QUARTUS_VERSION 20.1.0` 都是占位 |
 | QSF 的 assignment 名字 | `SDC_FILE` 在不同版本可能显示为 `SOURCE_TSDC_FILE_NAME`；`STRATIX_DEVICE_IO_STANDARD` 的合法取值与器件是否匹配也没验证 |
-| `VERILOG_FILE` 清单与磁盘是否一致 | 清单曾漏 4 个 `peripheral/` 下的模块（`wm8978_i2c.v`、`nes_cdc_fifo.v`、`nes_i2s_shifter.v`、`nes_audio_i2s.v`），其后又漏了新增的 2 个模块（`ppu/nes_chr_fetch_unit.v`、`peripheral/sd_spi_cmd.v`）；**两次都已补入**，37 条与磁盘 37 个 `.v` 逐条一致（missing = 0、ghost = 0，见第 0.2 节的自检脚本）。**仍未验证的是 Quartus 是否接受这份清单**——本机没有安装 Quartus，从没被工具解析过，更没有因为补了这两条就综合过 |
+| `VERILOG_FILE` 清单与磁盘是否一致 | 清单曾漏 4 个 `peripheral/` 下的模块（`wm8978_i2c.v`、`nes_cdc_fifo.v`、`nes_i2s_shifter.v`、`nes_audio_i2s.v`），其后又漏了新增的 2 个模块（`ppu/nes_chr_fetch_unit.v`、`peripheral/sd_spi_cmd.v`），本轮再漏了新增的 `ppu/nes_sprite_chr_fetch.v`；**三次都已补入**，38 条与磁盘 38 个 `.v` 逐条一致（missing = 0、ghost = 0，见第 0.2 节的自检脚本）。**仍未验证的是 Quartus 是否接受这份清单**——本机没有安装 Quartus，从没被工具解析过，更没有因为补了这些条就综合过 |
 | 工程级 IO 电压 `2.5 V` | 只是【厂商例程观察】的起点。每个 bank 的 VCCIO、是否需要 3.3-V LVTTL、是否经电平转换，全部未确认 |
-| 层次闭包与多顶层实体 | 第 4.3 节的 21 个模块会不会变成额外顶层、Fitter 会不会因此资源不够，未验证 |
+| 层次闭包与多顶层实体 | 第 4.3 节的 22 个模块会不会变成额外顶层、Fitter 会不会因此资源不够，未验证 |
 | 新增封装层 `nes_ep4ce10_qsf_if.v` | **已用 Icarus Verilog `-g2001` 单独 elaborate 通过**（`iverilog -g2001 -Wall -s nes_ep4ce10_qsf_if`，18 个源文件，退出码 0，只有 `nes_core` 里原有的 `@*` 数组敏感性警告）。**这只是语法与层次自洽，不是综合结果**：它在 Quartus 里的资源、引脚、时序都没有测过 |
 | `led[0]` 心跳约 1.49 Hz | 由 `hb_cnt_q[24]` 在 25 MHz 下翻转得出，是纸面计算；上板频率是否可接受、LED 是不是这个亮度偏好，都没测 |
 | `beep` 恒 0 | WM8978 通路未接（`docs/hardware/08-wm8978-audio.md`），封装层故意不驱动它 |
@@ -318,7 +319,7 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 
 | 未验证项 | 说明 |
 |---|---|
-| **全部 `PIN_LOCATION`** | `.qsf` 里 `set_location_assignment` / `set_io_assignment` / `PIN_LOCATION` 的生效条数**实测各为 0**（`PIN_LOCATION` 唯一一次文本命中在第 125 行的注释里），也就是**一个引脚都没分配**。第 2 节第二步的表必须由你在 Pin Planner 里对着原理图确认后填入。**不要**把未确认的引脚号当成本工程的结论引用 |
+| **全部 `PIN_LOCATION`** | `.qsf` 里 `set_location_assignment` / `set_io_assignment` / `PIN_LOCATION` 的生效条数**实测各为 0**（`PIN_LOCATION` 唯一一次文本命中在第 126 行的注释里），也就是**一个引脚都没分配**。第 2 节第二步的表必须由你在 Pin Planner 里对着原理图确认后填入。**不要**把未确认的引脚号当成本工程的结论引用 |
 | `docs/hardware/01-ep4ce10-board.md` 第 3.2 节与本次清单不一致 | 该节只列了 **15 个** VGA 引脚，且第 6 位是 `A5` 而不是本次给定的 `B5`，并缺 `B2`、`A3`。本次照抄给定的 16 位清单，但**两者都必须以 `PIONEER_FPGA_IO.tcl` / IO XLSX / 原理图为准**。这个不一致本次没有改动文档（约定只写新文件），请在确认引脚时一并核对 |
 | 按键上拉 | 例程假设"释放为 1"，封装层没加内部弱上拉 |
 | `led` 共阴/共阳 | 封装层按高电平点亮写 |
@@ -355,7 +356,7 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 - 没有生成 altpll，没有 PLL 参数：`.sdc` 生效的 `create_generated_clock` 实测为 0。
 - 没有写 `ce_cpu` / `ce_ppu` 多周期约束、输入输出延迟、同步器 `set_max_delay`（SDC 里都有 TODO 与理由，这四项的生效条数实测也都是 0）。
 - 没有改动 `rtl/nes_core/`、`tb/`、`tools/` 和任何既有文档（`docs/hardware/01-ep4ce10-board.md` 第 3.2 节的引脚不一致只在本文件里记录，未改原文）。
-- `wm8978_i2c.v` 等 4 个 `peripheral/` 模块曾被漏在 `.qsf` 的 `VERILOG_FILE` 清单之外；其后新增的 `ppu/nes_chr_fetch_unit.v` 与 `peripheral/sd_spi_cmd.v` 也没同步进清单。**两次都已补齐**：37 条与磁盘 37 个 `.v` 逐条一致（见第 0.2 节）。补清单只保证文件清单自洽，**不表示这两个模块被综合过**。
-- 除新增这 2 条 `VERILOG_FILE` 之外，没有改动 `.qsf` 里的任何 `set_global_assignment`（器件、顶层、既有 `VERILOG_FILE` 顺序、SDC 指向全部保持原样），其余改动只在注释文字。
-- 没有综合过，因此"37 条清单被 Quartus 接受"这件事仍然未验证；新增的 `nes_chr_fetch_unit` 也**没有被 `nes_ppu2c02` 例化**，CHR 外部取数通路仍未接通。
+- `wm8978_i2c.v` 等 4 个 `peripheral/` 模块曾被漏在 `.qsf` 的 `VERILOG_FILE` 清单之外；其后新增的 `ppu/nes_chr_fetch_unit.v` 与 `peripheral/sd_spi_cmd.v` 也没同步进清单；本轮新增的 `ppu/nes_sprite_chr_fetch.v` 同样漏了一次。**三次都已补齐**：38 条与磁盘 38 个 `.v` 逐条一致（见第 0.2 节）。补清单只保证文件清单自洽，**不表示这些模块被综合过**。
+- 除新增这 1 条 `VERILOG_FILE` 之外，没有改动 `.qsf` 里的任何 `set_global_assignment`（器件、顶层、既有 `VERILOG_FILE` 顺序、SDC 指向全部保持原样），其余改动只在注释文字。
+- 没有综合过，因此"38 条清单被 Quartus 接受"这件事仍然未验证；`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` 都**没有被 `nes_ppu2c02` 例化**——前者是 CHR 外部**背景**取数通路，后者是精灵 CHR 预取单元，两者都仍未接通。
 - 没有给新增的 Verilog 加行内注释：说明性文字全部放在本文与 SDC/QSF 的注释块里。

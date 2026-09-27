@@ -45,8 +45,8 @@ set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "2.5 V"
 set_global_assignment -name SDC_FILE op_fpga_emu.sdc
 
 # ---------------------------------------------------------------- Verilog 源
-# rtl/nes_core/（34 个 .v）+ rtl/platform/ep4ce10/（3 个 .v）全量列出，合计 37 个
-# 文件 / 37 个模块（一文件一模块），已与磁盘逐条核对一致（missing = 0、ghost = 0）。
+# rtl/nes_core/（35 个 .v）+ rtl/platform/ep4ce10/（3 个 .v）全量列出，合计 38 个
+# 文件 / 38 个模块（一文件一模块），已与磁盘逐条核对一致（missing = 0、ghost = 0）。
 #
 # **未验证（重要）**：Quartus 会把"没有被任何模块实例化"的模块当成候选顶层实体。
 # 按本清单，从 nes_ep4ce10_top 出发的实际层次闭包只有 16 个模块
@@ -59,12 +59,12 @@ set_global_assignment -name SDC_FILE op_fpga_emu.sdc
 #   │                   nes_apu_dmc / nes_apu_length_lut
 #   ├─ nes_line_buffer_vga
 #   └─ nes_vga_timing
-# 下面清单里其余 21 个模块（37 − 16）都不在这个闭包里，可能各自变成一个额外的
+# 下面清单里其余 22 个模块（38 − 16）都不在这个闭包里，可能各自变成一个额外的
 # 顶层实体：
 #   nes_system_v0 / v1 / v2 / v3 / v5
 #   nes_mapper 与 5 个子 mapper（nrom / uxrom / cnrom / mmc1 / mmc3）
 #   ines_header_parser、nes_video_scaler
-#   nes_chr_fetch_unit（ppu/ 1 个）
+#   nes_chr_fetch_unit、nes_sprite_chr_fetch（ppu/ 2 个）
 #   wm8978_i2c、nes_cdc_fifo、nes_i2s_shifter、nes_audio_i2s、sd_spi_cmd（peripheral/ 5 个）
 #   nes_ep4ce10_pll_stub、nes_ep4ce10_qsf_if（选默认顶层时）
 # 三种处理办法（任选其一，见 README 第 4 节）：
@@ -99,6 +99,7 @@ set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_ppu_sprite.v
 set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_ppu2c02.v
 set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_oam_dma.v
 set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_chr_fetch_unit.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_sprite_chr_fetch.v
 # rtl/nes_core/peripheral/
 set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/wm8978_i2c.v
 set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/nes_cdc_fifo.v

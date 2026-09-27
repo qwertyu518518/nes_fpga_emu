@@ -6,6 +6,7 @@ param(
         'cpu-core', 'cpu-integration', 'cpu-bus', 'cpu-inc',
         'ppu-core', 'ppu-sprite', 'ppu-oam-dma', 'ppu-integration', 'chr-feasibility-tb',
         'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb',
+        'sprite-fetch-core', 'sprite-fetch-tb',
         'apu-core', 'apu-tb',
         'bus-tb',
         'mapper-nrom', 'mapper-combined', 'mapper-mmc1', 'mapper-mmc3',
@@ -80,6 +81,7 @@ $ppuRtl = Join-Path $repoRoot 'rtl\nes_core\ppu\nes_ppu2c02.v'
 $ppuSpriteRtl = Join-Path $repoRoot 'rtl\nes_core\ppu\nes_ppu_sprite.v'
 $oamDmaRtl = Join-Path $repoRoot 'rtl\nes_core\ppu\nes_oam_dma.v'
 $chrFetchUnitRtl = Join-Path $repoRoot 'rtl\nes_core\ppu\nes_chr_fetch_unit.v'
+$spriteChrFetchRtl = Join-Path $repoRoot 'rtl\nes_core\ppu\nes_sprite_chr_fetch.v'
 
 $apuLengthLutRtl = Join-Path $repoRoot 'rtl\nes_core\apu\nes_apu_length_lut.v'
 $apuPulseRtl = Join-Path $repoRoot 'rtl\nes_core\apu\nes_apu_pulse.v'
@@ -125,6 +127,7 @@ $ppuSources = @($ppuSpriteRtl, $ppuRtl)
 $ppuSpriteSources = @($ppuSpriteRtl)
 $oamDmaSources = @($oamDmaRtl)
 $chrFetchUnitSources = @($chrFetchUnitRtl)
+$spriteChrFetchSources = @($spriteChrFetchRtl)
 $apuSources = @($apuLengthLutRtl, $apuPulseRtl, $apuTriangleRtl, $apuNoiseRtl, $apuDmcRtl, $apuRtl)
 $busSources = @($busRtl)
 $controllerSources = @($controllerRtl)
@@ -253,6 +256,24 @@ $allTargets = @(
         Label       = 'PPU external CHR A/B pixel-equivalence tb'
         Top         = 'tb_nes_ppu2c02_ext_chr'
         Sources     = $ppuSources + $chrFetchUnitSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_ppu2c02_ext_chr.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'sprite-fetch-core'
+        Group       = 'ppu'
+        Label       = 'Sprite CHR fetch unit (elaboration)'
+        Top         = 'nes_sprite_chr_fetch'
+        Sources     = $spriteChrFetchSources
+        Standard    = '2001'
+        Run         = $false
+    },
+    [pscustomobject]@{
+        Id          = 'sprite-fetch-tb'
+        Group       = 'ppu'
+        Label       = 'Sprite CHR fetch unit tb'
+        Top         = 'tb_nes_sprite_chr_fetch'
+        Sources     = $spriteChrFetchSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_sprite_chr_fetch.v')
         Standard    = '2012'
         Run         = $true
     },
