@@ -1,3 +1,86 @@
+// nes_ppu2c02 : NTSC 341 x 262 dot PPU with an optional external CHR port.
+//
+// External CHR bus arbitration (EXTERNAL_CHR=1 only)
+//   chr_req / chr_addr / chr_rdata form one external port, and g_chr_external now
+//   has two masters for chr_req / chr_addr: the background tile fetcher
+//   (nes_chr_fetch_unit, 1 tile = 2 bytes) and the sprite line prefetcher
+//   (nes_sprite_chr_fetch, 8 slots x 2 planes = 16 bytes). Both units latch their
+//   own chr_addr one ce ahead of the request beat, so chr_rdata is shared
+//   unchanged: whoever won the arbitration is exactly who issued the beat.
+//   chr_req and chr_addr are the outputs of a combinational priority mux (sprite
+//   first, selected by sprite_fetch_busy). Nothing is registered between the two
+//   units and the port, so the background request cadence, the bg_lo_q / bg_hi_q
+//   latches and every background pixel are bit-identical to the single-fetcher
+//   version.
+//
+// Why the two windows cannot collide. This is a measured property of the two
+// trigger expressions, not a guarantee from the bus protocol:
+//   * Background req_start is bg_fetch_due:
+//       bg_fetch_mid       : (dot + fine_x)[2:0] == 7 and dot <= 246
+//       bg_fetch_pre_first : dot == 324 and mask[1]
+//       bg_fetch_pre_second: dot + fine_x == 340
+//     The latest background trigger is therefore dot 246. nes_chr_fetch_unit
+//     issues its two chr_req pulses at trigger+2 and trigger+4 and returns to
+//     S_IDLE at trigger+7, so the last background request beat is at dot 250 and
+//     the background master owns the bus from dot 253 onwards.
+//   * The sprite prefetcher takes a one-ce start pulse at dot 257.
+//     nes_sprite_chr_fetch needs 35 ce from start to shadow_valid (36 ce edges),
+//     pulses chr_req at start+2 .. start+33 and drops busy at start+35, i.e.
+//     dots 259..290 with busy high across dots 257..291.
+//   * 253 < 257 and 291 < 324, so the sprite window [257,291] is disjoint from
+//     both background windows ([.., 253] and [326, ..]). No background request
+//     beat is ever masked by the sprite, which is why the priority order does
+//     not change any background behaviour today.
+//
+// What breaks if the non-overlap assumption is violated (a new background
+// trigger inside dot 257..291, a different sprite start dot, a ce budget change
+// in either unit, or a bus stall):
+//   * With sprite priority the colliding background request loses its chr_req and
+//     chr_addr beat. The unit keeps counting and bg_valid still rises 1 ce later,
+//     so bg_lo_q / bg_hi_q latch the wrong bytes and the wrong tile is displayed
+//     for that one tile window. Nothing back-pressures: there is no ready signal
+//     on this port and bg_fetch_due is a pulse that is silently dropped.
+//   * With background priority the colliding sprite request instead loses its
+//     beat, the 16 bytes land in the wrong shadow slots, and the wrong sprite row
+//     is displayed for the entire line.
+//   Both failures are invisible except as wrong pixels, so any change to
+//   bg_fetch_due, to the sprite start dot, or to either fetch unit's ce budget has
+//   to re-derive the windows above before it can be trusted.
+//
+// Sprite shadow -> chr_sh (EXTERNAL_CHR=1)
+//   nes_ppu_sprite's external generate hands every slot the same 8-bit chr_sh for
+//   both planes (`assign s_plane_lo = chr_sh; assign s_plane_hi = chr_sh;`), so
+//   the PPU has to choose the byte. The slot index is recomputed here with the
+//   same rule the sprite unit applies internally: scan the 64 OAM entries for the
+//   ones whose vertical range covers `scanline` (in_range / range_count), let the
+//   g-th set bit be slot g's OAM index (nth_set), then take the lowest g with
+//   g < range_count whose 8-pixel horizontal window covers `dot`. For that slot
+//   shadow[g*16 +: 8] is the low plane and shadow[g*16+8 +: 8] the high plane.
+//   One byte has to serve both planes, so their OR is presented: that makes the
+//   sprite silhouette exact and forces every opaque pixel to palette index 3,
+//   whereas a single plane would shrink the silhouette to that plane's bits and
+//   the high plane cannot be delivered at all through the 8-bit port.
+//   sp_shadow_valid gates the mux because nes_sprite_chr_fetch's shadow register
+//   has no reset: before the first completed line it is X, and X on chr_sh would
+//   make slot_opaque / sprite_pixel X inside nes_ppu_sprite and corrupt the pixel.
+//
+// Two hazards this integration inherits rather than creates:
+//   * pat_addr_o is computed from scanline_sel, which the PPU wires to the current
+//     scanline, and the prefetch that latches it only completes at dot 292 of the
+//     same line. The shadow a line's own pixels consume is therefore the one
+//     latched at the previous line's dot 257, i.e. one line off. Closing that
+//     needs pat_addr_o evaluated for the next scanline, or start issued a line
+//     early; both are nes_ppu_sprite / integration changes, not this mux.
+//   * nes_sprite_chr_fetch drives chr_addr = {pat_addr[10:0] + plane*8, 3'b000},
+//     i.e. pattern address times 8, while nes_ppu_sprite's internal path indexes
+//     its flat chr bus at {s_pat_addr, 3'b000} and therefore reads byte
+//     s_pat_addr, and nes_chr_fetch_unit likewise uses the pattern address
+//     directly. The sprite prefetcher is therefore 8x above the address the
+//     internal sprite path and the background fetcher use. The two conventions
+//     have to be reconciled in nes_sprite_chr_fetch (or by pre-scaling pat_addr,
+//     which is impossible for a pattern address that is not a multiple of 8)
+//     before the fetched shadow can be pixel-compared against the internal path.
+
 `timescale 1ns/1ps
 
 module nes_ppu2c02 #(
@@ -359,7 +442,104 @@ generate
         assign bg_pattern_low = (bg_ready && bg_pa_enable) ? bg_lo_q : 8'h00;
         assign bg_pattern_high = (bg_ready && bg_pa_enable) ? bg_hi_q : 8'h00;
 
-        assign sprite_chr_bus = 65536'd0;
+        wire        bg_chr_req;
+        wire [13:0] bg_chr_addr;
+        wire        sp_chr_req;
+        wire [13:0] sp_chr_addr;
+        wire [127:0] sp_shadow;
+        wire        sp_shadow_valid;
+        wire        sp_busy;
+        wire        sp_start;
+        wire        sp_bus_sel;
+        wire [6:0]  sp_base_lo;
+        wire [6:0]  sp_base_hi;
+        wire [7:0]  sp_plane_lo;
+        wire [7:0]  sp_plane_hi;
+        wire [7:0]  sp_chr_sh;
+        reg  [8:0]  sp_height;
+        reg  [63:0] sp_in_range;
+        reg  [6:0]  sp_range_count;
+        reg  [2:0]  sp_slot;
+        reg  [5:0]  sp_idx;
+        reg  [7:0]  sp_xbyte;
+        reg  [9:0]  sp_xoff;
+        reg  [2:0]  sp_pick;
+        reg         sp_taken;
+        reg  [7:0]  sp_si;
+        reg  [7:0]  sp_gi;
+
+        function [5:0] sp_nth_set;
+            input [63:0] vec;
+            input [2:0]  pick;
+            integer      b;
+            reg [6:0]    c;
+            reg          taken;
+            begin
+                sp_nth_set = 6'd0;
+                c = 7'd0;
+                taken = 1'b0;
+                for (b = 0; b < 64; b = b + 1) begin
+                    if (!taken && vec[b]) begin
+                        if (c[2:0] == pick) begin
+                            sp_nth_set = b[5:0];
+                            taken = 1'b1;
+                        end else begin
+                            c = c + 7'd1;
+                        end
+                    end
+                end
+            end
+        endfunction
+
+        always @* begin
+            sp_height = control_reg[5] ? 9'd16 : 9'd8;
+            sp_in_range = 64'd0;
+            sp_range_count = 7'd0;
+            for (sp_si = 8'd0; sp_si < 8'd64; sp_si = sp_si + 8'd1) begin
+                if (({1'b0, scanline} - {2'b00, oam_ram[{sp_si[5:0], 2'b00}]})
+                    < {1'b0, sp_height}) begin
+                    sp_in_range[sp_si[5:0]] = 1'b1;
+                    sp_range_count = sp_range_count + 7'd1;
+                end
+            end
+
+            sp_slot = 3'd0;
+            sp_taken = 1'b0;
+            for (sp_gi = 8'd0; sp_gi < 8'd8; sp_gi = sp_gi + 8'd1) begin
+                if (!sp_taken) begin
+                    sp_pick = sp_gi[2:0];
+                    sp_idx = sp_nth_set(sp_in_range, sp_pick);
+                    sp_xbyte = oam_ram[{sp_idx[5:0], 2'b11}];
+                    sp_xoff = {2'b00, dot[7:0]} - {2'b00, sp_xbyte};
+                    if ((sp_gi < {1'b0, sp_range_count}) && (sp_xoff[9:3] == 8'd0)) begin
+                        sp_slot = sp_gi[2:0];
+                        sp_taken = 1'b1;
+                    end
+                end
+            end
+        end
+
+        assign sp_start = (dot == 9'd257);
+        assign sp_bus_sel = sp_busy;
+        assign sp_base_lo = {sp_slot, 4'b0000};
+        assign sp_base_hi = {sp_slot, 4'b1000};
+        assign sp_plane_lo = sp_shadow[sp_base_lo +: 8];
+        assign sp_plane_hi = sp_shadow[sp_base_hi +: 8];
+        assign sp_chr_sh = sp_shadow_valid ? (sp_plane_lo | sp_plane_hi) : 8'h00;
+
+        nes_sprite_chr_fetch u_sprite_chr_fetch (
+            .clk(clk),
+            .ce(ce),
+            .reset(reset),
+            .start(sp_start),
+            .pat_addr(sprite_pat_addr_bus),
+            .chr_req(sp_chr_req),
+            .chr_addr(sp_chr_addr),
+            .chr_rdata(chr_rdata),
+            .shadow(sp_shadow),
+            .shadow_valid(sp_shadow_valid),
+            .busy(sp_busy)
+        );
 
         nes_ppu_sprite #(
             .EXTERNAL_CHR(1'b1)
@@ -368,8 +548,8 @@ generate
             .reset(reset),
             .ce(ce),
             .oam(sprite_oam_bus),
-            .chr(sprite_chr_bus),
-            .chr_sh(8'h00),
+            .chr(65536'd0),
+            .chr_sh(sp_chr_sh),
             .ctrl(control_reg),
             .mask(mask_reg),
             .scanline(scanline),
@@ -390,14 +570,17 @@ generate
             .req_start(bg_fetch_due),
             .tile_base(bg_tile_base),
             .tile_count(6'd1),
-            .chr_req(chr_req),
-            .chr_addr(chr_addr),
+            .chr_req(bg_chr_req),
+            .chr_addr(bg_chr_addr),
             .chr_rdata(chr_rdata),
             .bg_lo(chr_fetch_bg_lo),
             .bg_hi(chr_fetch_bg_hi),
             .bg_valid(chr_fetch_bg_valid),
             .busy(chr_fetch_busy)
         );
+
+        assign chr_req = sp_bus_sel ? sp_chr_req : bg_chr_req;
+        assign chr_addr = sp_bus_sel ? sp_chr_addr : bg_chr_addr;
 
         assign chr_we = 1'b0;
         assign chr_wdata = 8'h00;

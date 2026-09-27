@@ -340,6 +340,7 @@ module tb_nes_ppu2c02_ext_chr;
 
     task monitor;
         integer a_tiles;
+    integer sp_line_req;
         begin
             if (dot_a !== dot_b || sl_a !== sl_b)
                 $fatal(1, "A/B time base diverged: A %0d:%0d B %0d:%0d", sl_a, dot_a, sl_b, dot_b);
@@ -435,18 +436,28 @@ module tb_nes_ppu2c02_ext_chr;
             end
 
             if (req_b === 1'b1) begin
-                x_addr = {1'b0, trig_base} + ((req_idx[0] == 1'b0) ? 14'd0 : 14'd8);
-                if (addr_b !== x_addr)
-                    $fatal(1, "A3 line %0d dot %0d req %0d (parity %0d): chr_addr %0d != expected %0d; trigger was %0d:%0d name %02h base %0d (live A name %02h cxsum %0d)",
-                           sl_b, dot_b, req_idx, req_idx[0], addr_b, x_addr,
-                           trig_sl, trig_dot, trig_name, trig_base, dut_a.bg_name, dut_a.bg_coarse_x_sum);
-                addr_checked = addr_checked + 1;
-                if (req_idx[0] == 1'b0)
-                    lo_addr_q <= addr_b[12:0];
-                else
-                    hi_addr_q <= addr_b[12:0];
-                line_req = line_req + 1;
-                req_idx = req_idx + 1;
+                if (dut_b.g_chr_external.sp_bus_sel === 1'b1) begin
+                    if (addr_b !== dut_b.g_chr_external.sp_chr_addr)
+                        $fatal(1, "A3 line %0d dot %0d: sprite beat chr_addr %0d != sp_chr_addr %0d (arbitration mux corrupted the owner address)",
+                               sl_b, dot_b, addr_b, dut_b.g_chr_external.sp_chr_addr);
+                    sp_line_req = sp_line_req + 1;
+                end else begin
+                    x_addr = {1'b0, trig_base} + ((req_idx[0] == 1'b0) ? 14'd0 : 14'd8);
+                    if (addr_b !== x_addr)
+                        $fatal(1, "A3 line %0d dot %0d req %0d (parity %0d): chr_addr %0d != expected %0d; trigger was %0d:%0d name %02h base %0d (live A name %02h cxsum %0d)",
+                               sl_b, dot_b, req_idx, req_idx[0], addr_b, x_addr,
+                               trig_sl, trig_dot, trig_name, trig_base, dut_a.bg_name, dut_a.bg_coarse_x_sum);
+                    if (addr_b !== dut_b.g_chr_external.bg_chr_addr)
+                        $fatal(1, "A3 line %0d dot %0d: background beat chr_addr %0d != bg_chr_addr %0d (arbitration mux corrupted the owner address)",
+                               sl_b, dot_b, addr_b, dut_b.g_chr_external.bg_chr_addr);
+                    addr_checked = addr_checked + 1;
+                    if (req_idx[0] == 1'b0)
+                        lo_addr_q <= addr_b[12:0];
+                    else
+                        hi_addr_q <= addr_b[12:0];
+                    line_req = line_req + 1;
+                    req_idx = req_idx + 1;
+                end
                 case_req = case_req + 1;
             end
 
@@ -490,6 +501,9 @@ module tb_nes_ppu2c02_ext_chr;
                     if (line_req !== exp_req)
                         $fatal(1, "A2 line %0d: chr_req cycles %0d != %0d (fine_x=%0d mask=%02h)",
                                sl_a, line_req, exp_req, cfg_fx, cfg_mask);
+                    if (sp_line_req !== 16)
+                        $fatal(1, "A5 line %0d: sprite chr_req cycles %0d != 16 (fine_x=%0d mask=%02h)",
+                               sl_a, sp_line_req, cfg_fx, cfg_mask);
                     if (sl_a < 240) begin
                         a_tiles = line_win + ((cfg_fx != 0) ? 1 : 0);
                         if (a_tiles !== line_trig + (1 - exp_first))
@@ -501,6 +515,7 @@ module tb_nes_ppu2c02_ext_chr;
                 end
                 line_req = 0;
                 line_win = 0;
+                sp_line_req = 0;
                 line_trig = 0;
             end
 

@@ -1,5 +1,42 @@
 `timescale 1ns/1ps
 
+// nes_ppu_sprite : per-dot combinational 8-slot sprite pixel selector.
+//   Scans the 64 OAM entries for the ones whose vertical range covers the line,
+//   picks the first 8 in OAM order, reads both pattern planes out of the CHR
+//   bus, resolves horizontal position / mirroring / priority, and reports
+//   sprite0 hit and the >8 range overflow flag. Nothing here is registered:
+//   the caller supplies scanline / dot / ce and gets the answer in the same
+//   dot. pat_addr_o exposes the 8 per-slot pattern addresses as 8 x 13 bits
+//   for a parent that wants to prefetch them ahead of the line.
+//
+
+// Sprite pattern byte addresses
+//   s_pat_addr is {table, 5'b0, tile[2:0], 1'b0, fine[2:0]}, which is
+//   table*0x1000 + tile*16 + fine after the 13-bit truncation. A tile occupies
+//   16 bytes, so the byte addresses of the two planes are:
+//       low  plane = tile*16 + fine
+//       high plane = tile*16 + fine + 8
+//   This is the same layout the background path uses (nes_ppu2c02 reads
+//   chr_ram[bg_pattern_addr] and chr_ram[bg_pattern_addr + 13'd8], and
+//   nes_chr_fetch_unit computes
+//   nxt_addr = base_q + {3'b0, idx_q, 4'd0} + (pl_q ? 14'd8 : 14'd0)), and the
+//   same layout tb/ppu/tb_nes_ppu_sprite.v writes in fill_tile / fill_tile_row
+//   (byte tile*16+row for the low plane, byte tile*16+row+8 for the high plane).
+//   16 bytes per tile with plane 1 at byte offset +8 is the 2C02 pattern-table
+//   layout (2 tables x 256 tiles x 16 B = 8 KiB, plane 0 = bytes 0..7,
+//   plane 1 = bytes 8..15), so this is not a deviation from hardware.
+//
+//   The two plane constants are NOT interchangeable: chr[{s_pat_addr, 3'b000}
+//   +: 8] is an indexed part-select, so its base is a BIT offset into the
+//   65536-bit vector, not a byte address. {s_pat_addr, 3'b000} is s_pat_addr*8
+//   bits, which is why the low plane lands on byte s_pat_addr. A +8 byte step
+//   between the planes is therefore a +64 BIT step, which is why the high plane
+//   adds 13'd64 and not 13'd8. Adding 13'd8 would read byte s_pat_addr+1, i.e.
+//   the next row of the low plane, so both planes would come out of the plane-0
+//   block and every sprite pattern would be wrong. Do not "fix" 13'd64 to
+//   13'd8: tb_nes_ppu_sprite.v and tb_nes_ppu2c02.v both fail on that.
+//
+
 module nes_ppu_sprite #(
     parameter EXTERNAL_CHR = 1'b0
 )(
