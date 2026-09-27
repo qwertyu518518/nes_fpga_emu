@@ -1,0 +1,315 @@
+# op_fpga_emu
+
+## 项目目标
+
+`op_fpga_emu` 是一个面向 FPGA 的 NES/FC 模拟器学习与实现项目。目标是用可综合 Verilog 建立厂商无关的 NES 核心，先以可重复的 CPU/总线/PPU/APU 仿真证据固定行为，再补齐 sprite、DMA、mapper、完整音频通道和视频音频平台适配。
+
+项目遵循两条边界：
+
+- NESdev 行为说明、测试 ROM 和实际可观察行为是规格来源；软件模拟器只作为源码观察对象。
+- NES 行为留在 `rtl/nes_core/`，EP4CE10 的时钟、存储器、SDRAM、VGA、TF、WM8978 和引脚约束留在平台层。
+
+参考仓库是只读的。它们不会被复制为本项目 RTL，也不把 C 代码中的近似行为自动升级为硬件规格。
+
+## 当前阶段
+
+当前已经推进到 EP4CE10 平台顶层：厂商无关 RTL 覆盖 CPU、PPU（含 sprite、OAM DMA 与 CHR 取数单元）、APU（五通道）、CPU 总线仲裁器、controller、iNES/NES2.0 头解析、mapper（NROM/UxROM/CNROM/MMC1/MMC3）、video scaler（整帧参考模型）、VGA 行缓冲、VGA 800×525 时序发生器、WM8978 I2C 主控、SD/eMMC SPI 命令帧发送器、异步 CDC FIFO、I2S 位串行器、I2S 组装层和六代 System 顶层（v0/v1/v2/v3/v4/v5），共 34 个 RTL 模块；`rtl/platform/ep4ce10/` 另有平台顶层 `nes_ep4ce10_top`、只作占位的 `nes_ep4ce10_pll_stub` 和只作引脚封装层的 `nes_ep4ce10_qsf_if` 三个文件。v5 是**第一个把 `nes_mapper` 接进系统的顶层**（PRG bank 与 mapper IRQ 进 CPU），外部 CHR 的**背景通路**已经在 PPU 侧接通并有像素级等价证据（`nes_ppu2c02` 的 `EXTERNAL_CHR` 分支例化 `nes_chr_fetch_unit`、`tb/ppu/tb_nes_ppu2c02_ext_chr.v` 在 5 组配置 × 3 帧下做了 921,600 次逐 `ce` 逐 dot 的 A/B 像素比对全部一致），但**外部 CHR banking 仍然没有接到 PPU**（`nes_system_v5` 的 `ppu_addr`/`ppu_a12` 仍绑 0，**精灵 CHR 取数完全没有、外部模式不渲染任何精灵像素**、`$2007` 对外部 CHR 写被丢弃），见 [`docs/modules/ppu-external-chr.md`](docs/modules/ppu-external-chr.md) 第 11 节）；`video/` 的三个模块仍然没有被任何 **System** 顶层实例化，它们第一次被真正使用是在平台顶层。全部可复现证据都来自 Icarus Verilog 下的 RTL/TB 内部一致性，33 个 testbench 都不加载外部 ROM、不需要 test ROM。
+
+视频链**已经可以从 PPU 像素一路走到 VGA 的 HS/VS/DE/RGB**：`nes_system_v4` 的 `pixel_valid`/`pixel_x`/`pixel_index` 驱动 `nes_line_buffer_vga`（写域 `clk_ntsc`、读域 `clk_vga`），`nes_vga_timing` 在 `clk_vga` 上自由运行 800×525 光栅并输出 5/6/5 位 RGB。三个环节现在各有独立的 Icarus 证据：`tb/video/tb_nes_line_buffer_vga.v`、`tb/video/tb_nes_vga_timing.v`（8 条断言，96 个 hsync 周期 / 3 行 vsync / 245760 个 `active_pixels` / 420000 拍帧周期）和把它们串起来的 `tb/platform/tb_nes_ep4ce10_top.v`。但这只在 testbench 造的理想时钟下成立：两个时钟由 testbench 用固定半周期产生，**真实器件上 `clk_ntsc`（21.477272 MHz）和 `clk_vga`（25 MHz）必须由 EP4CE10 的 altpll IP 提供**，仓库里只有一个把 `clk_in` 原样送出的占位模块。
+
+已经存在：
+
+| 模块 | 文件 | 当前范围 |
+|---|---|---|
+| CPU | `rtl/nes_core/cpu/nes_cpu6502.v` | 6502/2A03 风格状态机、官方指令集、`bus_req`/`bus_fire`/hold/ready 合同、NMI/IRQ/BRK 与 hijack、非法 opcode 陷阱。模块本身不含 RAM、PPU、APU、mapper 或 DMA 状态 |
+| PPU | `rtl/nes_core/ppu/nes_ppu2c02.v` | NTSC 341×262 dot 时序、`$2000-$2007` 寄存器、vblank/NMI、功能级背景取数、8 KiB CHR RAM + 2 KiB nametable + 256 B OAM + 32 B palette。**外部 CHR 的背景通路已接通并有像素级等价证据**：`EXTERNAL_CHR=1` 的 `g_chr_external` 分支例化 `nes_chr_fetch_unit`，PPU 侧有 `bg_lo_q`/`bg_hi_q`/`bg_ready` 平面锁存，按 `b_k = 8k - fine_x` 的窗口起点在 `b_k - 9` 逐 tile 流水发请求（下一行第一个窗口在固定 dot 324 提前 17 拍发，每行 `(fine_x==0?30:31)+1+mask[1]` = 31/32/32/33 个 tile），`nametable_ram` 直接带第二个读口给取数支路、不再有 `nt_fetch` 影子数组。`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）在同一 testbench 里例化 `EXTERNAL_CHR=0/1` 两个实例做 A/B 比对，5 组配置 × 3 帧共 **921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对全部一致**，另核对 337,450 次 `chr_req` 的地址与 126,546 对锁存平面字节。**仍未做**：精灵 CHR 取数（外部模式**不渲染任何精灵像素**）、`$2007` 对外部 CHR 的写通路（`chr_we` 恒 0）、mapper 的 `chr_bank_offset` 接进 PPU（`nes_system_v5` 的 `ppu_addr`/`ppu_a12` 仍绑 0）。详见 [`docs/modules/ppu-external-chr.md`](docs/modules/ppu-external-chr.md) 第 11 节 |
+| PPU sprite | `rtl/nes_core/ppu/nes_ppu_sprite.v` | 每 dot 组合重算的并行 sprite 通路：64 项 OAM 范围比较 + nth-set 优先级 + 8 slot pattern 取数、8×16、优先级、水平/垂直翻转、sprite 0 hit 与 overflow。**没有** secondary OAM、评估窗口和移位寄存器 |
+| PPU OAM DMA | `rtl/nes_core/ppu/nes_oam_dma.v` | `$4014` DMA 状态机：256 字节计数、源页锁存、odd/even 对齐相位、`$2003`/`$2004` 写入、CPU hold/读握手、busy/done 与 `cycle_count` 观测 |
+| CHR 取数单元 | `rtl/nes_core/ppu/nes_chr_fetch_unit.v` | 外部单口 CHR 的**背景行取数状态机**：一个 6 态 FSM（`S_IDLE`/`S_PRE`/`S_ARM`/`S_BEAT`/`S_GRAB`/`S_DONE`）把 `req_start` + `tile_base` + `tile_count` 变成一串背靠背的外部 CHR 读，每 tile 两个字节（低平面 `base+idx*16`、高平面 `+8`）。**1 拍地址预取**：`chr_addr` 在 `S_PRE` 就装好，`chr_req` 拉高那一拍地址已经正确（外部存储器有整整一拍建立时间）；**背靠背 2 个 `ce` 一字节**：`S_BEAT` 发请求、`S_GRAB` 取数，下一个字节的地址在同一拍 `S_BEAT` 里用 `fwd_addr` 预置好，所以每字节只用 2 个 `ce`；`ce=0` 冻结整个状态机（输出逐拍不动、`ce` 空洞只拉长取数不丢字节）；`busy` 期间来的 `req_start` 被忽略（在飞的那一行不受扰动）。`bg_lo`/`bg_hi`/`bg_valid` 在行末给出**最后一个 tile** 的两个平面。`tile_count` 是 6 bit，**可数到 33 个 tile**（实测最坏行就是 33 个，见下条）。**已验证范围**（`chr-fetch-core` + `chr-fetch-tb`）：复位清零、`tile_count=1` 的 2 次 `chr_req`、**最坏行 `tile_count=33` 恰好 66 次 `chr_req`**、地址序列严格 `base+0, +8, …, base+520` 且严格递增、33 对低/高平面逐条与 CHR 模型一致、**全部 66 个请求拍上 `chr_addr` 提前一个 `ce` 就是对的**、行中途 `ce=0` 四个时钟所有输出冻结且行仍跑完、行中途 `req_start` 被忽略仍走完 66 次、第二次 `req_start` 清 `bg_valid` 且两行数据不串、取数中途复位清 `chr_req`/`bg_valid`/`busy` 且复位后下一行照常。**未实现**：nametable/attribute 取数、fine-x 与高位移位寄存器、精灵取数与 `dot 257..272` shadow 预取、`chr_we` 写通路、fine-x 位对齐。**已由 `nes_ppu2c02` 的 `g_chr_external` 例化**（`nes_ppu2c02.v:386-400`，`.tile_count(6'd1)`）：PPU 侧按 `b_k = 8k - fine_x` 的窗口起点在 `b_k - 9` 逐 tile 流水打 `req_start`，收到 `bg_valid` 那一拍把 `bg_lo`/`bg_hi` 锁进 `bg_lo_q`/`bg_hi_q` 并置 `bg_ready`，`bg_pattern_low`/`bg_pattern_high` 读锁存器；`chr_req`/`chr_addr` 直接就是 PPU 的两个输出端口。`ppu-ext-chr-tb` 证明**背景**通路在 5 组配置 × 3 帧下与内部 CHR 路径逐 `ce` 逐 dot 像素完全一致（921,600 次 `pixel_index` + `bg_pa_enable` 比对，337,450 次 `chr_req` 地址、126,546 对平面字节）。**仍未接的**：mapper 的 `chr_bank_offset` 没进 PPU（`nes_system_v5` 的 `ppu_addr`/`ppu_a12` 仍绑 0）、精灵取数、`$2007` 写通路；`tile_count` 端口在 PPU 侧**按 1 使用**，因为该单元只暴露最后一个 tile、延迟 8 个 `ce`、且 `bg_valid` 只是脉冲（这三条限制见 `docs/modules/ppu-external-chr.md` 第 11.2 节） |
+| APU | `rtl/nes_core/apu/nes_apu_length_lut.v`、`nes_apu_pulse.v`、`nes_apu_triangle.v`、`nes_apu_noise.v`、`nes_apu_dmc.v`、`nes_apu2a03.v` | pulse 1/2、triangle、noise、DMC 五个通道的 timer/envelope/sweep/length/linear counter、共享 length LUT、`$4000-$4013` 与 `$4015` 状态、frame sequencer 4-step/5-step、frame IRQ 与 DMC IRQ、整数 mixer 与左右输出寄存器 |
+| CPU 总线 | `rtl/nes_core/bus/nes_cpu_bus.v` | 组合 owner 译码（RAM/PPU/APU-IO/open bus/CART-RAM/CART-ROM）、`READ_WAIT_CYCLES` 等待状态、2 KiB 片上 RAM（四路镜像、可组合或同步读）、PPU/APU/cart 端口桥接、`bus_hold` 冻结、与 CPU 互斥的通用 DMA 读端口和 OAM 优先于 DMC 的仲裁 |
+| Controller | `rtl/nes_core/controller/nes_controller.v` | 4021 风格 8 位并联装载/串行输出，双端口共享 strobe，`EXTRA_READ=0/1/2` 三种越界策略 |
+| iNES 解析 | `rtl/nes_core/cart/ines_header_parser.v` | 16 拍字节索引 FSM、magic/NES2.0/dirty-iNES 判定、mapper ID 与 submapper、PRG/CHR 容量与 exponent notation、mirroring/trainer/battery/four-screen/timing、`expected_size` 与 `actual_size` 边界检查、错误优先级 |
+| Mapper | `rtl/nes_core/mapper/nes_mapper.v` 与 5 个子模块 | 组合 dispatch + NROM（纯组合）、UxROM、CNROM（PRG/CHR bank register、bus conflict 两种模式）、MMC1（串行移位寄存器 + control/CHR0/CHR1/PRG）、MMC3（8 个 bank register、PRG 模式、CHR 2K/1K 与反转、`$A000` mirroring、RAM enable/protect、A12 扫描 IRQ latch/reload/ack + 沿过滤 + cooldown） |
+| System | `rtl/nes_core/system/nes_system_v0.v`、`nes_system_v1.v`、`nes_system_v2.v`、`nes_system_v3.v`、`nes_system_v4.v`、`nes_system_v5.v` | v0：CPU + PPU 集成、12 拍使能分频、2 KiB 工作 RAM 镜像、16 KiB PRG（NROM-128 双窗口）、`$2000` 空间译码。v1：接入完整 APU、`$4000` 路由、frame/DMC IRQ 注入 CPU、sample 输出。v2：改用 `nes_cpu_bus` 真等待态、内接 sprite 通路、导出 owner/`bus_req`/wait 观测端口。v3：在 v2 上加入 `nes_oam_dma` 与 DMA 仲裁点、`$2003`/`$2004` 端口同沿竞争、`$4014` 译码和 DMC DMA 端口。v4：保留 v3 的全部 80 个端口，**只新增** `buttons1`/`buttons2`/`controller_data`，接上 `nes_controller` 并按“读 `$4017` + 全部 `$4016`”做总线 override（写 `$4017` 仍必须进 APU 帧计数器）。v5：保留 v4 全部接线，PRG 读地址所有权交给 `nes_mapper`（`prg_bank_offset` 已经是绝对偏移，顶层不再加 `cart_addr`），mapper 写只在完成沿发一拍脉冲，`bus conflict` 用 `prg_readback`（等于本次 PRG 读值），CPU `irq_i = mapper_irq \| apu_irq`，mirroring/`nametable_map`/`prg_ram_*`/`chr_*` 作为观测端口导出；`MAPPER_SELECT` 是 elaboration 期参数（`0..4`），PPU 仍用内部 8 KiB CHR RAM、`ppu_addr`/`ppu_a12` 绑 0 |
+| Video scaler（整帧参考模型） | `rtl/nes_core/video/nes_video_scaler.v` | 61440 项帧缓冲 + NES palette 到 RGB565 的查表、256×240 到 512×480 的整数倍扫描输出、`line_ready`/`frame_ready`。已有自检 TB 并纳入 `tools/sim_all.ps1`，但**它是整帧缓冲参考模型，不是 EP4CE10 可用的方案**：61440 × 16 bit = 983,040 bit（120 KiB，约 120 个 M9K）超出 EP4CE10 全部片上存储 423,936 bit（46 个 M9K）约 2.3 倍，且没有 VGA 时序、黑边、双缓冲/撕裂处理；**当前 EP4CE10 的视频方向是行缓冲**，见下一行 |
+| VGA 行缓冲（当前视频方向） | `rtl/nes_core/video/nes_line_buffer_vga.v` | 双 bank 乒乓，2 行 × 256 × 16 bit = 1 KiB（正好 1 个 M9K）；写口 `wr_clk`/`wr_ce`/`wr_pixel_valid`/`wr_x`/`wr_index` + `line_done`/`line_ready_toggle`，读口 `rd_clk`/`rd_ce` + `frame_line_valid`/`line_read_start`/`read_x[8:0]`/`read_rgb565`；2× 水平复制靠地址右移、2× 垂直重复靠 `REPEAT_LINE` 把同一 bank 读两遍；toggle 经两级同步器跨时钟域，行边界握手让**行内不可能撕裂**。**没有**背压（1 bit toggle，无队列/无 overrun 指示），写端领先 2 行及以上会静默丢行；没有 VGA 800×525 时序发生器（见下一行的 `nes_vga_timing.v`）、没有 640 宽 DE 窗口与黑边、没有被任何 System 顶层实例化（第一次被实例化是在下方的“EP4CE10 平台顶层”行） |
+| VGA 时序发生器 | `rtl/nes_core/video/nes_vga_timing.v` | 640×480@60 Hz 800×525 自由运行光栅：纯计数器加一级输出寄存器，12 个可参数化计数，`hsync` 656..752、`vsync` 490..493、`de` 窗口 x=64..576 / y=0..480，输出 `hcount`/`vcount`/`active_pixels`/`frame_pulse`/`line_read_sync`；`ce=0` 冻结整个光栅与像素总线、复位优先于 `ce=0`、`line_read_start` 可把像素流重新对齐到行首而不动帧计数器、缺像素或缺行首输出黑。像素来自上游行流，缺像素或未对齐时输出黑。纯组合/计数逻辑，不实例化 `nes_video_scaler`、不拥有 frame buffer、不含引脚和存储器。已有自检 TB（`tb/video/tb_nes_vga_timing.v`，8 条断言）并纳入 `tools/sim_all.ps1` 的 `vga-timing-core`/`vga-timing-tb`，RTL 目前只被平台顶层实例化 |
+| WM8978 I2C 主控 | `rtl/nes_core/peripheral/wm8978_i2c.v` | 立体声 codec 的 I2C 写事务状态机：`ST_IDLE → ST_START_H → ST_START_L → ST_BIT → ST_STOP_L → ST_STOP_H → ST_STOP_HOLD → ST_GAP`，每字节 9 个 slot（`{DEV_ADDR,1'b0}` / `reg_addr` / `wdata`，第 9 个是释放 SDA 并采样 `sda_i` 的 ACK slot）；总线用显式三态而不是 `inout`（`scl_o` 0 = 拉低 SCL、1 = 释放；`sda_oe` 只在发 0 时置位），SCL 由 `CLK_HZ/(4*I2C_HZ)` 四分频产生，一个 bit 周期 4 个 tick，SDA 只在 SCL 下降沿后的 tick 里驱动。复位后自动走完 9 项常量表上电配置（`0x00` 软复位、`0x01/0x02` 通道使能、`0x0C/0x0D` I2S master + 16 bit、`0x19/0x1A` 采样率、`0x32/0x33` 左右音量）并拉高 `cfg_done`，寄存器地址和值全是参数。任意 ACK slot 出现 NACK 会置 `nack_seen` + `error`、中止字节串但仍发 STOP 把总线交干净；`busy` 期间来的 `wr_req` 被丢弃并置 `error`；两个标志粘滞到复位。**只做寄存器配置**：I2S 串行数据输出通路、异步 FIFO、12.288 MHz MCLK 域和 BCLK/LRC 域都没有实现，`wm8978_i2c` 也没有被任何 System 顶层或平台顶层实例化 |
+| SD/eMMC SPI 命令帧发送器 | `rtl/nes_core/peripheral/sd_spi_cmd.v` | TF 卡**命令帧**的发送器：一次事务先 MSB first 移出 6 个命令字节（`{8'h40\|cmd, arg[31:24], arg[23:16], arg[15:8], arg[7:0], {crc7,1'b1}}`），再移出九个 `0xFF` 哑字节——前 8 个把应答移进来、`resp0`/`resp1` 留住前两个、第 9 个在 `spi_cs_n` 拉高之前补足时钟，所以一帧是 **15 字节 / 120 个 `spi_clk` 周期**。**CRC7** 是 `x^7+x^3+1`（`0x89`）、初值 0、MSB first、每个输入 bit 走一次移位器，所以发送字节是 `{crc7,1'b1}`；**MISO 在下降沿采**（TB 里的卡模型也只在下降沿改 MISO，所以两边时序对齐）；`spi_clk` 由 `CLK_HZ/(4*SPI_HZ)` 的分频 tick 产生、每 bit 4 个 tick、半周期 2 个 tick 即 `CLK_HZ/(2*SPI_HZ)`，**50% 占空比**，两个沿都拿到半个周期的建立与保持；**接受 `start` 的那一拍同时清分频器并把 clock 和 CS 拉低**，所以第一个沿相对 CS 下降沿是固定的 2 个 tick、第一个 bit 真的出得去。**响应校验**（`crc_check_en` 门控）：重算 `resp0[7:1]` 的 CRC7 并与 `resp0[7:1]` 比较，`0xFF`/`0x7F`（卡忙）与 `0x00`（无应答）视作"没收到 CRC"而跳过，`crc7_err` 粘滞到复位。`start` 是一拍脉冲且只在空闲时被接受，`busy` 期间被忽略，`done` 在结束那一拍脉冲一次。**已验证范围**（`sd-spi-cmd-core` + `sd-spi-cmd-tb`）：复位后 `spi_cs_n=1`/`busy=0`/`done=0`/`crc7_err=0`；CMD17 `arg=$12345678` 发成 `51 00 00 12 34 15` 且应答 `51 00` 被留住；CMD0/CMD8/CMD29/CMD11 的**位序和 4 个 CRC 字节与 TB 侧独立长除法（乘 `x^7`、按 `0x89` 约简，不是照抄 DUT 的移位器）一致，且 CMD0 的 CRC 字节锚定规范值 `0x95`**；`crc_check_en` 跳过 `0x00` 与 `0xFF`、正确标出坏 CRC、标志粘滞到复位；帧进行到 40 bit 时复位能恢复 CS 且下一帧完整；半周期实测 26..26 个时钟（`CLK_HZ/(2*SPI_HZ) = 26` ±1）、50% 占空比、121/121 个沿；每帧恰好一个 `done` 脉冲、忙时的 `start` 被忽略。**未实现**：上电初始化序列（CMD0/CMD8/ACMD41/CMD58/CMD16、电压窗口与卡忙轮询）、块读/多块传输、4096 字节数据流与 CRC16、读数据通路（`sd_in`/FIFO）、FAT 解析与文件 I/O、单根线的数据线（DAT0..3）与卡检测/热插拔、`CLK_HZ`/`SPI_HZ` 之外的参数组合。**没有被任何模块例化**（六个 `nes_system_*`、平台顶层都没有），**TF 卡读一条线都没接**：平台顶层的 ROM 仍是 `nes_system_v4` 里的 16 KiB 片上 `prg_rom` 数组 |
+| 异步 CDC FIFO | `rtl/nes_core/peripheral/nes_cdc_fifo.v` | 单读单写异步 FIFO，用于时钟域跨越：两套独立时钟的指针对（各 `ADDR_WIDTH+1` bit），二进制指针寻址存储阵列、格雷码指针发布给对侧，对侧格雷指针过**两级同步器**后喂本域标志位。`wr_full_next = (wr_gray_next == {~rd_gray_sync2[PTR_WIDTH-1:PTR_WIDTH-2], rd_gray_sync2[PTR_WIDTH-3:0]})`（反转最高 2 位是"落后整整一圈"的满特征）、`rd_empty_next = (rd_gray_next == wr_gray_sync2)`；格雷编码是这套比较能安全跨域的原因——每次自增只翻 1 bit，同步采到的样本不可能混进新旧两位。阵列每 bit 是**一对触发器**：`wr_clk` 写 `mem[wr_ptr]`、`rd_clk` 把 `mem[rd_ptr]` 寄存进 `rd_data`，所以 `rd_data` 不是阵列的组合读、两个读沿之间保持稳定。阵列**不带复位**（条目在被写之前没有意义，这正是两个指针标志保证的）。`wr_en` 在满时被忽略、`rd_en` 在空时被忽略，指针不前进、不存不取；写侧看到的是延迟的对侧指针，所以最后一个条目离开后 `wr_full` 可能还保持几拍。`wr_reset`/`rd_reset` 相互独立且**不同步进对侧**，因此复位期间跨域指针可能不一致，释放后要几拍才对齐，两端应一起复位。深度 `2**ADDR_WIDTH`（`ADDR_WIDTH` 必须 ≥ 2，默认 10 = 1024 项），`DATA_WIDTH` 默认 32。Verilog-2001，可综合，**没有被任何 System 顶层或平台顶层实例化** |
+| I2S 位串行器 | `rtl/nes_core/peripheral/nes_i2s_shifter.v` | **纯同步的单采样位串行器**：一条 `clk`、一个复位、一个 `ce` 使能，没有第二种时钟。`sample_data[15:0]` = 左声道、`sample_data[31:16]` = 右声道，`sample_valid` 且 `busy=0` 的那个时钟沿锁进 32 位移位寄存器并拉高 `busy`，**第一拍不在装载沿输出**，从下一个 `ce` 有效沿开始每个 `ce` 有效沿吐 1 bit（`out_valid` 是一拍宽的 strobe，一个采样恰好 32 拍）。`out_lrck` = `bit_cnt[4]`，所以左声道永远在前 16 个位置（第 17 bit 精确翻转）。`BIT_REVERSED=0`（默认）MSB first，`BIT_REVERSED=1` 把**每个声道内部**反成 LSB first，声道顺序不变。`ce=0` 时整个状态机冻结（`out_valid` 保持电平、`out_bit`/`out_lrck` 保持当前 bit、`busy` 保持），`ce` 空洞只会拉长位流、不会丢 bit；复位优先于 `ce=0`。`busy` 期间来的 `sample_valid` 被**丢弃**：在飞的那个采样一个 bit 都不受影响，粘滞的 `dropped` 标志记到复位为止。**它不含 FIFO、不含 BCLK 分频、不含跨域**——没有采样 FIFO、没有位时钟分频器、没有第二时钟域，速率转换、缓冲和 CDC 都是外围模块的事；这些由同目录的组装层 `nes_audio_i2s.v` 承担，该组装层**已有 testbench 并进入 `tools/sim_all.ps1`**（见下一行），但**没有被任何 System 顶层或平台顶层实例化**，所以本模块也**同样没有被任何 System 顶层或平台顶层实例化**。Verilog-2001，可综合。可宣称上限就是 TB 覆盖的这些：**32 位逐拍串行、左右声道顺序（left first + `out_lrck` 第 17 拍翻转）、位序可选（MSB/LSB first）、`ce` 冻结（空洞拉长不丢位）、忙时丢弃采样（在飞采样不受扰动 + `dropped` 粘滞）**；不含真实 I2S 器件的电气/时序收敛、不含与 BCLK/LRC/MCLK 的相位关系、不含上电同步 |
+| I2S 组装层 | `rtl/nes_core/peripheral/nes_audio_i2s.v` | 把一个采样变成连续 I2S 位流的组合层，**只做组装，不做频率变换也不做 codec 寄存器配置**：内部例化 `nes_cdc_fifo`（`DATA_WIDTH=32`、`ADDR_WIDTH=10`，即 1024 项）、`nes_i2s_shifter` 和一个 `BCLK_DIV` 分频器，另有三个小状态位（读取节流窗口、`underflow` 粘滞位、`dout`/`lrck` 输出寄存器）。FIFO 装载 `{wr_right, wr_left}`，所以位串行器拿到的就是它要的布局（`[15:0]` 左、`[31:16]` 右，左声道先出）。**背靠背读取节流**：位串行器每 32 个 `ce` 有效沿才消费一个采样，能接受新采样的唯一那一拍就是 bit 31 那一拍，所以读侧用 `fetch_hold` 做**一拍深度的读提前窗口**（`rd_en = !rd_empty && !fetch_hold`，取走采样的那一拍置位、被串行器吃掉的那一拍清零），保证"下一个采样在 bit 31 拍之前已经在 `rd_data` 里"，读速率因此跟随消费速率而不是每拍贪心读。**背压**：`wr_full` 是写域唯一的背压信号，生产者必须遵守，它是唯一会真正丢采样的条件；`dropped = 串行器粘滞丢弃 | wr_full` 只是状态标志，不是握手、两个时钟域都不消费。**分频**：`mclk` 经 `BCLK_DIV` 分频出 50% 占空比的 `bclk`（`BCLK_DIV=1` 时 `bclk` 直接等于 `mclk`），**`dout` 和 `lrck` 在 `bclk` 上升沿寄存**（不是组合直通），所以 `sample_valid` 比它所描述的那一拍数据**领先恰好一个 `bclk` 沿**。跨域只有 1 bit 的 `out_bit`/`out_lrck`/`out_valid` 从读域到输出域，32 bit 采样只在 `rd_clk` 域内交接。Verilog-2001，可综合；**没有任何顶层实例化它**（`nes_ep4ce10_top` 和六个 `nes_system_*` 都没有），平台顶层音频仍然只有 `audio_valid`/`audio_left`/`audio_right` 这种 sample 端口。可宣称上限就是 `tb/peripheral/tb_nes_audio_i2s.v` 覆盖的这些：**128 bit 在 128 个连续 `sample_valid` 的 `bclk` 上升沿上无间隙、与按声道语义写的参考模型逐位一致、每个采样内 `lrck` 16 低 + 16 高且在第 17 bit 翻转、`dropped` 全程不抬**（背压成立的可观测形式）；不含真实 BCLK/LRC 波形、不含 `BCLK_DIV > 1` 的分频相位、不含与 `wm8978_i2c` 的接线和 codec 就绪门控 |
+|
+| EP4CE10 平台顶层 | `rtl/platform/ep4ce10/nes_ep4ce10_top.v`、`nes_ep4ce10_pll_stub.v`、`nes_ep4ce10_qsf_if.v` | 三个时钟从顶层引入：`clk_ntsc` 21.477272 MHz（NES 域唯一时钟，核内 `div_phase` 再分 `ce_cpu` = /12、`ce_ppu` = /4）、`clk_vga` 25 MHz、`clk_sys` 50 MHz；三个域各自做“异步断言、同步释放”的本地复位。视频链 `nes_system_v4`（`PRG_SIZE_BYTES = 16384`）→ `nes_line_buffer_vga`（`REPEAT_LINE=1`，`wr_ce` 由顶层自由运行的 4 分频产生 PPU dot 使能，**必须与核内 `div_phase` 同相**，相位差 1~3 拍就会漏掉每行第一个 dot、使读端第一列输出 x）→ `nes_vga_timing`（`ce` 常 1）→ 5/6/5 位 `vga_r`/`vga_g`/`vga_b`。手柄 `key0..key3` 低有效：`clk_sys` 域两级同步 + 计数消抖（`DEBOUNCE_US` 默认 16000，即 50 MHz 下 800,000 拍），稳定后再两级同步进 `clk_ntsc`，反映射到 `buttons1[3:0]` = A/B/Select/Start，高四位恒 1，`buttons2` 恒 `8'hFF`（第二个端口未接）。`audio_valid`/`audio_left` 原样导出，速率等于 `ce_cpu`，**不是**音频采样率。`nes_ep4ce10_qsf_if.v` 是引脚封装层：例化平台顶层，把 5/6/5 位 RGB 拼成 16 位 `vga_rgb`、用 `clk_vga` 自由运行计数器驱动 4 个 `led`（`beep` 绑 0），`qsf-if-core` 目标只证明它能被编译。**本顶层不含**任何 vendor primitive、PLL IP、存储器、TF 卡、SDRAM、WM8978 I2C、复位按键和引脚分配，Verilog 源文件本身也不含任何约束语法（引脚与时序约束在 `quartus/` 的 `.qsf`/`.sdc` 里，与本模块分离）；`nes_ep4ce10_qsf_if` 里也**没有任何 `set_location_assignment` 之类的约束语法**。`nes_ep4ce10_pll_stub` 把 `clk_in` 同时送到 `clk_ntsc`/`clk_vga`、`locked` 常 1，**它不是 PLL、不参与综合**，只为了让 Icarus 仿真和端口清单有一个可编译的替身 |
+
+对应 testbench（33 个，全部自包含，且 33 个都在 `tools/sim_all.ps1` 里有目标）：
+
+- `tb/cpu/tb_nes_cpu6502.v`：带 64 KiB 自包含 RAM 的集成程序，覆盖 reset、指令、栈、IRQ、NMI、BRK、等待和保持。
+- `tb/cpu/tb_nes_cpu6502_bus.v`：逐场景记录并断言总线事务序列、dummy access、RMW、栈和非法 opcode 行为。
+- `tb/cpu/tb_nes_cpu6502_inc.v`：`INC`/`DEC`/`ASL`/`LSR`/`ROL`/`ROR` 与 `$BE` 的寻址模式逐事务自检。
+- `tb/ppu/tb_nes_ppu2c02.v`：帧/vblank/NMI 时序、寄存器、`PPUDATA` 缓冲与镜像、背景像素、attribute、fine scroll，以及接入 sprite 通路后的精灵像素。
+- `tb/ppu/tb_nes_ppu_sprite.v`：sprite 范围选择、slot 优先级、8×16、翻转、palette 组选择、sprite 0 hit 与 overflow。
+- `tb/ppu/tb_nes_oam_dma.v`：字节计数、源页锁存、对齐相位、`$2003`/`$2004` 写入序列、513/514 周期边界、ack 延迟与请求撤销。
+- `tb/ppu/tb_chr_fetch_feasibility.v`：**纯测量实验，不是等价性测试**。它不比较任何两个实现，也不实例化 `EXTERNAL_CHR = 1'b1`，只通过层次化引用读出 `nes_ppu2c02` 内部 CHR 路径的真实 `dot`/`scanline`/`bg_*`/`chr_*` 信号，在 13 组寄存器配置（fine_x 0..7 × coarse_x/coarse_y × nametable × `PPUMASK` × 8×8/8×16）下统计背景取数的 dot 占用率、精灵 16 拍预取窗口的可用性，并演示"把 `dot` 整体 mux 成 `dot+1`"会让每行 16 列取错 attribute。判定只靠 `$fatal` 的硬性不变量，末尾打印 `PASS chr_fetch_feasibility`。**测量结论见 [`docs/modules/chr-fetch-feasibility.md`](docs/modules/chr-fetch-feasibility.md)；它不构成任何像素级外部 CHR 等价性证据。** 它的 `Q1 bg_tiles_per_line` 一列同时给出了**最坏行需要 33 个 tile** 的实测依据（pass K = `fine_x=6` + `coarse_x=20` + `PPUMASK=1E`：`min=33 max=33`、68 B/行）。
+- `tb/ppu/tb_nes_chr_fetch_unit.v`（`nes_chr_fetch_unit`）：CHR 取数单元的 8 组断言。**A1** 复位后 `chr_req`/`bg_valid`/`busy` 干净为 0；**A2** `tile_count=1` 恰好 2 次 `chr_req`、地址 `0` 然后 `8`、两个平面都锁到、结束时 `bg_valid=1`；**A3** 最坏行 `tile_count=33`（`base=1024`）**恰好 66 次 `chr_req`**，首地址 `base+0`、其余严格 `prev+8` 且严格递增、末地址 `base+520`（`=1544`），33 对低/高平面在每个请求拍上逐条与 TB 侧 8 KiB CHR 模型的 `chr_mem[base+kk*16]` / `chr_mem[base+kk*16+8]` 比对（不是只查最后一个 tile）；**A4** 在**全部 66 个请求拍**上断言 `chr_addr` 提前一个 `ce` 就是正确的（1 拍地址预取）；**A5** 行中途把 `ce` 拉低 4 个时钟，六个输出逐拍冻结，恢复后该行仍跑完（8 次请求）；**A6** 行中途再打一次 `req_start`（`base=6000, count=2`）被 `busy` 忽略，这一行仍然是 66 次请求、末地址 520、`bg_valid=1`；**A7** 第二次 `req_start` 立刻清 `bg_valid`，两行（4@4096 与 2@5120）末 tile 数据不同、没有串扰；**A8** 取数进行到一半按复位把 `chr_req`/`bg_valid`/`busy` 全清掉，且复位之后下一行照常跑完。模型是 1 拍延迟的 CHR 存储器（`mem_a_q`/`mem_q`），`chr_rdata` 就是上一拍 `chr_addr` 取到的字节，所以时序合同是**被断言出来的**而不是假定的。
+- `tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`，**外部 CHR 的 A/B 像素级比对**）：648 行（`$finish` 在第 640 行）里例化**两个** `nes_ppu2c02`——`dut_a` 是 `EXTERNAL_CHR(1'b0)`（CHR 端口不接，`chr_rdata` 绑 `8'h00`）、`dut_b` 是 `EXTERNAL_CHR(1'b1)`（5 个外部 CHR 端口全部接出），共用同一份 `clk`/`ce`/寄存器激励。外部 CHR 侧是一拍延迟的 8 KiB 存储器模型（`chr_rdata_q <= chr_mem[addr_b[12:0]]`），TB 用**层次化预载**把 `dut_a.chr_ram` / `dut_b.chr_ram` / `chr_mem` 写成同一批数据（`chr_mem[0..511] = 8'h00`，其余 `(~k[7:0]) ^ 8'h5A ^ cfg_seed`），nametable 30×32 按 `(row*7+col*3+seed) & 8'hFF` 生成、attribute 交替 `1B`/`E4`、palette 32 项线性、64 个 OAM 项 tile 与 attribute 全 `8'h00`。5 组配置各跑 **1 帧 warm-up + 3 帧比对**（`WARMUP_FRAMES=1` / `COMPARE_FRAMES=3` / `TOTAL_FRAMES=4`）：`base-fx0-mask1E`（`PPUMASK=1E`、`fine_x=0`、每拍 `ce`）、`fx3-cx5`（`fine_x=3`）、`spr16-cx12`（`PPUCTRL=20` 8×16）、`cx31-fx7-table1`（`fine_x=7`、`coarse_x=31`、**`ce` 1-in-4**）、`left8clip-mask1C`（`PPUMASK=1C` 左 8 像素裁剪）。逐 `ce` 逐 dot 比对 `pixel_index`（可见区每一个 `ce`，不抽样）、`bg_pa_enable`、`pixel_valid`/`pixel_x`/`pixel_y`、`dot`/`scanline`、`vblank`/`nmi_o`/`frame_done`、`dbg_v`/`dbg_t`/`dbg_x`/`dbg_w`、`dbg_sprite0_hit`/`dbg_sprite_overflow`、`chr_we`/`chr_wdata` 恒低，以及 `bg_pa_enable=0` 时 `bg_pattern_low`/`high` 必须为 `8'h00`；**每个 `chr_req` 拍**的地址都与"由 A 侧 `fine_x`/`temp_addr`/`bg_y_total`/`bg_coarse_y`/`bg_vertical_sections` 独立重算的期望 tile base + 平面偏移"比对，`bg_valid` 脉冲后一拍把 `bg_lo_q`/`bg_hi_q` 与 `chr_mem[]` 逐字节比对；dot 340 逐行核对 tile 取数次数、`chr_req` 拍数与"A 侧显示 tile 数 = B 侧取数次数 + 跳过的首 tile 数"，`bg_fetch_due` 与 `chr_fetch_busy` 同拍在比对帧内即 fatal（触发被吞 = 流水失步）。实测：`A1 total compared pixels=921600 nonzero_index=402348 nonzero_A_low_plane_cycles=715080`、`A2 lines_checked=3930 total_requests=337450`、`A3 verified request addresses=337450 verified latched plane pairs=126546`、`PASS tb_nes_ppu2c02_ext_chr`。**注意**：精灵图案是全 0 透明图案（OAM tile/attribute 全 0 + `chr_mem[0..511]` 全 0），因为外部模式**不渲染任何精灵像素**（`sprite_chr_bus` 绑 `65536'd0`、`chr_sh` 绑 `8'h00`），所以这条 TB 只证明**背景**通路等价；TB 也没有覆盖渲染期间写 `$2005`（外部路径的触发相位会移动）、`$2007` 对外部 CHR 的写（`chr_we` 恒 0，TB 靠层次化预载）、复位后第 0 帧（需 1 行 warm-up，每组丢弃）。**耗时约 138 s，是当前最慢的目标**。
+- `tb/apu/tb_nes_apu2a03.v`：五通道寄存器回读、`ce=0` 冻结、length status、duty、envelope、sweep、triangle linear counter、noise LFSR/mode、DMC sample/IRQ、frame 相位与 29830/37282 `ce` IRQ 周期。
+- `tb/bus/tb_nes_cpu_bus.v`：译码表、2 KiB RAM 四路镜像与同步读、1 拍/多拍等待、stall 与 hold 的逐拍稳定性、open bus 跟踪、`ce` 门控下的事务耗时、DMA 读端口（RAM/PRG/open bus/MMIO 缺口）、ack 延迟、OAM 优先于 DMC 与请求撤销。
+- `tb/mapper/tb_nes_mapper_nrom128.v`：16 KiB PRG 镜像与 16 KiB WRAM 窗口。
+- `tb/mapper/tb_nes_mapper.v`：NROM/UxROM/CNROM bank 窗口、mirroring、bus conflict 两种模式、跨 mapper 写隔离。
+- `tb/mapper/tb_nes_mapper_mmc1.v`：复位态、串行寄存器第 5 次提交、位序、地址译码、PRG 四种模式、CHR 两种模式、mirroring、复位位。
+- `tb/mapper/tb_nes_mapper_mmc3.v`：复位 bank map、PRG 模式交换与掩码、CHR 2K/1K 窗口与反转、`$A000` mirroring、RAM enable/protect、IRQ latch load/reload/decrement/assert/disable/ack、A12 沿过滤与 cooldown、极性配置、偶奇地址别名。
+- `tb/controller/tb_nes_controller.v`：三实例并行验证 256 种按钮组合、串行位序、strobe 重载与电平敏感装载、快照语义、8 次之后的 `EXTRA_READ` 三种策略、双端口独立性与中途切换、读选通宽度、中途复位。
+- `tb/cart/tb_ines_header_parser.v`：字节索引 FSM 时序、clean iNES/NES2.0 字段、dirty mask、trainer/电池/four-screen、exponent notation、错误优先级、文件长度短/长检查、start 保持高电平不重启、异步复位。
+- `tb/video/tb_nes_video_scaler.v`：复位清读指针且保持期输出不动、64 项 RGB565 调色板、整帧 240×1 的 `line_ready`/`frame_ready` 位置与单周期宽度、61440 次写入里插空闲周期仍按有效像素计数、三帧连续与缓冲区原地覆盖、帧中复位（缓冲区保留、丢半帧）、读指针与写口解耦、512×480 恰好无黑边/无 blanking。
+- `tb/video/tb_nes_line_buffer_vga.v`：同时例化 `REPEAT_LINE=1` 与 `REPEAT_LINE=0` 两个实例共用一套写口激励，两条读通路各有独立模型；复位与 `wr_ce` 门控不产生 `line_done`/toggle/读行，`wr_ce=0` 时 `x=255` 不完成行，`rd_ce=0` 期间四个输出逐拍冻结、恢复后 `REPEAT_LINE=1` 恰好 2 遍/`=0` 恰好 1 遍，8 行并发 ping-pong 逐像素校验行序 0,0,1,1,…,7,7、颜色、2× 复制与坐标序列（实测写读重叠 7114 拍），读端中途复位丢弃半行并重新对齐 bank。
+- `tb/video/tb_nes_vga_timing.v`：复位清 `hsync`/`vsync`/`de`/像素总线与两个 strobe、复位赢过 `ce=0` 并 home 光栅、`ce=0` 冻结整个光栅与像素总线、缺像素与缺行首都出黑而 `de` 仍为高、`line_read_start` 在行内把像素流重新对齐到 x=0 而不动帧计数器、末像素上的 `line_read_start` 被回显但行环绕仍清它、x=0 上的 `line_read_start` 赢过环绕清并保持对齐，以及 800×525 自由运行光栅的 96 个 hsync 周期 / 3 行 vsync / 245760 个 `active_pixels` / 420000 拍帧周期。
+- `tb/system/tb_nes_system_v0.v`：CPU 真正通过 6502 总线改写 PPU 寄存器、RAM/PRG 镜像、整帧背景像素和总线周期账。
+- `tb/system/tb_nes_system_v0_nmi.v`：端到端 NMI（`PPUCTRL[7]` → `nmi_o` → 入栈 → `$FFFA` 向量 → `RTI`）。
+- `tb/system/tb_nes_system_audio.v`（`nes_system_v1`）：`$4000` 译码、frame/DMC IRQ 注入 CPU、handler 内 `$4014` 访问、frame IRQ 与音频 strobe 计数。
+- `tb/system/tb_nes_system_v2.v`（`nes_system_v2`）：`nes_cpu_bus` 真等待态下的 owner/req/stall/fire 观测、PRG 镜像、整帧像素与周期账。
+- `tb/system/tb_nes_system_v3.v`（`nes_system_v3`）：OAM DMA 仲裁、NMI/IRQ handler 计数、音频 strobe、帧周期与精灵像素。
+- `tb/system/tb_nes_system_v4.v`（`nes_system_v4`）：标准手柄接入系统的完整链路——`$4016` 写 1/写 0 生成共享 `/PL`、两个口各 8 次读逐位重建 `buttons1`/`buttons2`、第 9 次读、每次完成的读都绕开 `apu_reg_cs`、`$4017` 写仍然进 APU 帧计数器、`/PL` 的一拍延迟，加上 v3 的 DMA 仲裁、PPU/APU 寄存器桥、NMI/IRQ、音频 strobe、帧周期与整帧像素账。
+- `tb/system/tb_nes_system_v5.v`（`nes_system_v5`）：一个 testbench 同时例化三个 `nes_system_v5`（`MAPPER_SELECT` = 0/2/4，mapper 1/3 未在系统级激励）——三个程序分别跑到 `8000`/`c000`/`e000` 的 reset 向量且不进失败循环；每次 cart 读都与 TB 侧独立 bank 模型在 `cart_din`、CPU 读数据与 `prg_readback` 三处对上，bank 写回实测 `nrom wr=0 / uxrom wr=4 / mmc3 wr=13`，每次完成的 cart 写只产生一拍携带地址与数据的 mapper 写脉冲；mirroring 输出跟 iNES 头（NROM 竖 / UxROM 横）与 `$A000` 寄存器（两种模式都出现），`nametable_map` 跟随模式但 PPU 仍是编译期 `MIRROR_VERTICAL=0`；UxROM 四次 `$8000` 写在 conflict 模式 1 下的 AND/latch 行为；MMC3 `$8000`/`$8001` 选 r6/r7、`$8000` bit6 的 PRG 模式交换；`$C000` latch 07 + `$C001` reload 因 `ppu_a12` 绑 0 而不自计时、`$E001` 使能/`$E000` 禁用并 ack 后 `mapper_irq` 全程为低；`force` 压 MMC3 IRQ 寄存器后 `mapper_irq → irq_line → cpu dbg_irq_pending` 走通 7 周期入口、从 `$FFFE` 取向量并 `RTI` 返回；UxROM 板上 controller 两个口各 8 次读重建位图、第 9 次读返回 1 且 `$4016`/`$4017` 读不泄漏 `apu_reg_cs`；`$4014` 把 02 页 256 字节搬进 `oam[0..255]`（ack 与写计数各 256）；pulse1 持续出 sample、DMC 全程不请求总线、frame IRQ 被 `$4017=40` 禁止；三个系统的 cart/ram/ppu/apu 传输仍各恰好 1 `ce` stall，`dbg_wait_count` 全程为 0。
+- `tb/platform/tb_nes_ep4ce10_top.v`（`nes_ep4ce10_top`）：三个理想时钟（`clk_ntsc` 半周期 23.275 ns、`clk_vga` 20 ns、`clk_sys` 10 ns）驱动平台顶层，消抖窗口用参数缩短到 `DEBOUNCE_US = 16`（800 `clk_sys`，出厂默认仍是 16000 us = 800,000 `clk_sys` @ 50 MHz）。VGA 侧逐像素模型核对 `hsync`/`vsync`/`de`（每行 96 个 hsync 周期、512 个 de 周期、0 个消隐行、vsync 恰好 3 行、帧周期 420000 `clk_vga`，实测 2 帧 737280 个 de 像素）；PPU 侧在每个 `wr_ce` 采样并断言 `pixel_x` 严格 0..255 递增、每行 341 个 dot（720 可见行里 717 行 341 dot、2 个帧边界 23×341 dot）、`line_done` 与 `line_ready_toggle` 各 720 次、`ppu_ce` 268026 次、程序退出时 `ppumask = 1E`、palette index 0/非 0 分别为 256/184064；按键在 `clk_sys` 域消抖 800 拍后才允许电平变化，并在 4 个 `clk_ntsc` 内出现在 `buttons1[3:0]`；`audio_valid` 89342 次 1 拍宽 strobe、其中 44382 个非零样点；`vga_r`/`vga_g`/`vga_b` 有 283424 个非零像素，说明 PPU → 行缓冲 → VGA 时序这条链确实打通。
+- `tb/peripheral/tb_wm8978_i2c.v`（`wm8978_i2c`）：TB 里把 codec 建模成一个解析开漏总线的 I2C slave，用 `pullup` + 三态 `assign` 还原 `scl`/`sda` 电平，解 START / STOP / 字节 / ACK 帧格式，在每个 SCL 上升沿采样 SDA，把每次写事务解码成 `[DEV_ADDR+W, reg_addr, wdata]` 三元组（实测 12 次事务、13 个 START、13 个 STOP、1 次中止）。物理层同时断言：SDA 只在 SCL 低电平期间变化（START/STOP 除外）、tSU;DAT、tHD;DAT、tSU;STA、tHD;STA、tSU;STO、tHD;STO、tBUF、SCL bit 周期、每个 ACK slot 上 master 保持的 1 bit 长 SDA 释放窗口，以及 master 从不主动把任一根线驱动为高。
+- `tb/peripheral/tb_sd_spi_cmd.v`（`sd_spi_cmd`）：TB 里把 TF 卡建模成一个 **SPI slave**：CS 为低期间在**每个 `spi_clk` 上升沿**采 MOSI 并逐 bit 重建 6 个命令字节，同时**只在下降沿**改 MISO（第一个下降沿正好落在 CS 呈现字节 0 的 bit 7 之后，所以帧里的字节 6/字节 7 载着预设的 `resp0`/`resp1`），**参考 CRC7 用长除法**（乘 `x^7`、按 `0x89` 约简）而不是照抄 DUT 的移位器。**A1** 复位后 `spi_cs_n=1`/`busy=0`/`done=0`/`crc7_err=0`；**A2** CMD17 + `arg=$12345678` 逐 bit 重建出发送字节 `51 00 00 12 34 15`、应答 `51 00` 留在 `resp0`/`resp1`；**A3** CMD0/CMD8/CMD29/CMD11 的位序和 4 个 CRC 字节与长除法参考值一致，且 **CMD0 的 CRC 字节锚定规范值 `0x95`**（`0x40` 的 CRC7 是 `0x4A`，`{0x4A,1'b1} = 0x95`）；**A4** `crc_check_en` 跳过全 0 与全 1 场、正确标出坏 CRC（如 `0x51`）、标志粘滞到复位；**A7** 帧进行到 40 bit 时按复位能恢复 CS，下一帧完整；**A6** 数**真实 `spi_clk` 沿**而不是 TB 自己的计数：半周期 26..26 个时钟（`CLK_HZ/(2*SPI_HZ) = 26`，容差 ±1）、50% 占空比、121/121 个上升/下降沿；**A5** 每帧恰好一个 `done` 脉冲，忙时的 `start` 被忽略。打印 `PASS sd_spi_cmd`。
+- `tb/peripheral/tb_nes_cdc_fifo.v`（`nes_cdc_fifo`）：10 ns 写时钟对 14 ns 读时钟（刻意不相关的两个时钟），四个阶段——phase 0 联合复位与标志极性；phase 1 灌到满深度、`wr_full` 的时序、溢出那个字被拒、整条排空且排空后紧接的下一个字落在第 1025 个位置（实测 1024 项接受、溢出被拒、1024 项按序排空）；phase 2 空读既不移动指针也不扰动 `rd_data`；phase 3 **10000 次交错随机使能决策**（实测接受 7008 次写、5986 次读），每次被接受的读都把寄存器里的 `rd_data` 和模型弹出的那一项逐条比对；phase 4 两端各自单独复位、不挂死、标志可恢复，再联合复位并做一次干净的 32 项往返。参考模型由 DUT **实际接受**的握手驱动（各时钟负沿采样，正好是即将到来的正沿会用的值），所以模型与 DUT 的占用量恒等——逐条比对通过即证明没有丢、重复或乱序。
+- `tb/peripheral/tb_nes_i2s_shifter.v`（`nes_i2s_shifter`）：同一套激励同时驱动 `BIT_REVERSED=0` 和 `BIT_REVERSED=1` **两个实例**，参考模型按声道语义写（不照抄 RTL 的下标算术）——普通实例是 `left[15]…left[0]` 再 `right[15]…right[0]`，反序实例每声道 LSB first，两者左声道都占前 16 个位置；**每个 `ce` 有效沿**都比对，所以换错声道、bit 卡死、位序错、丢 `ce` 空洞和采样损坏全部会失败。`out_lrck` 每 bit 检查一次并在每轮末尾要求翻转恰好发生在第 17 bit；`busy`/`out_valid`/`dropped` 在每次状态转移处检查；`ce=0` 期间四个流引脚被断言为冻结。覆盖：复位清 `busy`/`out_valid`/`out_bit`/`out_lrck`/`dropped` 且复位后保持空闲、装载沿不出 bit（`sample_valid` 沿不输出、下一 `ce` 沿才出第一拍）、`ce` 空洞后第一拍恰好出一个 bit、32 bit 后 `out_valid` 落下且 `busy` 落下、空闲时钟不多出 bit、MSB/LSB 两条流确实不同（否则测试采样无区分力）、`busy` 期间来的采样被丢弃且在飞采样不被打扰（32 bit 全部来自原采样、丢弃的采样不会事后出现）、`dropped` 粘滞到复位并被复位清掉、5 个背靠背采样拼成一条 160 bit 平流后逐 bit 比对（实测每实例 160 bit）且不丢采样。
+- `tb/peripheral/tb_nes_audio_i2s.v`（`nes_audio_i2s`）：`wr_clk` 10 ns 对 `rd_clk`/`mclk` 20 ns，`BCLK_DIV = 1` 所以 `bclk` 与 `rd_clk` 同周期同相位，一个采样 = 32 个串行器时钟 = 640 ns，`rd_ce` 常 1。四个采样在**连续 `wr_clk` 拍**上写进 FIFO，让读侧提前把后续采样备好（位串行器只在 bit 31 那一拍接受新采样，所以"无间隙"是读侧预读的必然结果而不是写节奏的巧合）。收集规则本身是可证伪的：**每个 `sample_valid` 为高的 `bclk` 上升沿收 1 bit，而从第一个到最后一个 strobe 之间任何一个 `sample_valid` 为低的 `bclk` 上升沿都是 fatal 间断**——所以收集器不能靠跳过空闲拍来掩盖间断。实测 **128 bit 落在 128 个连续 `sample_valid` 的 `bclk` 上升沿上**，然后逐 bit 与按声道语义写的参考模型比对；`lrck` 在**每个采样的 16 低 + 16 高**上逐 bit 校验，并要求四个采样的翻转都恰好落在各自的第 17 bit（流的 bit 下标 16/48/80/112）。`dropped` 必须全程不抬，这是背压成立的可观测形式：没有采样被"忙中的串行器"丢掉、FIFO 也没满。`underflow` **不检查且预期置位**，因为读侧只备一个采样、生产者跟不上时采样之间 `rd_empty` 本来就会重新拉高。数据在 strobe 之后**一个 `bclk` 沿**取（`dout`/`lrck` 在 `bclk` 上升沿从串行器引脚寄存，而串行器在同一 `rd_clk` 沿更新自己的引脚，所以 strobe 领先数据恰好一个沿）；在 strobe 沿上取会得到整体移一位的流。
+
+**当前没有声称完成**（详见 `tb/*/README.md` 的“明确未实现”和 [`docs/00-overview/verification-plan.md`](docs/00-overview/verification-plan.md) 第 7 节）：
+
+- sprite 通路只做空间并行，**没有** secondary OAM、评估窗口、shift register 装载顺序和逐 dot 取数/评估时序；sprite 0 hit / overflow 不会每帧自动清零，overflow 置位点比真实硬件的 dot 64..256 评估窗口更早。
+- OAM DMA 只做 513/514 边界与对齐相位，DMC DMA 通路存在但 `nes_system_v3`/`v4` 的程序从不激励它；`OAMADDR_WRITE = 0` 使起始对齐相位跟随 `clk` 奇偶而不是 CPU 周期奇偶。
+- mapper 层只有 NROM/UxROM/CNROM/MMC1/MMC3；SA-1、SuperFX、FDS、MMC3 的 MC-ACC/NEC alternate clocking、four-screen 4 KiB nametable RAM 通路都没有。v5 已经把 `nes_mapper` 接进系统（PRG bank 窗口、`$8000-$FFFF` mapper 寄存器、`prg_readback` 驱动的 bus conflict、`mapper_irq | apu_irq` 进 CPU），但这只是**部分接入**：**PPU 侧的外部 CHR 背景通路已接通并有像素级等价证据**（`g_chr_external` 例化 `nes_chr_fetch_unit`、有 `bg_lo_q`/`bg_hi_q`/`bg_ready` 平面锁存、逐 tile 流水按 `b_k - 9` 发请求、`nametable_ram` 直接带第二个读口且 `nt_fetch` 影子数组已删除；`ppu-ext-chr-tb` 在 5 组配置 × 3 帧下做了 921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对全部一致，另核对 337,450 次 `chr_req` 地址与 126,546 对平面字节），**但外部 CHR banking 仍然完全没有接到 PPU**：`nes_system_v5` 的 `ppu_addr`/`ppu_a12` 仍绑 0，意味着 CNROM/MMC1 的 CHR 切换在系统级依旧不可观测、MMC3 的 A12 扫描 IRQ 计数器在系统级依旧无法被时钟；**精灵 CHR banking 完全没有**（`sprite_chr_bus` 绑 `65536'd0`、`chr_sh` 绑 `8'h00`，**外部模式不渲染任何精灵像素**，A/B 等价性依赖 TB 提供的全 0 透明精灵图案，`mask_reg[4]` 打开时外部模式的画面与内部模式必然不同）；**`$2007` 对外部 CHR 写被丢弃、读恒得 0**（`chr_we` 恒 0，TB 靠层次化预载 CHR，这条通路完全未被验证）。此外 `tb/ppu/tb_nes_ppu2c02_ext_chr.v` **没有覆盖**渲染期间写 `$2005`（内部路径的 `bg_x_total` 每拍组合跟随，外部路径的触发相位会移动、已锁存的 tile 不回退重取）、复位后第 0 帧（需 1 行 warm-up，每组丢弃该帧）、以及非连续 `ce` 下 `chr_req` 脉冲被拉长的脉宽。`rtl/nes_core/ppu/nes_chr_fetch_unit.v`（6 态 FSM、1 拍地址预取、背靠背 2 个 `ce` 一字节、`ce` 冻结、忙时忽略 `req_start`、6 bit `tile_count` 可数到实测最坏行的 33 个 tile）**已被 `nes_ppu2c02` 的 `g_chr_external` 例化**（`.tile_count(6'd1)`），它的三条接口限制（只暴露最后一个 tile、延迟 8 个 `ce`、`bg_valid` 是脉冲）见 `docs/modules/ppu-external-chr.md` 第 11.2 节。`CHR_ADDR_BITS` 16→17 **已做**（`nes_mapper.v:10`、`nes_system_v5.v:11` 已是 17），但那只修地址、不产生任何新的可观察行为。PPU 侧 mirroring 没接（`nes_ppu2c02` 没有运行期端口，four-screen 也没有）；`$6000-$7FFF` 没有 PRG RAM 阵列（`prg_ram_enable`/`prg_ram_we` 只是输出端口）；`MAPPER_SELECT` 是 elaboration 期参数，一个实例整场只有一个 mapper；v5 的 TB 只例化 mapper 0/2/4，MMC1 的串行提交与 CNROM 的 CHR bank 在系统级从未被程序驱动过。`PRG_SIZE_BYTES` 默认已改成 128 KiB，但 128 KiB PRG 在 EP4CE10 上的 M9K 占用**没有**评估。
+- APU 侧仍缺微周期级寄存器副作用、`$4017` 写后 3/4 cycle 延迟、frame IRQ flag 的 29828/29829 读窗口、`$4002` 读副作用、精确 open bus、IRQ filter 与 frame/mapper IRQ 仲裁、CPU 侧屏蔽、PAL 制式、非线性 mixer 与滤波/重采样/FIFO、左右分路。DMC 的 CPU stall 时长、ready toggle 和额外 1/4 cycle 没有。
+- 总线侧 `$6000-$7FFF` 没有 PRG RAM（读 `$00`、写丢弃），`$4018-$5FFF` 读 `$00`、写忽略，DMA 读 PPU/APU MMIO 是固定占位值。v5 保留了 v3/v4 的同一批总线缺口（DMC DMA 存在但程序不激励、`OAMADDR_WRITE=0`），mapper 的 cart 写脉冲也没有回灌 `nes_cpu_bus` 的 DMA/仲裁观察端口。
+- 精确 open bus、读取抑制窗口、奇数帧跳 dot、真实 PPU 的 dot 级预取时序、寄存器同沿 glitch 行为。
+- 视频方向现在是**行缓冲**：`rtl/nes_core/video/nes_line_buffer_vga.v`（2 bank 乒乓，1 KiB，正好 1 个 M9K）有 TB 覆盖并进入 `-Mode all`，它现在**已经被 `rtl/platform/ep4ce10/nes_ep4ce10_top.v` 实例化**（写域 `clk_ntsc`、读域 `clk_vga`），`nes_vga_timing.v` 也第一次被接进来，但**它仍然没有接进任何 System 顶层**，`nes_system_v5` 也没有实例化它；接口只给 1 bit `line_ready_toggle`，**没有背压、没有队列、没有 overrun 指示**，写端领先 2 行及以上会静默丢整行（`tb/video` 用 5 倍时钟比、`tb/platform` 用两个异步理想时钟，都只是保证不 overrun 的测试环境性质，而不是模块的保护）；只有 16 种颜色参与颜色校验（`wr_index` 只有 4 位）、`line_mem` 的复位行为没有被直接断言、同址同拍的写读冲突没有测（ping-pong 结构上排除了它）；VGA 800×525 时序发生器与 HS/VS/DE、640 宽 DE 窗口与左右各 64 像素黑边、双缓冲/帧级同步在 `nes_vga_timing.v` 里有了第一版，但**没有帧级同步、没有 CPU 可见的帧状态端口、没有帧级撕裂处理，也没有资源与时序数字**。
+- `rtl/nes_core/video/nes_video_scaler.v`（整帧 120 KiB frame buffer）现在只是**行为参考模型**：BRAM 需求超出器件全部片上存储约 2.3 倍，输出只有裸 512×480 像素流，没有 VGA 时序、没有黑边、没有双缓冲。EP4CE10 上要落地走行缓冲（1 KiB）或 SDRAM 帧缓冲，scaler 保留作交叉检查基准与整帧截图/回读场景。
+- v4 的 controller 通路只是“并联输入 + 4021 + 总线 override”的最小闭环，`nes_controller` 本身没有边沿检测、消抖或跨时钟域同步（System 顶层只有 `clk`）；第 9 次读按 `EXTRA_READ=0` 恒返回 1，没有 Zapper/expansion 端口的第 9 位 tie-high；读 `$4016`/`$4017` 只把 `controller_data` 放到 `cpu_din[0]`，bit7:6 是 0 而不是 open bus；`$4017` 读的 bit6/bit7（frame IRQ 禁止与模式状态）**没有实现**。这些都属于 System 层之上的缺口。
+- 平台顶层的 4 键消抖**已实现但只有仿真证据**：`nes_ep4ce10_top` 在 `clk_sys` 域做两级同步 + 计数消抖（`DEBOUNCE_US = 16000`，50 MHz 下 800,000 拍），稳定后再两级同步进 `clk_ntsc` 映射到 `buttons1[3:0]`，`tb/platform/tb_nes_ep4ce10_top.v` 用缩短到 800 拍的参数断言了“消抖后才允许变化 + 4 个 `clk_ntsc` 内到达”。这**只是 RTL/TB 内部一致性**：没有综合、没有真实按键抖动波形、没有 GPIO 电气、没有第二个手柄口（`buttons2` 恒 `8'hFF`）、没有 Zapper/expansion 位、`nes_controller` 仍无第 9 位 tie-high。
+- PLL/altpll **没有实现**。`rtl/platform/ep4ce10/nes_ep4ce10_pll_stub.v` 只是把 `clk_in` 同时送到 `clk_ntsc`/`clk_vga` 的占位模块，`locked` 常 1，不含任何 `altpll`/`lpm_*`/`altera_*` primitive，不参与综合。真实器件上 `clk_ntsc`（21.477272 MHz）与 `clk_vga`（25 MHz）必须由 EP4CE10 的 altpll IP 从 50 MHz 板载晶振（PIN_E1）生成，通道划分、VCO 频率、`multiply_by`/`divide_by`/`counter`/`duty_cycle` 都还没有用 MegaWizard + TimeQuest 确认，`locked` 参与复位组合的接法也还没做。
+- **Quartus 工程骨架已就位，但没有任何证据**。`quartus/op_fpga_emu.qpf`、`quartus/op_fpga_emu.qsf`、`quartus/op_fpga_emu.sdc` 三个文件都已存在：`.qsf` 声明器件 `EP4CE10F17C8`、顶层 `nes_ep4ce10_top`、35 条 `VERILOG_FILE`（已与磁盘逐条核对一致） 和工程级 IO 电压起点；`.sdc` 含 3 条 `create_clock`（50 MHz `sys_clk`、21.477272 MHz `clk_ntsc`、25 MHz `clk_vga`）与 2 条 `set_false_path`（板级异步复位 → 各域同步器第一级、NTSC→VGA 的 `line_ready_toggle` CDC）。**但这三个文件从未在 Quartus 中打开或编译过**（本机没有安装 Quartus），而且：`.qsf` 里 `set_location_assignment` / `set_io_assignment` / `PIN_LOCATION` 各 **0 条**——**一个引脚都没分配**；`.sdc` 里生效的 `create_generated_clock` **0 条**——**altpll 尚未生成**，所以 `clk_ntsc`/`clk_vga` 现在只是自由驱动的输入端口引脚（状态 A → B 的改写清单在 `.sdc` 第 6 节的 `TODO(PLL)` 与 `docs/hardware/12-ntsc-clock-and-pll.md` 第 6 节）；`.qpf` 只是占位；`.qip` 与 `.sdf` 不存在。**因此综合、Fitter、STA、引脚分配、时序收敛依然没有任何证据。** `nes_ep4ce10_top` 的顶层端口（三个时钟、`reset_n`、4 个按键、6 个 VGA 输出、2 个音频输出）与 `nes_ep4ce10_qsf_if` 的板级端口（`sys_clk`/`sys_rst_n`/`key[3:0]`/`vga_hs`/`vga_vs`/`vga_rgb[15:0]`/`led[3:0]`/`beep`）都没有对应引脚分配，IO bank、VCCIO、输入延迟和输出延迟全部缺失（`set_input_delay` / `set_output_delay` / `set_max_delay` / `set_clock_uncertainty` 的生效条数也都是 0；实际生效的只有第 72 行的 `derive_clock_uncertainty`，它不包含晶振 ppm 偏差）。详见 [`quartus/README.md`](quartus/README.md) 第 0.1 节的实测计数与第 6 节的未验证清单。
+- TF 卡、SDRAM **都还没有接**，WM8978 **只做了 I2C 寄存器配置这一半**。`rtl/nes_core/peripheral/sd_spi_cmd.v` 是本轮新增的第一个 SD 相关可综合模块（6 字节命令帧 + CRC7、MISO 下降沿采样、50% 占空比分频、响应 CRC 校验与 `0xFF`/`0x00` 跳过，已有独立 compile-only 与 TB 目标 `sd-spi-cmd-core`/`sd-spi-cmd-tb`），但它**只做命令帧**：没有上电初始化序列（CMD0/CMD8/ACMD41/CMD58/CMD16、电压窗口、卡忙轮询）、没有块读/多块传输、没有 4096 字节数据流与 CRC16、没有读数据通路与 FIFO、没有 FAT 解析与文件 I/O、没有数据线 `DAT0..3` 与卡检测，而且**它没有被任何模块例化**——六个 `nes_system_*` 和 `nes_ep4ce10_top` 都没有例化它，平台顶层**没有任何 TF 引脚**。TB 里的卡是 testbench 自建的 SPI slave 模型，**没有真实 TF 卡的上电波形、CMD0 应答或忙轮询证据**。`rtl/nes_core/peripheral/wm8978_i2c.v` 是第一个可综合、单独跑通的 WM8978 相关模块（I2C 写事务状态机 + 9 项上电配置常量表，Verilog-2001），但平台顶层有意不做这三项：ROM 仍是 `nes_system_v4` 里的 16 KiB 片上 `prg_rom` 数组（`PRG_SIZE_BYTES = 16384`），没有 TF 控制器、没有文件 I/O、没有 SDRAM 控制器或 PHY。音频侧的具体状态是：**WM8978 未接任何顶层**——`wm8978_i2c` **没有被 `nes_ep4ce10_top` 或任何 System 顶层实例化**，`clk` 也没有跨到 `clk_sys`/`clk_ntsc` 域。`nes_audio_i2s`（I2S 组装层：异步 FIFO + 一拍深度读取节流 + 背压 + `MCLK÷BCLK_DIV` 分频 + `bclk` 上升沿寄存 `dout`/`lrck`）**有 RTL 也已经有 TB**（`tb/peripheral/tb_nes_audio_i2s.v`，已进 `tools/sim_all.ps1` 的 `audio-i2s-core`/`audio-i2s-tb`），但它**只在 TB 里被例化**——同样没有被任何 System 顶层或平台顶层实例化。`nes_i2s_shifter.v`（纯同步位串行器）与 `nes_cdc_fifo.v` 也一样都只在 TB 里被例化。**平台顶层的音频仍然只有 sample 端口**：`audio_valid`/`audio_left`/`audio_right` 直接透出（`audio_valid` 仍是 `ce_cpu` = 1.789773 MHz 速率的 strobe，**不是**音频采样率），DOUT/LRC/BCLK 引脚一条都没有。从 sample 端口到 codec 之间仍然缺：把 `audio_valid`/`audio_left`/`audio_right` 接进 `wr_clk` 域并定重采样/滤波策略、12.288 MHz MCLK 域与 `rd_clk`/`mclk` 的实际分频数值、BCLK/LRC 域与 shifter `ce` 的相位关系、`nes_audio_i2s` 与 `nes_ep4ce10_top` 的整条接线、`wm8978_i2c` 的 `cfg_done` 作为 codec 就绪门控、双缓冲或 DMA。I2C 这部分只有 TB 内自建的 I2C slave 模型证据，**没有**真实 WM8978 上电波形；I2S 位串行器与组装层这两部分的证据也只到 TB 内部一致性，**没有**接任何真实器件或 BCLK/LRC 波形，**NES sample → I2S → WM8978 引脚这条端到端通路一条证据都没有**。
+- 复位按键、电源检测、LED 状态指示也没有。
+- Quartus 综合/Fit/TimeQuest、ModelSim/Questa 运行、EP4CE10 上板。工程骨架文件（`quartus/` 下的 `.qpf`/`.qsf`/`.sdc`）虽然已就位，但它**从未在 Quartus 里打开过**，引脚未分配、altpll 未生成、TimeQuest 未跑、上板未验证。平台顶层的存在**不等于**这三项有任何进展：`nes_ep4ce10_top` 仍然是**未综合**的设计，见下面 Quartus 段与 [`quartus/README.md`](quartus/README.md)。
+- NESdev test ROM 回归与 C golden trace 差分。
+
+已知结构限制：`nes_system_v0`/`v1` 仍是常高 `bus_ready` 的仿真顶层，v0 没有 APU 也没有 `$4014` DMA；v2/v3/v4/v5 引入真实等待态但没有 owner 侧 ack 回到 `clk` 域的同步逻辑，也没有解决 12 拍 `div_phase` 与真实频率之间的差距；v3/v4/v5 的 `audio_sample_valid` 是 `ce_cpu` 速率的 strobe，不是音频速率；v4/v5 的 `buttons1`/`buttons2` 是与 `clk` 同步的常量端口，不是异步按键输入；v5 的 `MAPPER_SELECT`/`PRG_SIZE_BYTES`/`HEADER_MIRRORING` 都是 elaboration 期参数（一个实例整场只有一个 mapper、一份 PRG 深度），换 mapper 或换 ROM 容量必须重新综合。v5 的 mapper IRQ 与 APU IRQ 只是线或，没有 IRQ filter、屏蔽位或优先级仲裁。平台顶层补掉了“异步按键输入”和“视频模块没人用”两处结构问题，但引入自己的限制：它用 `nes_system_v4`（**没有** `MAPPER_SELECT`，只等于 NROM 期集成）、把 `PRG_SIZE_BYTES` 固定成 16 KiB、`buttons2` 恒 `8'hFF`、行缓冲 `wr_ce` 与核内 `div_phase` 的相位一致性靠“同一个 `rst_ntsc` 从同一条时钟沿开始计数”这条约定维持（没有任何断言以外的机制保护），跨域只过 1 bit `line_ready_toggle`。
+
+CPU 当前接口、时序规则、已知的 2A03 微周期差异和中断适配约定见 [`docs/00-overview/cpu-contract.md`](docs/00-overview/cpu-contract.md)。各新增模块的接口合同与软件模型对照见 `docs/modules/apu-full.md`、`apu-system.md`、`controller.md`、`cpu-bus.md`、`ines-loader.md`、`line-buffer-vga.md`、`mappers.md`、`oam-dma.md`、`ppu-external-chr.md`、`ppu-sprites.md`、`system-v2.md`、`system-v3.md`、`system-v4.md`、`system-v5.md`、`video-scaler.md`、`vga-timing.md`。平台顶层的三段结构、时钟来源和未接清单见 `docs/hardware/13-platform-top.md`，NTSC/VGA 双时钟与 CDC 方案见 `docs/hardware/12-ntsc-clock-and-pll.md`，按键引脚与消抖窗口见 `docs/hardware/09-input-and-pins.md`。
+
+外部 CHR 的**时序预算可行性测量**见 [`docs/modules/chr-fetch-feasibility.md`](docs/modules/chr-fetch-feasibility.md)（TB：`tb/ppu/tb_chr_fetch_feasibility.v`）。**这是可行性测量，不是 RTL 实现**：它没有改任何 RTL，也没有实例化 `EXTERNAL_CHR = 1'b1`，只通过层次化引用读出内部 CHR 路径的真实信号，量出了背景取数的 dot 占用率（实测 18.76%~19.94%）、精灵 16 拍预取窗口的可用性、以及"把 `dot` 整体 mux 成 `dot+1`"会让每行 16 列取错 attribute。**它不构成任何像素级等价性证据**。像素级证据来自另一个 TB：`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）在同一 testbench 里例化 `EXTERNAL_CHR=0/1` 两个 `nes_ppu2c02` 做 A/B 比对，实测 5 组配置 × 3 帧共 **921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对全部一致**（另核对 337,450 次 `chr_req` 的地址与 126,546 对锁存平面字节）。**这条证据只覆盖背景**：精灵取数没有实现（外部模式不渲染任何精灵像素，A/B 靠 TB 的全 0 透明精灵图案）、`$2007` 外部 CHR 写被丢弃、mapper 的 `chr_bank_offset` 仍未接进 PPU、`ppu_a12` 仍绑 0。取数状态机本体见上面模块表里的 `nes_chr_fetch_unit` 行与 `ppu-external-chr.md` 第 11 节。
+
+## 验证抓到的真实缺陷
+
+这一节记录**由 testbench 抓出来的、RTL 里的真实缺陷**，不是"未实现"也不是"已知近似"。它们值得单独记，因为这几条都说明"单个子模块的 TB 通过"或"看起来数一数就够"并不等于实现正确——四个缺陷全部是被断言出来的，不是靠代码审阅发现的。
+
+### (c) CHR 取数单元与 SPI 命令帧发送器各自的 TB 抓到 4 个真实 RTL 缺陷
+
+`tb/ppu/tb_nes_chr_fetch_unit.v` 和 `tb/peripheral/tb_sd_spi_cmd.v` 各抓出两个，四个都属于"纸面设计看着对、实际时序或算式不成立"这一类。
+
+1. **SPI：首 bit 槽的上升沿是空操作，第一个 bit 根本出不去。** 原先 `start` 之后状态机直接进"发 bit"状态并在**同一个 tick** 把 `spi_clk` 拉高，可那一刻 `spi_mosi` 上还是复位值而不是第 7 位；卡模型在上升沿采到的是旧值，所以帧的第 7 位被丢掉、整个字节流**右移一位**。这个缺陷只有在"卡模型逐 bit 重建 6 个命令字节并与 `51 00 00 12 34 15` 逐位比对"时才暴露——只数 `spi_clk` 沿的个数会完全放过它。修法是拆成"tick 0 在时钟低电平期间先把 MOSI 摆好、tick 1 才拉高时钟"。
+2. **SPI：分频器自由运行，首拍的建立时间不够。** 原来 `div_phase` 复位时不清，`start` 落在 tick 3 就会让第一个沿只隔半个 tick，MOSI 在沿上还没稳定就被采走，于是**首 bit 时序违例且整帧的相位随 `start` 落在分频周期的哪一拍而变**（同一个 `start` 时刻能跑出两种波形）。修法是接受 `start` 的那一拍把分频器清零并同时把 clock 和 CS 一起拉低，这样第一个沿相对 CS 下降沿是**固定的 2 个 tick**。
+3. **SPI：`resp0` 在移位之前取值，表达式多接了一个 bit。** 原来是 `{rx_q[6:0], rx_q[7]}`，`rx_q[7]` 已经在上一拍被应答字节的 bit 0 覆盖，所以发回给 CPU 的 `resp0` 是应答**左移一位再回卷一位**：`0x51` 变成 `0xa3`。**CRC 校验算的是对的字节，报告出去的字节是错的字节**——这类缺陷在只检查 `crc7_err` 的 TB 里完全不可见，只有"逐 bit 重建帧再和预设的 `resp0`/`resp1` 对照"才会撞上。
+4. **SPI：CRC7 反馈位误用移位后的 `c[6]`，接收侧还把 7 bit 场当 40 bit 消息。** CRC7 的反馈条件必须是**移位前**的 `c[6]`（即 `x^7+x^3+1` 的那一项），原实现用移位后的值，于是多项式实际变成了别的、算出来的 CRC 字节与规范值不符。接收侧则把 `resp0[7:1]` 这个 **7 bit** 场套进了 40 bit 消息的循环（`$2007`/CMD17 传的是 4 字节参数 + 1 字节 CRC，一共 40 bit），拿它去和 40 bit 消息的重算值比较，永远不可能相等。修法是发送侧取移位前的 `c[6]`、接收侧把比较限制在 `resp0[7:1]` 这 7 bit 上。**改完之后 CMD0 的 CRC 字节才第一次等于规范值 `0x95`**，这个锚定断言就是为了防止同类错误再回来——因为 DUT 和 TB 只要用同一种错误写法，交叉验证会一起错。
+
+另外，CHR 取数单元的 `tile_count` 端口原本是 `input wire [4:0]`（最多 31），而 `tb_chr_fetch_feasibility` 实测的最坏行是 **33 个 tile**（`Q1 bg_tiles_per_line min=33 max=33`，`fine_x≠0` + `PPUMASK[1]=1`），5 bit 装不下。这不是"算错"，是**位宽选错**：模块只能数到 31，接到真实最坏行上会静默少取一个 tile 的两个平面。现已改成 6 bit（端口、`cnt_q`、`idx_q`、`last_byte` 的比较值和 `nxt_addr` 的移位拼接一起改），TB 的最坏行也从 `tile_count=31` 提到 33 并断言恰好 66 次 `chr_req` 与 `base+0..base+520` 的完整地址序列。
+
+### (a) 位串行器每样本耗 33 拍而不是 32 拍
+
+`nes_i2s_shifter` 原先在 `bit_cnt == 31` 那一拍就清掉 `busy`，而装载新采样要求 `busy == 0`，所以**同一拍不可能既结束旧采样又装载新采样**：bit 31 那一拍只能清 `busy`，装载被推到下一拍。于是第 31 位（bit 31 本身）被**重复保持一个输出周期**，整个采样实际占 33 拍而不是 32 拍。后果是 I2S 流在**每个样本边界**都出现 1 拍间断——4 个样本的位流不是连续的 128 拍，而是 4 段 33 拍（每段最后 1 拍是上一位的保持值）。这种缺陷在只检查"每个采样内部 32 bit 顺序正确"的 TB 里完全不可见，只有在**跨采样连续比对位流**时才会暴露；组装层的 TB 一上来就撞上了它。
+
+### (b) 组装层的 `rd_en = !rd_empty` 是贪心读
+
+`nes_audio_i2s` 原来的读条件是 `rd_en = !rd_empty`（每拍读一个采样），而位串行器**每 32 拍才消费一个**。两者速率差 32 倍，所以 FIFO 里一旦有数据就会被连续读空：连续 4 个 `rd_clk` 上读走 4 个采样，位串行器只吃下其中 1 个，**另外 3 个被直接丢弃**（`rd_data` 是单寄存器，被覆盖就永远回不来）。这个缺陷同样是"两边 TB 都过、组合起来就坏"的典型：位串行器的 TB 不看 FIFO，CDC FIFO 的 TB 用的是模型自己的读使能，都不会发现读速率必须跟随消费速率。修法是加一拍深度的读提前窗口 `fetch_hold`（`rd_en = !rd_empty && !fetch_hold`），读侧在上一个采样被吃掉之后立刻把下一个备进 `rd_data`，等到 bit 31 那一拍才交给串行器。
+
+## 目录
+
+| 路径 | 用途 | 当前状态 |
+|---|---|---|
+| `rtl/nes_core/` | 厂商无关 NES RTL | 有 `cpu/`（1）、`ppu/`（4）、`apu/`（6）、`bus/`（1）、`cart/`（1）、`controller/`（1）、`mapper/`（6）、`peripheral/`（5）、`system/`（6）、`video/`（3）共 34 个模块；`system/nes_system_v5.v` 是唯一实例化 `nes_mapper` 的顶层，`video/` 的三个模块仍然没有被任何 System 顶层实例化（行缓冲与 VGA 时序只在平台顶层被实例化），`peripheral/` 的五个文件（`wm8978_i2c.v`、`sd_spi_cmd.v`、`nes_cdc_fifo.v`、`nes_i2s_shifter.v`、`nes_audio_i2s.v`）和新增的 `ppu/nes_chr_fetch_unit.v` 都还没有被任何顶层实例化 |
+| `rtl/platform/ep4ce10/` | EP4CE10 开拓者板平台适配 | 有 3 个文件：`nes_ep4ce10_top.v`（平台顶层，可综合，无 vendor primitive）、`nes_ep4ce10_pll_stub.v`（**只是占位，不是 PLL**，不参与综合）和 `nes_ep4ce10_qsf_if.v`（**只是引脚封装层**，例化平台顶层、拼 16 位 `vga_rgb`、驱动 4 个 `led`，不含任何约束语法）。**没有** PLL IP、存储器 IP、TF 控制器、SDRAM 控制器、WM8978 接口 |
+| `quartus/` | Quartus Prime 工程骨架 | 有 4 个文件：`op_fpga_emu.qpf`（工程身份，占位版本号）、`op_fpga_emu.qsf`（器件 `EP4CE10F17C8` + 顶层 `nes_ep4ce10_top` + 35 条 `VERILOG_FILE` + `SDC_FILE` 指向）、`op_fpga_emu.sdc`（3 条 `create_clock` + 2 条 `set_false_path` + `TODO(PLL)` 改写清单）、`README.md`。**0 条 `set_location_assignment`（没有任何引脚分配）、0 条 `create_generated_clock`（altpll 未生成）、没有 `.qip`/`.sdf`；三个文件从未在 Quartus 中打开或编译过**。35 条 `VERILOG_FILE` 覆盖的是**平台顶层实际用到的** 35 个 RTL 文件；本轮新增的 `rtl/nes_core/ppu/nes_chr_fetch_unit.v` 和 `rtl/nes_core/peripheral/sd_spi_cmd.v`（磁盘上 `rtl/**/*.v` 共 37 个）**没有加入 `.qsf`**，因为两者都没有被 `nes_ep4ce10_top` 或任何 `nes_system_*` 例化。 |
+| `tb/` | 仿真 testbench 和 ModelSim 入口脚本 | 有 CPU（3）、PPU（6）、APU（1）、bus（1）、cart（1）、controller（1）、mapper（4）、system（7）、video（3）、peripheral（5）、platform（1）共 33 个自包含 TB，33 个都在 `tools/sim_all.ps1` 里有目标（`tb/ppu/tb_chr_fetch_feasibility.v` 是 `chr-feasibility-tb`，`tb/ppu/tb_nes_chr_fetch_unit.v` 是 `chr-fetch-tb`，`tb/ppu/tb_nes_ppu2c02_ext_chr.v` 是 `ppu-ext-chr-tb`，`tb/video/tb_nes_vga_timing.v` 是 `vga-timing-tb`，`tb/peripheral/tb_sd_spi_cmd.v` 是 `sd-spi-cmd-tb`，`tb/peripheral/tb_nes_cdc_fifo.v` 是 `cdc-fifo-tb`，`tb/peripheral/tb_nes_i2s_shifter.v` 是 `i2s-shifter-tb`，`tb/peripheral/tb_nes_audio_i2s.v` 是 `audio-i2s-tb`）；`run_*.do` 只在 `cpu/`、`ppu/`、`system/`、`apu/`，`platform/` 和 `peripheral/` 只有 TB 没有 README |
+| `tools/` | Windows 仿真辅助脚本 | 有 `sim_cpu.ps1`（CPU 专用）和 `sim_all.ps1`（全量汇总） |
+| `docs/00-overview/` | 项目级合同、架构、验证和决策 | 已建立 |
+| `docs/modules/` | 各新增模块的接口合同与设计取舍 | 已建立 |
+| `docs/nes-study/` | NES 行为学习和源码阅读材料 | 只读学习材料 |
+| `docs/hardware/` | EP4CE10 和板级平台学习材料 | 只读平台材料 |
+| `.slim/clonedeps/repos/` | 固定版本的只读参考源码 | 不在本项目 RTL 中编辑 |
+
+## 固定参考源码
+
+| 参考项目 | 路径 | 固定提交 | 用途 |
+|---|---|---|---|
+| cNES | `.slim/clonedeps/repos/caseif__cNES/` | `7c8c252d74008e9a73a79ae18475d316d4f63290` (`7c8c252`) | CPU 总线、主机循环、PPU、mapper 组织 |
+| c6502 | `.slim/clonedeps/repos/caseif__c6502/` | `4f4bf74504611ed85ea9262094bb1a9c5c638563` (`4f4bf74`) | 6502 状态、指令和周期级组织 |
+| ObaraEmmanuel NES | `.slim/clonedeps/repos/ObaraEmmanuel__NES/` | `aa880b955e7762e4d4b18ccf96f5555c7f1fba2e` (`aa880b9`) | APU、DMC DMA、内存和 mapper 的辅助观察 |
+
+证据优先级是 NESdev 行为资料与测试 ROM，高于固定 C 源码的内部状态。参考实现中的 TODO、近似和未覆盖路径必须在文档中单独标记。
+
+## 工具使用边界
+
+### Icarus Verilog
+
+用于纯 RTL elaboration、全部自包含 testbench 和文本 trace。脚本固定查找 `C:\iverilog\bin\iverilog.exe` 和同目录的 `vvp.exe`，不安装任何工具。`tools/sim_all.ps1` 的 `$allTargets` 用 PowerShell 数 `$allTargets` 实际条目数实测共 **48** 个目标：**15 个 compile-only**（`Run = $false`，只 elaborate 不仿真，用来证明 RTL 不依赖 testbench 特性），**33 个真正跑仿真的 testbench 目标**（`Run = $true`）——其中 **32 个用 `-g2012`**（依赖 `$fatal` 等 SystemVerilog 测试特性），**1 个用 `-g2001`**。唯一的 `-g2001` 仿真目标是 `cdc-fifo-tb`——`tb/peripheral/tb_nes_cdc_fifo.v` 与它的 DUT 都是纯 Verilog-2001（只有 `$random`、没有 `$fatal`）。`chr-fetch-tb`、`sd-spi-cmd-tb` 和本轮新增的 `ppu-ext-chr-tb` 都用 `$fatal` 判定，因此按既有先例用 `-g2012`；它们对应的 compile-only 目标 `chr-fetch-core`（`nes_chr_fetch_unit`）和 `sd-spi-cmd-core`（`sd_spi_cmd`）用 `-g2001`。15 + 32 + 1 = 48。Icarus 通过不等于 EP4CE10 的综合、引脚、时序或硬件行为通过；特别地，`tb/platform/tb_nes_ep4ce10_top.v` 里的 `clk_ntsc`/`clk_vga` 是 testbench 造的理想时钟，**不是** altpll 的产物，`tb/peripheral/tb_wm8978_i2c.v` 里的 codec 是 testbench 自建的 I2C slave 模型，**不是**真实 WM8978（因此 I2C 部分的验证上限就是"RTL 与协议模型的内部一致性"，不含上电时序、电气特性、真实器件的 ACK 行为和音频输出），`tb/peripheral/tb_sd_spi_cmd.v` 里的 TF 卡是 testbench 自建的 SPI slave 模型，**不是**真实 TF 卡（因此 SD 部分的验证上限就是"RTL 与协议模型的内部一致性"，**没有 FAT 解析证据、没有真实 TF 卡上电波形、没有真实卡的 CMD0 应答与忙轮询行为**），`tb/peripheral/tb_nes_cdc_fifo.v` 里的两个时钟虽然是 testbench 造的不相关时钟，但 Icarus 是**零延迟数字行为**、没有亚稳态建模，所以这层验证的上限是"RTL 与数字模型的内部一致性"，不含 MTBF、亚稳态窗口或综合后的 CDC 报告，`tb/peripheral/tb_nes_audio_i2s.v` 里的 `wr_clk`/`rd_clk`/`mclk` 同样全是 testbench 造的理想时钟且 `BCLK_DIV = 1`（`bclk` 直通 `mclk`），所以这层验证只证明"TB 自带时钟下的位流连续性与节流正确"，**不含** `BCLK_DIV > 1` 的分频相位、不含 BCLK/LRC/MCLK 的真实相位关系、不含真实 codec 引脚，`nes_ep4ce10_qsf_if.v` 里的 `vga_rgb`/`led`/`beep` 只是引脚封装层的组合逻辑，**不是**引脚约束。
+
+### ModelSim/Questa
+
+用于独立的行为仿真、断点、波形和 SystemVerilog 调试。`tb/cpu/run_cpu_tb.do`、`tb/ppu/run_ppu_tb.do`、`tb/system/run_system_tb.do`、`tb/system/run_system_nmi_tb.do`、`tb/apu/run_apu_tb.do` 已存在，但**本仓库没有 ModelSim/Questa 的运行记录**，所以不能宣称已通过 ModelSim。`tb/bus/`、`tb/cart/`、`tb/controller/`、`tb/mapper/`、`tb/peripheral/` 目前没有对应的 `run_*.do`。ModelSim 也不会替代 Quartus 的器件资源、PLL、TimeQuest、IO electrical 或板级验证。
+
+### Quartus
+
+用于 EP4CE10F17C8 的综合、Fit、TimeQuest、PLL、BRAM/FIFO IP、引脚和 IO 约束。仓库现在**有**平台顶层 `rtl/platform/ep4ce10/nes_ep4ce10_top.v`，也**有**一份 Quartus 工程骨架（`quartus/op_fpga_emu.qpf` + `quartus/op_fpga_emu.qsf` + `quartus/op_fpga_emu.sdc`，详见 [`quartus/README.md`](quartus/README.md)）——但骨架不是结果：这三个文件**从未在 Quartus 中打开或编译过**（本机没有安装 Quartus），`.qsf` 里 `set_location_assignment` / `set_io_assignment` / `PIN_LOCATION` 各 0 条（**一个引脚都没分配**），`.sdc` 里生效的 `create_generated_clock` 0 条（**altpll 尚未生成**，`clk_ntsc`/`clk_vga` 还只是自由驱动的输入端口引脚），`.qip`/`.sdf` 不存在，`nes_ep4ce10_pll_stub.v` 仍然只是把 `clk_in` 原样送出的占位模块。`nes_ep4ce10_top` 仍是**未综合**的设计：真实器件上必须替换成 MegaWizard 生成的 altpll IP，顶层 3 个时钟、1 个 `reset_n`、4 个按键、6 个 VGA 输出和 2 个音频输出都没有引脚分配，也没有 generated clock、输入/输出延迟、IO bank 与电平约束。`rtl/nes_core/system/` 里的六个顶层仍是**仿真顶层**（`nes_system_v5` 还带 128 KiB `prg_rom` 数组和 5 个 mapper 子模块，`nes_line_buffer_vga` 是双时钟模块）。因此**没有任何可宣称的 Quartus 结果**：没有综合报告、没有 Fitter 数字（16 KiB 片上 PRG、行缓冲 1 KiB、128 KiB PRG 选项各占多少 M9K 都还是估算）、没有 TimeQuest slack、没有任何板级观测。`platform-core`/`platform-tb` 通过只说明 RTL 层次自洽，行为回归通过也不能当作 NES 行为证据的综合替代，反之亦然。
+
+## 当前验证命令
+
+全量回归（48 个目标 = 15 个编译 + 33 个仿真，顺序执行，最后打印汇总表）：
+
+```powershell
+.\tools\sim_all.ps1 -Mode all
+```
+
+按子系统或单个目标运行：
+
+```powershell
+.\tools\sim_all.ps1 -Mode cpu
+.\tools\sim_all.ps1 -Mode ppu
+.\tools\sim_all.ps1 -Mode apu
+.\tools\sim_all.ps1 -Mode bus
+.\tools\sim_all.ps1 -Mode mapper
+.\tools\sim_all.ps1 -Mode controller
+.\tools\sim_all.ps1 -Mode cart
+.\tools\sim_all.ps1 -Mode video
+.\tools\sim_all.ps1 -Mode system
+.\tools\sim_all.ps1 -Mode platform
+.\tools\sim_all.ps1 -Mode peripheral
+.\tools\sim_all.ps1 -Mode cpu-inc
+.\tools\sim_all.ps1 -Mode line-buffer-core
+.\tools\sim_all.ps1 -Mode line-buffer-tb
+.\tools\sim_all.ps1 -Mode vga-timing-core
+.\tools\sim_all.ps1 -Mode vga-timing-tb
+.\tools\sim_all.ps1 -Mode video-tb
+.\tools\sim_all.ps1 -Mode mapper-mmc3
+.\tools\sim_all.ps1 -Mode system-v3
+.\tools\sim_all.ps1 -Mode system-v4
+.\tools\sim_all.ps1 -Mode system-v5
+.\tools\sim_all.ps1 -Mode platform-core
+.\tools\sim_all.ps1 -Mode platform-tb
+.\tools\sim_all.ps1 -Mode qsf-if-core
+.\tools\sim_all.ps1 -Mode peripheral-core
+.\tools\sim_all.ps1 -Mode peripheral-i2c
+.\tools\sim_all.ps1 -Mode cdc-fifo-core
+.\tools\sim_all.ps1 -Mode cdc-fifo-tb
+.\tools\sim_all.ps1 -Mode i2s-shifter-core
+.\tools\sim_all.ps1 -Mode i2s-shifter-tb
+.\tools\sim_all.ps1 -Mode audio-i2s-core
+.\tools\sim_all.ps1 -Mode audio-i2s-tb
+.\tools\sim_all.ps1 -Mode chr-feasibility-tb
+.\tools\sim_all.ps1 -Mode chr-fetch-core
+.\tools\sim_all.ps1 -Mode chr-fetch-tb
+.\tools\sim_all.ps1 -Mode ppu-ext-chr-tb
+.\tools\sim_all.ps1 -Mode sd-spi-cmd-core
+.\tools\sim_all.ps1 -Mode sd-spi-cmd-tb
+```
+
+`-Mode all` 的固定顺序和含义（PPU 集 = `nes_ppu_sprite.v` + `nes_ppu2c02.v`，CHR 取数集 = `nes_chr_fetch_unit.v`，外部 CHR A/B 集 = PPU 集 + CHR 取数集，APU 集 = length LUT + pulse + triangle + noise + DMC + `nes_apu2a03.v`，mapper 集 = 5 个子模块 + `nes_mapper.v`，平台集 = `nes_ep4ce10_top.v` + `nes_ep4ce10_pll_stub.v` + `nes_ep4ce10_qsf_if.v`，外设集 = `wm8978_i2c.v`，SPI 命令帧集 = `sd_spi_cmd.v`，CDC 集 = `nes_cdc_fifo.v`，I2S 位串行集 = `nes_i2s_shifter.v`，I2S 组装集 = `nes_cdc_fifo.v` + `nes_i2s_shifter.v` + `nes_audio_i2s.v`）：
+
+| 顺序 | `-Mode` | 顶层 | 源文件 | 类型 |
+|---|---|---|---|---|
+| 1 | `cpu-core` | `nes_cpu6502` | CPU | 编译 |
+| 2 | `cpu-integration` | `tb_nes_cpu6502` | CPU + `tb/cpu/tb_nes_cpu6502.v` | 仿真 |
+| 3 | `cpu-bus` | `tb_nes_cpu6502_bus` | CPU + `tb/cpu/tb_nes_cpu6502_bus.v` | 仿真 |
+| 4 | `cpu-inc` | `tb_nes_cpu6502_inc` | CPU + `tb/cpu/tb_nes_cpu6502_inc.v` | 仿真 |
+| 5 | `ppu-core` | `nes_ppu2c02` | PPU sprite + PPU | 编译 |
+| 6 | `ppu-sprite` | `tb_nes_ppu_sprite` | PPU sprite + `tb/ppu/tb_nes_ppu_sprite.v` | 仿真 |
+| 7 | `ppu-oam-dma` | `tb_nes_oam_dma` | PPU OAM DMA + `tb/ppu/tb_nes_oam_dma.v` | 仿真 |
+| 8 | `ppu-integration` | `tb_nes_ppu2c02` | PPU sprite + PPU + `tb/ppu/tb_nes_ppu2c02.v` | 仿真 |
+| 9 | `chr-feasibility-tb` | `tb_chr_fetch_feasibility` | PPU sprite + PPU + `tb/ppu/tb_chr_fetch_feasibility.v` | 仿真 |
+| 10 | `chr-fetch-core` | `nes_chr_fetch_unit` | CHR 取数集 | 编译 |
+| 11 | `chr-fetch-tb` | `tb_nes_chr_fetch_unit` | CHR 取数集 + `tb/ppu/tb_nes_chr_fetch_unit.v` | 仿真 |
+| 12 | `ppu-ext-chr-tb` | `tb_nes_ppu2c02_ext_chr` | 外部 CHR A/B 集（`nes_ppu_sprite.v` + `nes_ppu2c02.v` + `nes_chr_fetch_unit.v`）+ `tb/ppu/tb_nes_ppu2c02_ext_chr.v` | 仿真 |
+| 13 | `apu-core` | `nes_apu2a03` | APU（length LUT + pulse + triangle + noise + DMC + APU） | 编译 |
+| 14 | `apu-tb` | `tb_nes_apu2a03` | APU + `tb/apu/tb_nes_apu2a03.v` | 仿真 |
+| 15 | `bus-tb` | `tb_nes_cpu_bus` | bus + `tb/bus/tb_nes_cpu_bus.v` | 仿真 |
+| 16 | `mapper-nrom` | `tb_nes_mapper_nrom128` | mapper（含 5 个子模块）+ `tb/mapper/tb_nes_mapper_nrom128.v` | 仿真 |
+| 17 | `mapper-combined` | `tb_nes_mapper` | mapper + `tb/mapper/tb_nes_mapper.v` | 仿真 |
+| 18 | `mapper-mmc1` | `tb_nes_mapper_mmc1` | mapper + `tb/mapper/tb_nes_mapper_mmc1.v` | 仿真 |
+| 19 | `mapper-mmc3` | `tb_nes_mapper_mmc3` | mapper + `tb/mapper/tb_nes_mapper_mmc3.v` | 仿真 |
+| 20 | `controller-tb` | `tb_nes_controller` | controller + `tb/controller/tb_nes_controller.v` | 仿真 |
+| 21 | `cart-ines-tb` | `tb_ines_header_parser` | cart parser + `tb/cart/tb_ines_header_parser.v` | 仿真 |
+| 22 | `video-core` | `nes_video_scaler` | video scaler | 编译 |
+| 23 | `video-tb` | `tb_nes_video_scaler` | video scaler + `tb/video/tb_nes_video_scaler.v` | 仿真 |
+| 24 | `line-buffer-core` | `nes_line_buffer_vga` | line buffer | 编译 |
+| 25 | `line-buffer-tb` | `tb_nes_line_buffer_vga` | line buffer + `tb/video/tb_nes_line_buffer_vga.v` | 仿真 |
+| 26 | `vga-timing-core` | `nes_vga_timing` | VGA timing | 编译 |
+| 27 | `vga-timing-tb` | `tb_nes_vga_timing` | VGA timing + `tb/video/tb_nes_vga_timing.v` | 仿真 |
+| 28 | `system-core` | `nes_system_v0` | system v0 + PPU + CPU | 编译 |
+| 29 | `system-v0` | `tb_nes_system_v0` | system v0 + PPU + CPU + `tb/system/tb_nes_system_v0.v` | 仿真 |
+| 30 | `system-v0-nmi` | `tb_nes_system_v0_nmi` | system v0 + PPU + CPU + `tb/system/tb_nes_system_v0_nmi.v` | 仿真 |
+| 31 | `system-v1-audio` | `tb_nes_system_audio` | system v1 + PPU + APU + CPU + `tb/system/tb_nes_system_audio.v` | 仿真 |
+| 32 | `system-v2` | `tb_nes_system_v2` | system v2 + PPU + APU + bus + CPU + `tb/system/tb_nes_system_v2.v` | 仿真 |
+| 33 | `system-v3` | `tb_nes_system_v3` | system v3 + PPU + APU + bus + PPU OAM DMA + CPU + `tb/system/tb_nes_system_v3.v` | 仿真 |
+| 34 | `system-v4` | `tb_nes_system_v4` | system v4 + PPU + APU + bus + PPU OAM DMA + controller + CPU + `tb/system/tb_nes_system_v4.v` | 仿真 |
+| 35 | `system-v5` | `tb_nes_system_v5` | system v5 + PPU + APU + bus + PPU OAM DMA + controller + mapper（5 个子模块 + dispatch）+ CPU + `tb/system/tb_nes_system_v5.v` | 仿真 |
+| 36 | `platform-core` | `nes_ep4ce10_top` | 平台集 + system v4 + PPU + APU + bus + PPU OAM DMA + controller + CPU + line buffer + VGA timing | 编译 |
+| 37 | `platform-tb` | `tb_nes_ep4ce10_top` | 平台集 + system v4 + PPU + APU + bus + PPU OAM DMA + controller + CPU + line buffer + VGA timing + `tb/platform/tb_nes_ep4ce10_top.v` | 仿真 |
+| 38 | `qsf-if-core` | `nes_ep4ce10_qsf_if` | 平台集 + system v4 + PPU + APU + bus + PPU OAM DMA + controller + CPU + line buffer + VGA timing | 编译 |
+| 39 | `peripheral-core` | `wm8978_i2c` | WM8978 I2C 主控 | 编译 |
+| 40 | `peripheral-i2c` | `tb_wm8978_i2c` | WM8978 I2C 主控 + `tb/peripheral/tb_wm8978_i2c.v` | 仿真 |
+| 41 | `sd-spi-cmd-core` | `sd_spi_cmd` | SPI 命令帧集 | 编译 |
+| 42 | `sd-spi-cmd-tb` | `tb_sd_spi_cmd` | SPI 命令帧集 + `tb/peripheral/tb_sd_spi_cmd.v` | 仿真 |
+| 43 | `cdc-fifo-core` | `nes_cdc_fifo` | CDC 集 | 编译 |
+| 44 | `cdc-fifo-tb` | `tb_nes_cdc_fifo` | CDC 集 + `tb/peripheral/tb_nes_cdc_fifo.v` | 仿真 |
+| 45 | `i2s-shifter-core` | `nes_i2s_shifter` | I2S 位串行集 | 编译 |
+| 46 | `i2s-shifter-tb` | `tb_nes_i2s_shifter` | I2S 位串行集 + `tb/peripheral/tb_nes_i2s_shifter.v` | 仿真 |
+| 47 | `audio-i2s-core` | `nes_audio_i2s` | I2S 组装集 | 编译 |
+| 48 | `audio-i2s-tb` | `tb_nes_audio_i2s` | I2S 组装集 + `tb/peripheral/tb_nes_audio_i2s.v` | 仿真 |
+
+行为说明：
+
+- `.vvp` 输出放在 `$env:TEMP\op_fpga_emu\`，脚本不向仓库写文件。
+- 十五个 core 目标只做 `iverilog` 编译/elaboration，不启动 `vvp`；它们不是功能测试。
+- 33 个 testbench 目标编译后用 `vvp` 运行，靠 `$fatal` 断言判定（`cdc-fifo-tb` 是纯 Verilog-2001 判定，靠自己的 `tb_live` 标志与 `$finish`；`chr-feasibility-tb` 同样是 `$fatal` 判定但只卡测量不变量、末尾打印 `PASS chr_fetch_feasibility`）；`vvp` 非零退出即失败。
+- 每个目标的源文件列表是**完整的**：`iverilog` 不会自动找依赖，所以 PPU 集带 `nes_ppu_sprite.v`、OAM DMA 单列、APU 集带 5 个子模块、mapper 集带 5 个子模块、bus 目标带 DMA 端口所在的 `nes_cpu_bus.v`、system v4 额外带 `nes_controller.v`、system v5 在 v4 的列表上再加整个 mapper 集（6 个文件）、三个平台目标在 v4 的列表上再加平台集（3 个文件）、`nes_line_buffer_vga.v` 和 `nes_vga_timing.v`、两个 WM8978 目标只用 `wm8978_i2c.v` 这一个源文件、两个 CHR 取数目标只用 `nes_chr_fetch_unit.v` 这一个源文件（它没有子模块）、两个 SPI 命令帧目标只用 `sd_spi_cmd.v` 这一个源文件（它也没有子模块，两个参数的 `CLK_HZ`/`SPI_HZ` 都由 TB 覆盖实例传入）、两个 CDC FIFO 目标只用 `nes_cdc_fifo.v` 这一个源文件（`nes_cdc_fifo` 没有子模块）、两个 I2S 位串行器目标只用 `nes_i2s_shifter.v` 这一个源文件（`nes_i2s_shifter` 也没有子模块，TB 自己例化 `BIT_REVERSED=0/1` 两个实例，不需要额外依赖闭包），**两个 I2S 组装层目标用三条源文件的完整列表 `nes_cdc_fifo.v` + `nes_i2s_shifter.v` + `nes_audio_i2s.v`**——`nes_audio_i2s` 实例化了前两个模块，少任何一个都会在 elaboration 阶段报 `Unknown module type`。**`ppu-ext-chr-tb` 用四条源文件的完整列表 `nes_ppu_sprite.v` + `nes_ppu2c02.v` + `nes_chr_fetch_unit.v` + `tb/ppu/tb_nes_ppu2c02_ext_chr.v`**——它同时例化两个 `nes_ppu2c02`，而 `EXTERNAL_CHR=1` 的那个在 `g_chr_external` 里例化了 `nes_chr_fetch_unit`，少列 `nes_chr_fetch_unit.v` 会在 elaboration 阶段报 `Unknown module type: nes_chr_fetch_unit`。`qsf-if-core` 与 `platform-core` 用同一条完整列表，因为 `nes_ep4ce10_qsf_if` 是 `nes_ep4ce10_top` 的引脚封装层；平台集里多放 `nes_ep4ce10_qsf_if.v` 不影响 `platform-core`/`platform-tb`，因为它们用 `-s` 指定顶层、只 elaborate 指定的那个 root。
+- 工具缺失、源文件缺失、编译错误、`$fatal` 命中、testbench 全局超时都是失败。脚本只报告错误，不安装工具。
+- 任何目标失败时脚本仍会把剩余目标跑完再汇总，最后以非零退出码结束；全通过时退出码为 0。
+- 最近一次**全量**顺序回归（**48 个目标 = 15 编译 + 33 仿真**）在本机实测：`Result: PASS (48 of 48)`、退出码 0，逐目标耗时合计 **905.7 s**（约 **15.1 min**；上一轮 47 个目标是 803.4 s / 约 13.4 min，**多出来的约 102 s 基本全是新目标 `ppu-ext-chr-tb` 的 133 s 减去各目标自身的抖动**）。逐目标实测（单位 s）：`ppu-ext-chr-tb` 133、`chr-feasibility-tb` 69.8、`mapper-mmc1` 59.4、`mapper-combined` 58.2、`system-v3` 58.5、`system-v5` 59、`mapper-mmc3` 53.4、`system-v2` 51.7、`system-v1-audio` 49.8、`system-v4` 48.3、`ppu-integration` 44.3、`system-v0` 44、`system-v0-nmi` 43.7、`platform-tb` 36.8、`cpu-inc` 30.1、`cpu-integration` 19.9、`cpu-bus` 19.4、`vga-timing-tb` 7.6、`apu-tb` 5.9、`video-tb` 3.7、`system-core` 1.8、`qsf-if-core` 1.4、`ppu-core` 1.3、`platform-core` 1.3、`mapper-nrom` 1.3、`chr-fetch-tb` 0.1、`ppu-sprite` 0.1、`controller-tb` 0.1、`cart-ines-tb` 0.1、`apu-core` 0.1、`peripheral-core` 0.1、`sd-spi-cmd-core` 0.1、`sd-spi-cmd-tb` 0.1、`i2s-shifter-tb` 0.1、`ppu-oam-dma` 0.2、`line-buffer-tb` 0.2、`bus-tb` 0.2、`cdc-fifo-tb` 0.2、`peripheral-i2c` 0.3、`cpu-core` 0.1、`audio-i2s-tb` 0；`chr-fetch-core`/`video-core`/`line-buffer-core`/`vga-timing-core`/`cdc-fifo-core` 五个纯编译目标各 0.0 s。`-Mode all` 是顺序执行，不并行。
+- **`ppu-ext-chr-tb` 是当前最慢的目标，约 133-138 s**（`-Mode all` 里 133 s、`-Mode ppu` 单独跑 138 s，两次实测的差异是机器抖动）。它跑 5 组配置 × 4 帧（1 帧 warm-up + 3 帧比对），每帧 341×262 = 89,342 个 `ce`，在**每一个** `ce` 上同时比对两个 `nes_ppu2c02` 的 `pixel_index` 与 `bg_pa_enable`、逐个核对 `chr_req` 的地址、逐字节核对锁存的平面数据，判定量比"数一数有几帧"大两个数量级。**它占全量的约 14.7%**（133 / 905.7），与 `chr-feasibility-tb`（69.8 s，约 7.7%）合计约 22.4%。**这对 `-Mode all` 的墙钟影响是可测的**：全量从上一轮的 803.4 s 涨到本轮的 905.7 s（约 13.4 min → 15.1 min）。如果之后要继续加逐帧/整帧断言，必须先评估这一耗时再决定是否留在 `-Mode all` 里。
+- `chr-feasibility-tb` 在最近一次全量里跑过并通过：69.8 s（`-g2012` 编译 + `vvp`，打印 13 组 `PASS-FRAME` 统计与 `PASS chr_fetch_feasibility`；`-Mode ppu` 单独跑时 71.6 s）。它**现在不再是最慢的目标**——`ppu-ext-chr-tb` 约 **133 s**，几乎是它的两倍。`chr-feasibility-tb` 仍然**只是可行性测量、不是等价性证据**（不比较任何两个实现，也没有实例化 `EXTERNAL_CHR = 1'b1`），测量结论见 [`docs/modules/chr-fetch-feasibility.md`](docs/modules/chr-fetch-feasibility.md)；像素级等价性由 `ppu-ext-chr-tb` 提供，见上面那条。它当初还顺带给出了 `nes_chr_fetch_unit` 位宽修复的依据：`Q1 bg_tiles_per_line` 在 pass K（`fine_x=6` + `coarse_x=20` + `PPUMASK=1E`）实测 `min=33 max=33`，即最坏行需要 33 个 tile。
+- **本轮上一批加入的四个目标都在最近一次全量里跑过并通过**：`chr-fetch-core` 0.0 s（`-g2001` compile-only）、`chr-fetch-tb` 0.1 s（`-g2012` 编译 + `vvp`，打印 `A3 worst row tile_count=33: chr_req x66 addrs 1024..1544 (base+0..base+520), all 33 low/high pairs match CHR model`、`A4 chr_addr already correct one ce before all 66 request beats` 与 `PASS nes_chr_fetch_unit`）、`sd-spi-cmd-core` 0.1 s（`-g2001` compile-only）、`sd-spi-cmd-tb` 0.1 s（`-g2012` 编译 + `vvp`，打印 `A2 CMD17 sent as 51 00 00 12 34 15, reply 51 00`、`A3 ... CMD00 byte is 0x95`、`A6 half period 26..26 clocks (want 26 +-1), 50% duty, 121/121 edges` 与 `PASS sd_spi_cmd`）。四个目标合计不到 0.5 s，对墙钟没有可测影响。
+- 两个新加入的 I2S 目标都在最近一次全量里跑过并通过：`audio-i2s-core` 0.0 s（`-g2001` compile-only）、`audio-i2s-tb` 0.1 s（`-g2012` 编译 + `vvp`，打印 `tb_nes_audio_i2s: 128 bits checked on 128 consecutive sample_valid bclk edges, 4 samples back to back` 与 `PASS nes_audio_i2s`）。
+
+CPU 专用入口保持不变：
+
+```powershell
+.\tools\sim_cpu.ps1 -Mode rtl
+.\tools\sim_cpu.ps1 -Mode integration
+.\tools\sim_cpu.ps1 -Mode bus
+.\tools\sim_cpu.ps1 -Mode all
+```
+
+其中 `rtl` 只做 elaboration 加上一次无 testbench 的空 `vvp`（`pure` 是同义别名），`integration`/`bus`/`all` 分别是集成 TB、bus TB 和这两者的顺序运行。注意 `sim_cpu.ps1 -Mode all` **不包含** `tb/cpu/tb_nes_cpu6502_inc.v`；INC 专项只在 `sim_all.ps1` 里。
+
+各 testbench 的完整期望输出、接口合同和“明确未实现”清单见 `tb/cpu/README.md`、`tb/ppu/README.md`、`tb/apu/README.md`、`tb/bus/README.md`、`tb/cart/README.md`、`tb/controller/README.md`、`tb/mapper/README.md`、`tb/system/README.md`、`tb/video/README.md`。等价的直接 Icarus 入口和各 `run_*.do` 也在那些 README 里。**`tb/platform/` 和 `tb/peripheral/` 还没有 README**，它们的断言清单和固定期望输出只写在 `tb/platform/tb_nes_ep4ce10_top.v` / `tb/peripheral/tb_wm8978_i2c.v` / `tb/peripheral/tb_sd_spi_cmd.v` / `tb/peripheral/tb_nes_cdc_fifo.v` / `tb/peripheral/tb_nes_i2s_shifter.v` / `tb/peripheral/tb_nes_audio_i2s.v` 的文件头和 `-Mode platform` / `-Mode peripheral` 的运行输出里。
+
+ModelSim/Questa 的入口分布在 `tb/cpu/`、`tb/ppu/`、`tb/system/`、`tb/apu/`，使用 `vlib`、`vlog`、`vsim` 和对应的 `run_*.do` 流程；它们不属于 Icarus 脚本，也未被本仓库验证过。`tb/video/`、`tb/platform/` 和 `tb/peripheral/` 没有对应的 `.do` 脚本。
+
+## 下一步
+
+以下属于计划中的工作，不表示已经完成：
+
+1. 冻结 CPU 的总线请求/完成/保持合同，补齐官方指令的差分覆盖，并加入可复现的 C golden trace 与小型官方测试 ROM，区分功能差异与已知微周期差异。
+2. 按总线合同补齐 PPU 读取抑制与 odd-frame skip 的精确时序，并把 CPU/PPU 同相取舍（当前每个寄存器访问吃掉一个 dot 的滚动更新）移到平台层处理。
+3. 为 sprite 通路补 secondary OAM、评估窗口、shift register 装载顺序和 `$2002` 读取抑制的 8 像素窗口，并让 sprite 0 hit / overflow 的清零与置位点对齐真实硬件。
+4. mapper 现在只完成了 v5 的第一步（PRG bank 窗口 + mapper IRQ 线或）。外部 CHR 的**背景行取数通路已实现并通过像素级 A/B 等价验证**（`nes_ppu2c02` 的 `g_chr_external` 例化 `nes_chr_fetch_unit` + PPU 侧 `bg_lo_q`/`bg_hi_q`/`bg_ready` 平面锁存 + 逐 tile 的 `b_k = 8k - fine_x` 窗口在 `b_k - 9` 发请求；`ppu-ext-chr-tb` 实测 5 组配置 × 3 帧、**921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对全部一致**，另核对 337,450 次 `chr_req` 地址与 126,546 对锁存平面字节），**但外部 CHR banking 仍然没有接到 PPU**（`nes_system_v5` 的 `ppu_addr`/`ppu_a12` 仍绑 0），**精灵 CHR 取数完全没有**（外部模式不渲染任何精灵像素）、`$2007` 对外部 CHR 的写通路也没有（`chr_we` 恒 0，TB 靠层次化预载 CHR），渲染期间写 `$2005` 的相位处理同样未做。设计决策、时序合同、等价性陷阱、时序预算、被拒绝的方案、已知行为差异，以及**实施进度 / 仍未实现项 / 证据边界 / 下一步**见 [`docs/modules/ppu-external-chr.md`](docs/modules/ppu-external-chr.md) 第 11 节；该文档第 9 节记录了 `CHR_ADDR_BITS` 从 16 抬到 17 这一条**已执行**的改动，以及"位宽修完不等于外部 CHR 能用"的遗留清单。**继续投入前仍需先人工决定是否接受该文档第 8 节的三条行为差异**（外部模式 `$2007` 写 CHR 后渲染晚 1 dot 可见、sprite overflow 变成下一行计数、`$2007` 读 nametable 区间别名到 CHR 前 8 KiB）——8.1 与 8.3 现在**既没实现也没验证**，8.2 也没实现。之后再把 PPU 侧 mirroring 变成运行期端口，补四屏 nametable RAM、PRG RAM 阵列与 mapper IRQ 到 APU IRQ 的仲裁，并让 MMC3 的 A12 扫描 IRQ 在系统级真正被时钟。
+5. 补 APU 的微周期级副作用、`$4017` 写延迟、frame IRQ 读窗口、`$4002` 读副作用、IRQ filter 与 CPU 屏蔽、非线性 mixer、滤波/重采样/FIFO 和左右分路。
+6. 激励并覆盖 DMC DMA 通路（v3/v4/v5 目前只验证 OAM DMA 优先），并解决 `nes_cpu_bus` 等待态与 owner ack 的跨时钟域同步。
+7. 视频走行缓冲路线已经有第一版平台实现：`nes_line_buffer_vga.v` 与 `nes_vga_timing.v` 都接进了 `nes_ep4ce10_top`，PPU 像素到 VGA HS/VS/DE/RGB 的链在 `tb/platform` 里有 Icarus 证据。下一步处理 toggle 没有背压导致的 overrun（加 bank 深度或 ready/valid 应答）、帧级同步与撕裂处理，把行缓冲也接进 System 顶层，并把 `nes_video_scaler.v` 保留为整帧参考模型继续做交叉检查基准（它的 TB 期望值——调色板、2×2 复制、整帧 240×1、512×480 无黑边——继续作为行缓冲版本的对照）；需要缩帧截图或 CPU 侧回读画面时再用整帧版本或 SDRAM 帧缓冲。
+8. EP4CE10 平台层的下一批：Quartus 工程骨架（`quartus/` 下的 `.qpf`/`.qsf`/`.sdc`）已经在位但**从未在 Quartus 里打开过**——第一步是在 Quartus 里 `File → Open Project…` 打开 `quartus/op_fpga_emu.qpf`、核对器件/顶层/Design Files/TimeQuest 四处（`quartus/README.md` 第 1、2 节），然后用 MegaWizard + TimeQuest 确认 altpll 并用它替换 `nes_ep4ce10_pll_stub.v`（`clk_ntsc` 21.477272 MHz、`clk_vga` 25 MHz，`locked` 参与复位组合）；接着在 Pin Planner 里对着原理图逐条填**目前一条都没有的**引脚分配，并按 `op_fpga_emu.sdc` 第 6 节的 `TODO(PLL)` 清单把 3 条 `create_clock` 改成 `derive_pll_clocks` 的 generated clock、补按键 CDC `false_path` 与 `ce_cpu`/`ce_ppu` 多周期约束（步骤与判据见 `docs/hardware/12-ntsc-clock-and-pll.md` 第 6 节）；再接 TF 卡（换掉 16 KiB 片上 `prg_rom`）、SDRAM 控制器，以及把已经跑通的 `wm8978_i2c` 接进 `nes_ep4ce10_top`（`cfg_done` 作为 codec 就绪门控、`scl`/`sda` 引脚、上电配置只在 `clk_sys` 域跑一次）并补上它之外的部分——**把已经有 TB 的 I2S 组装层 `nes_audio_i2s.v` 真正接进 `nes_ep4ce10_top`**（`nes_audio_i2s.v` 与它的 TB 已在 `rtl/nes_core/peripheral/` 和 `tb/peripheral/`，并已进 `tools/sim_all.ps1` 的 `audio-i2s-core`/`audio-i2s-tb`；剩下的活是定 MCLK/BCLK 分频数值、把 `audio_valid`/`audio_left`/`audio_right` 接进 `wr_clk` 域并定重采样策略、把已经跑通的 `nes_i2s_shifter` 与 `nes_cdc_fifo` 经 `nes_audio_i2s` 接进顶层并给出 DOUT/LRC/BCLK 引脚）；补第二个手柄口、Zapper/expansion 位和 `$4017` 读状态位；然后以 Quartus/STA（Fitter 资源、TimeQuest slack）和板级测试单独验收。
+
+阶段边界和通过条件见 [`docs/00-overview/verification-plan.md`](docs/00-overview/verification-plan.md)；项目范围见 [`docs/00-overview/project-charter.md`](docs/00-overview/project-charter.md)。

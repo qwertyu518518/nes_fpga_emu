@@ -1,0 +1,142 @@
+# ============================================================================
+# op_fpga_emu.qsf —— Quartus Prime 工程设置（Settings）
+# ----------------------------------------------------------------------------
+# 状态：**未在 Quartus 中打开/编译过**。本机没有安装 Quartus，本文件里的器件、
+#        IO 电压、文件列表、SDC 指向全部是按仓库文档与厂商例程观察写出来的骨架，
+#        没有任何一条经过 Quartus 解析、综合、Fit 或 TimeQuest 校验。
+#        见 quartus/README.md 的"未验证清单"。
+#
+# 路径说明：本 .qsf 位于 quartus/ 下，所有相对路径都相对本文件所在目录解析，
+#        所以 RTL 用 ../rtl/... 形式。Quartus 会把路径规范化成工程内部的
+#        <project>/... 形式。
+#
+# 格式说明：# 开头是注释；每一行是一条 set_global_assignment。
+# ============================================================================
+
+# ---------------------------------------------------------------- 器件与工程
+set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE10F17C8
+set_global_assignment -name DEVICE_FAMILY "Cyclone IV E"
+
+# 顶层实体：默认直接用平台顶层。
+#
+# 备选：改成 nes_ep4ce10_qsf_if（板级引脚封装层，rtl/platform/ep4ce10/），
+#       顶层端口名就会变成 sys_clk / sys_rst_n / key[3:0] / vga_hs / vga_vs /
+#       vga_rgb[15:0] / led[3:0] / beep，Pin Planner 里看到的就是板级信号名。
+#       两个顶层二选一，理由与代价见 quartus/README.md 第 4 节。
+set_global_assignment -name TOP_LEVEL_ENTITY nes_ep4ce10_top
+
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 20.1.0
+set_global_assignment -name SAVE_DISK_SPACE_SOFT_COMPILE OFF
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# ---------------------------------------------------------------- I/O 电压
+# 【厂商例程观察】多个厂商例程的 QSF 用 STRATIX_DEVICE_IO_STANDARD "2.5 V"
+# 作为工程级 IO 约束起点（这个 assignment 名字在 Cyclone/Stratix 家族里通用）。
+# **未验证**：每个引脚所在 bank 的 VCCIO 必须与这个电平匹配，且不同 bank 可能
+# 需要不同电平。查原理图确认后按 bank 分组覆盖，或直接在 Pin Planner 里改。
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "2.5 V"
+
+# ---------------------------------------------------------------- 时序分析
+# TimeQuest 约束文件。不同 Quartus 版本里这条 assignment 的名字可能显示为
+# SDC_FILE 或 SOURCE_TSDC_FILE_NAME，**未验证**：打开后请在 Assignments 面板
+# 里确认 TimeQuest 那一行指向 op_fpga_emu.sdc，而不是靠文件存在就认为生效。
+set_global_assignment -name SDC_FILE op_fpga_emu.sdc
+
+# ---------------------------------------------------------------- Verilog 源
+# rtl/nes_core/（34 个 .v）+ rtl/platform/ep4ce10/（3 个 .v）全量列出，合计 37 个
+# 文件 / 37 个模块（一文件一模块），已与磁盘逐条核对一致（missing = 0、ghost = 0）。
+#
+# **未验证（重要）**：Quartus 会把"没有被任何模块实例化"的模块当成候选顶层实体。
+# 按本清单，从 nes_ep4ce10_top 出发的实际层次闭包只有 16 个模块
+# （用 Icarus Verilog 以 -s nes_ep4ce10_top 展开后读 vvp 的 .scope 得到）：
+#   nes_ep4ce10_top
+#   ├─ nes_system_v4
+#   │  ├─ nes_cpu6502 / nes_cpu_bus / nes_controller / nes_oam_dma
+#   │  ├─ nes_ppu2c02 ── nes_ppu_sprite
+#   │  └─ nes_apu2a03 ── nes_apu_pulse / nes_apu_triangle / nes_apu_noise /
+#   │                   nes_apu_dmc / nes_apu_length_lut
+#   ├─ nes_line_buffer_vga
+#   └─ nes_vga_timing
+# 下面清单里其余 21 个模块（37 − 16）都不在这个闭包里，可能各自变成一个额外的
+# 顶层实体：
+#   nes_system_v0 / v1 / v2 / v3 / v5
+#   nes_mapper 与 5 个子 mapper（nrom / uxrom / cnrom / mmc1 / mmc3）
+#   ines_header_parser、nes_video_scaler
+#   nes_chr_fetch_unit（ppu/ 1 个）
+#   wm8978_i2c、nes_cdc_fifo、nes_i2s_shifter、nes_audio_i2s、sd_spi_cmd（peripheral/ 5 个）
+#   nes_ep4ce10_pll_stub、nes_ep4ce10_qsf_if（选默认顶层时）
+# 三种处理办法（任选其一，见 README 第 4 节）：
+#   a) 在 Project Navigator 里对它们右键 → "Ignore Top-Level Entity"；
+#   b) 把这些行的 VERILOG_FILE 注释掉（本仓库的 .qsf 不删源文件，只是不参与编译）；
+#   c) 什么都不做，观察 Analysis & Synthesis 报告里出现了几个顶层实体。
+#
+# rtl/nes_core/apu/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/apu/nes_apu_length_lut.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/apu/nes_apu_pulse.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/apu/nes_apu_triangle.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/apu/nes_apu_noise.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/apu/nes_apu_dmc.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/apu/nes_apu2a03.v
+# rtl/nes_core/bus/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/bus/nes_cpu_bus.v
+# rtl/nes_core/cart/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/cart/ines_header_parser.v
+# rtl/nes_core/controller/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/controller/nes_controller.v
+# rtl/nes_core/cpu/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/cpu/nes_cpu6502.v
+# rtl/nes_core/mapper/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/mapper/nes_mapper.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/mapper/nes_mapper_nrom.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/mapper/nes_mapper_uxrom.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/mapper/nes_mapper_cnrom.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/mapper/nes_mapper_mmc1.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/mapper/nes_mapper_mmc3.v
+# rtl/nes_core/ppu/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_ppu_sprite.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_ppu2c02.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_oam_dma.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/ppu/nes_chr_fetch_unit.v
+# rtl/nes_core/peripheral/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/wm8978_i2c.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/nes_cdc_fifo.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/nes_i2s_shifter.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/nes_audio_i2s.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/peripheral/sd_spi_cmd.v
+# rtl/nes_core/system/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/system/nes_system_v0.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/system/nes_system_v1.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/system/nes_system_v2.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/system/nes_system_v3.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/system/nes_system_v4.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/system/nes_system_v5.v
+# rtl/nes_core/video/
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/video/nes_line_buffer_vga.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/video/nes_vga_timing.v
+set_global_assignment -name VERILOG_FILE ../rtl/nes_core/video/nes_video_scaler.v
+# rtl/platform/ep4ce10/
+set_global_assignment -name VERILOG_FILE ../rtl/platform/ep4ce10/nes_ep4ce10_top.v
+set_global_assignment -name VERILOG_FILE ../rtl/platform/ep4ce10/nes_ep4ce10_qsf_if.v
+set_global_assignment -name VERILOG_FILE ../rtl/platform/ep4ce10/nes_ep4ce10_pll_stub.v
+
+# ---------------------------------------------------------------- 引脚（故意留空）
+# 本工程**不写任何 PIN_LOCATION**。原因：引脚号是电气与板级复用的事实，只能由
+# 原理图 + 器件手册确认，仓库里的数字只是【厂商例程观察】的转录，写进 QSF 会
+# 变成一个看起来已经验证过的引脚承诺。
+#
+# 打开工程后请在 Pin Planner 里对着原理图逐条填入。建议先填的清单在
+# quartus/README.md 第 3 节（含 vga_rgb[15:0] 的位序表）。
+#
+# RGB565 16 位的逻辑位 → 物理 pin 的位序（【厂商例程观察】，bit15 = MSB 在第一
+# 个 pin，完整表见 README 第 3 节）：
+#   vga_rgb[15]=A8  [14]=B8  [13]=A9  [12]=B9  [11]=A10 [10]=B5  [9]=A6  [8]=B6
+#   vga_rgb[ 7]=A7  [ 6]=B7  [ 5]=A2  [ 4]=B2  [ 3]=A3  [ 2]=B3  [ 1]=A4  [0]=B4
+#
+# 填完之后建议把确认过的引脚回写到 README，再考虑写进本文件。
+
+# ---------------------------------------------------------------- PLL IP
+# altpll **尚未生成**。生成之后 MegaWizard 会产生一个 .qip 与 .v 文件，
+# 做法与需要改的 SDC 位置见 quartus/README.md 第 3 节第三步。
+# 在那之前，clk_ntsc / clk_vga 是顶层的独立输入端口，SDC 按独立输入时钟处理。

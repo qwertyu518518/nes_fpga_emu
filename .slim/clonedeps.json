@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "updatedAt": "2026-09-25T00:00:00.000Z",
+  "dependencies": [
+    {
+      "name": "caseif/cNES",
+      "resolvedVersion": "7c8c252d74008e9a73a79ae18475d316d4f63290",
+      "repoUrl": "https://github.com/caseif/cNES.git",
+      "ref": "7c8c252d74008e9a73a79ae18475d316d4f63290",
+      "path": ".slim/clonedeps/repos/caseif__cNES",
+      "packagePath": ".",
+      "reason": "C11 NES emulator reference for CPU, bus, PPU, DMA, and mapper architecture"
+    },
+    {
+      "name": "caseif/c6502",
+      "resolvedVersion": "4f4bf74504611ed85ea9262094bb1a9c5c638563",
+      "repoUrl": "https://github.com/caseif/c6502.git",
+      "ref": "4f4bf74504611ed85ea9262094bb1a9c5c638563",
+      "path": ".slim/clonedeps/repos/caseif__c6502",
+      "packagePath": ".",
+      "reason": "Cycle-oriented C6502 implementation used to study CPU bus-cycle behavior"
+    },
+    {
+      "name": "ObaraEmmanuel/NES",
+      "resolvedVersion": "aa880b955e7762e4d4b18ccf96f5555c7f1fba2e",
+      "repoUrl": "https://github.com/ObaraEmmanuel/NES.git",
+      "ref": "aa880b955e7762e4d4b18ccf96f5555c7f1fba2e",
+      "path": ".slim/clonedeps/repos/ObaraEmmanuel__NES",
+      "packagePath": ".",
+      "reason": "C NES implementation used for APU, DMC DMA, PPU timing, and mapper cross-checks"
+    }
+  ]
+}

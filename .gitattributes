@@ -1,0 +1,17 @@
+# This repository stores UTF-8 without BOM and LF line endings, and relies on
+# that (see AGENTS.md). A Windows checkout with core.autocrlf=true would
+# otherwise rewrite every file to CRLF, which is the exact condition that
+# destroyed README.md once. Pin LF for everything, in both directions.
+* text=auto eol=lf
+
+# Never let git touch line endings in binary files.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.vcd binary
+*.vvp binary
+*.bin binary
+*.hex binary
+*.rom binary

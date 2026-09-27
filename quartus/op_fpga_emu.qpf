@@ -1,0 +1,7 @@
+# Quartus Prime Project File
+#
+# 状态：未在 Quartus 中打开/编译过（本机没有安装 Quartus），见 quartus/README.md。
+# QUARTUS_VERSION 只是占位：Quartus 打开工程时会用它自己的版本重写这一行。
+# 本文件与 op_fpga_emu.qsf 是一对：.qpf 是工程身份，.qsf 才是全部设置。
+QUARTUS_VERSION = "20.1.0"
+PROJECT_REVISION = "op_fpga_emu"
