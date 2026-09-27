@@ -1432,3 +1432,166 @@ $v4 = @(
 - **PRG RAM / `$6000-$7FFF` 没有存储阵列**：UxROM 的 WRAM、MMC1 的 `prg_bank[4]`、MMC3 的 `$8000` bit5 与 `$A001` 只到"寄存器"这一层。
 - **MMC1 串行移位寄存器在系统级没有被程序驱动过**。
 - 与 v4 相同的缺口：`$4017` 读只回手柄位、open bus 上没有手柄位、`$4016` bit6/bit7 扩展口、第 9 次以后读恒 1、手柄物理层、DMC DMA 未激励、`OAMADDR_WRITE=0`、音频输出通路、上板频率与跨时钟域。
+
+## v6 testbench（`nes_system_v6`）
+
+`tb_nes_system_v6.v` 例化**三个** DUT（共用一个 `clk`），是本目录第一个在同一个 testbench 里做**两个不同顶层之间的 A/B**、并且**带外部 CHR 存储模型**的集成 testbench。本目录开头那句"本目录有五个 testbench"和表格停留在 v3，v4/v5/v6 各自成节（与 v4 的做法一致），本节只补 v6。
+
+顶层接口合同、CHR 地址合同（13 bit 本地窗口 / bit 12 是 pattern-table 选择 / 17 bit 最终地址 / 无组合环 / 1 `ce` 寄存读 / 无背压）以及"为什么是这样"，见 [`docs/modules/system-v6.md`](../../docs/modules/system-v6.md)。本节只写 testbench 本身。
+
+### 三个实例
+
+| 实例 | 顶层 | `MAPPER_SELECT` | CHR | 程序镜像 | 角色 |
+| --- | --- | --- | --- | --- | --- |
+| `ab_v6` | `nes_system_v6` | 0（NROM） | 顶层 `chr_rdata` / `chr_req` / `chr_final_addr` + **自己 128 KiB 的 CHR 模型**（**寄存 1 `ce` 读**） | 主程序 | **被测对象** |
+| `ab_v5` | `nes_system_v5` | 0（NROM） | PPU 内部 8 KiB CHR，**由 TB 层次预载** | **同一份**主程序镜像 | **A/B 参照**：逐 `ce` 比 `pixel_index`、比 PPU 寄存器终态 |
+| `chr_mmc3` | `nes_system_v6` | 4（MMC3） | 自己 128 KiB 的 CHR 模型（寄存 1 `ce` 读） | **另一份**镜像 | MMC3 CHR bank 切换证明 + A12/IRQ 证明 |
+
+两个实例的参数完全相同：`PRG_SIZE_BYTES = 131072`、`NROM_PRG_SIZE_BYTES = 32768`（标准 32 KiB NROM 板）、`HEADER_MIRRORING = 3'd1`（iNES 的 vertical arrangement 位，让 P1-3 有一个非零的头值可观测）。`PRG_SIZE_BYTES` 必须大于 32 KiB，否则 `nes_mapper_nrom` 的 16 KiB 拼接分支会算出负偏移。
+
+**`chr_mmc3` 必须用另一份程序镜像**：P0-2 的 cart 写计数和 P1-9 的 PPUCTRL 终值是 NROM 专用的，而 P0-7 与 P1-5 需要额外的 `$8001` / `$C000` / `$E000` 写，那些写会改掉这两个数字；混在一个实例里，断言就变成互相打架。
+
+### CHR 图像必须由 testbench 预载，不能靠 `$2007`
+
+**这是 v6 相对 v4 的硬性差异。** v4 的程序是用 `$2007` 写 CHR 来造 tile 的（见上面"层次预填与 CPU 写入的分工"那张表里的 CHR 行），而**外部 CHR 模式下 `$2007` 对 CHR 的写被 PPU 丢弃**。所以 v6 的 TB 在层次上把 128 KiB CHR 图像预载进每个外部实例的 CHR 模型，程序只负责设置寄存器、跑 NMI/IRQ、做 OAM DMA、打 mapper 寄存器。**任何照抄 v4 程序写法的示例在这里都会得到全 0 的 tile**——这是 testbench 与被测顶层的契约变化，不是缺陷。
+
+### 外部 CHR 的寄存读要求
+
+TB 的 CHR 模型是**寄存器输出**（在 `ce_ppu` 上把 `chr_mem[chr_final_addr]` 锁进 `chr_rdata`），不是组合读。因此"**`chr_req` 拉高那一拍地址已经正确、`chr_rdata` 在下一个 `ce` 有效沿给出那个字节**"这个合同是**被断言出来的**而不是假定的：
+
+- 两个取数单元的地址都在发 `chr_req` 的**前一拍**装好（P0-2 的逐拍比对会同时暴露地址算错和地址晚一拍两种错误）；
+- `P0-6` 把 TB 自己的 `chr_rdata` 与 DUT 内部取数单元的 `bg_lo` / `bg_hi` 锁存**分别对着模型核**：如果 `chr_rdata` 晚一拍或者早一拍，两组 beat 都会出错；
+- **这个端口没有背压**：`chr_req` 是无条件请求，没有 ready / ack / valid，**没有任何机制允许存储器合法地拖延**。TB 的 CHR 模型是**零时序代价**的，所以本 testbench 证明的是**地址与协议合同**，**不证明任何真实存储器能满足 1 `ce` 的寄存读截止期**（真实 SDRAM 的 CAS / 突发 / 刷新是若干个 `ce`，而这个端口每 2 个 `ce` 就要一个字节）。
+
+### 程序布局与 ±127 分支约束
+
+与 v5 完全相同：6502 的相对分支位移是带符号 8 bit，TB 的 `bne_to` / `bne_flush` 在算出位移后立刻检查，越界直接 `$fatal`；每个程序被切成若干块，每块结尾是 `JMP <下一块>` + `JMP <远端失败块>` 的 6 字节 trampoline，块内的 `BNE` 只跳到本块自己的 trampoline。v6 的程序有三条失败块 `$8800` / `$8810` / `$8820`，数据表在 `$8900`，向量 `fffa = $8400`（NMI）、`fffc = $8000`（reset）、`fffe = $8500`（IRQ）。
+
+### 断言覆盖
+
+**P0 组针对 v6 的外部 CHR 通路本身。** 每条都写成"能被证伪"的形式：期望值来自 TB 侧独立重算或直接读 PPU 自己的端口，而不是从 DUT 的输出反推。
+
+1. **P0-1 复位与身份**：复位窗口内 `chr_req` 与 `chr_final_addr` 恒 0；`ab_v6` 与 `ab_v5` 的 `dbg_mapper_id` 都是 0。
+2. **P0-2 地址翻译**：`chr_final_addr` 逐拍等于 TB 侧独立模型 `(tb_chr_bank_model << 13) | (ab_v6.u_ppu.chr_addr & 0x1FFF)`，并检查 `local[12:0] == final[12:0]`、`final[16:13] == 0`。**本地那一项是从 PPU 自己的 `chr_addr` 端口层次化读出的**，所以这条断言不是自证——如果它是从 `chr_final_addr` 拆出来的，"顶层再加一次地址"这种错误改法会一起通过。
+3. **P0-2 cart 写侧**：TB 模型只从导出的 `cart_xfer && bus_we` 起拍，预测**下一 `clk`** 的地址与数据，核对 `mapper_write_pulse` 的个数、地址、数据与脉宽。
+4. **P0-3 bit 13 被丢弃**：`chr_final_addr[13]` 在最后一帧的每一次请求上都为 0。**同一条断言里还带一个非空洞探针**：如实报告"本 RTL 里没有任何激励能把本地 `chr_addr[13]` 抬起来"（背景单元被接成 `tile_count=1`，13 bit `tile_base` 顶到 `0x1FF7`，`+8` 仍是 `0x1FFF`；精灵侧的 13 bit `pat_addr` bit 3 恒 0，同样顶到 `0x1FFF`），并把这条限制写成显式说明。**已知限制，不是被删掉的检查**：`chr_final_addr[13] == 0` 仍然逐请求断言，`(bank << 13) | local` 仍然对着 PPU 端口断言，所以后置加法器被重新引入时照样会失败；**不能被证明的**只是"一个假想的 bit 13 能活过那次丢弃"，因为没有激励能抬起它。**pattern-table 选择因此落在本地 bit 12**，mapper 保留它。
+5. **P0-4 整帧 A/B**：`ab_v6` 与 `ab_v5` 在**每一个 `ce`** 上比 `pixel_index`；可见像素比较与不加门的全 `ce` 比较同时做。**证明的是 PPU 外部 CHR 通路在 NROM 下的渲染结果与内部 CHR 路径逐 `ce` 相同**。
+6. **P0-5 A/B 非空洞**：最后一帧按 `pixel_index` 分类计数（`lines<8, cols 8-15` → 2；`lines 32-39, cols 8-15` → 6；其余 → 1），并与 v5 侧逐像素比对不匹配数。**这一条是为了让 P0-4 的 0 分歧不是"两个实例都输出同一个常量"造成的假通过。**
+7. **P0-6 CHR 模型自身可信**：把 `chr_rdata` 与取数单元的 `bg_lo` / `bg_hi` 锁存分别对着模型核。
+8. **P0-7 MMC3 bank 切换**（在 `chr_mmc3` 上）：三次 `$8001` 写、逐拍核对 `chr_final_addr`、检查位 16、以及具名 tile-0 像素索引。详见下一小节。
+9. **P0-8 无总线碰撞**：`chr_req` 从不在连续两个 `ce` 上为高；背景取数单元（`u_ppu.g_chr_external.u_chr_fetch.chr_req`）与精灵取数单元（`u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req`）从不在同一个 `ce` 上同时要数据。**这个端口没有背压，所以一次碰撞就等于静默丢掉一个背景请求拍**——它成立只因为两个窗口实测不重叠。`ab_v5` 不参与这一项（`nes_system_v5` 根本没有外部 CHR 端口）。
+
+**P1 组不是"沿用 v5 的结论"，而是在 v6 实例上重新证明一遍。** `EXTERNAL_CHR` 改变了 PPU 的读通路，任何"v5 说过所以 v6 没问题"的推理都不成立。
+
+- **P1-1 可等待总线与 PRG 侧**：每个 `ce_cpu` 上 `bus_stall == bus_req && !bus_fire`，`dbg_wait_count` 在每个 `clk` 上为 0；每次 cart 读在 `mapper_prg_bank_offset`、`cart_din`、`bus_din` 三处对上 TB 侧独立 PRG bank 模型。另有 **CHR 端口结构上不在 CPU 总线上**的检查：按 `bus_owner` 分解成 open / ram / ppu / apu / cartrom，统计 CPU 总线空闲时的 CHR 请求数与 DMA 持总线时的 CHR 请求数。
+- **P1-2 OAM DMA**：`$4014` 启动次数、`dma_ack` 次数、`$2004` 写次数、**MMIO 命中数**、写地址与数据是否等于源页。**并且专门检查一条 v6 特有风险**：`$2004` 在**外部 CHR 的 PPU** 里仍然落进 `oam_ram`（`oam_ram[0..3] = 11 22 33 44`，256 字节全部与源页相同）。这条如果漏了，"DMA 字节被 CHR 读路径抢走"会非常难查。
+- **P1-3 mirroring**：iNES 头的模式被观测并被导出，但 `nes_ppu2c02` **没有运行期 mirroring 端口**，两个实例都以 `MIRROR_VERTICAL = 0` elaboration——**模式被观测，没有被应用**。TB 把它写成显式的 KNOWN GAP 而不是省略。
+- **P1-4 IRQ 线或**：每个 `clk` 上 `irq_line == (mapper_irq | apu_irq)`、`u_cpu.dbg_irq_pending == irq_line`；同时记录 NROM 的 `mapper_irq` 高电平 `clk` 数与被 `$4017 = $40` 禁止后的 `apu_irq_o` 高电平 `clk` 数。
+- **P1-5 MMC3 A12 与 `force`**：在 `chr_mmc3` 上——`$C000` 锁存 `0x07`；`$C001` 置 reload 且**一直保持 1**；计数器**仍是 0**，因为 `mapper_ppu_a12` 在 `nes_system_v6` 里硬绑 0、a12 滤波器一次都没触发；`$E001` 然后 `$E000` 让 `irq_enabled = 0`；`mapper_irq` 在整个程序的**每一个** `clk` 上都是低。然后 `force` 压 `u_mapper.u_mmc3.irq_enabled_r` / `irq_pending_r`，走通 `mapper_irq → irq_line → dbg_irq_pending`，断言 **7 个 `bus_fire` 周期的入口**（min = max = 7、错误状态列表数 0、停顿时 0、I 标志已置位时响应数 0）、`$FFFE` 取向量的次数、handler 的地址与 `ram[0013]` 的终值。
+- **P1-6 NMI**：`nmi_o == vblank && ppuctrl[7]` 逐 `clk` 断言，`$FFFA` 取向量次数与 `ram[0010]` 终值。
+- **P1-7 controller**、**P1-8 音频**（sample strobe 数与非零样点数、DMC 的 bus req / grant、`$4017` 对 frame IRQ 的禁止）、**P1-9 PPU 寄存器**（v6/v5 双侧 `ctrl` / `mask` / `v` / `t` / `w` / `fine_x` / `oamaddr` / `nt[1]` / palette 对照，并确认 `$2005` / `$2006` 没有漂移）、**P1-10 CPU**（reset 向量、首个操作码、0 个非法 opcode、三条失败块都没进）、**BUS owner accounting**（每一类传输的计数与总传输数闭合）。
+
+### P0-7：MMC3 那部分怎么测、怎么解释
+
+程序在 vblank 里对 `$8001` 写三次，落点是 **dot 113 / 63 / 67**——**全部低于 dot 257**，也就是 35 个 `ce` 的精灵 shadow 构建窗口开始之前，这样三次写就不会污染被观测的窗口。期望的 R0 寄存器值是 `{写值[7:1], 1'b0}`，所以三次写让寄存器依次成为 `00` / `00` / `40`。
+
+- **逐拍核对**：每一个 `ce_ppu` 上 `chr_req` 为高时，比对 `chr_final_addr` 等于 `(tb_chr_bank_model << 10) | (local & 0x3FF)`，其中 `tb_chr_bank_model` 是**从 `mapper_write_pulse` / addr / data 捕获的**，不是从 DUT 的寄存器读出来的。
+- **位 16 的承重断言**：对 `$41` 那一档，R0 = `{0x41[7:1], 1'b0}` = `$40`，所以 `chr_final_addr[16] == reg[6] == 1`。这条在实测的每一拍上都成立——**位 16 是 17 bit 地址里的真实一位，一个 16 bit 的 TB 下标做不出来**。
+- **第二步为什么不变**：`nes_mapper_mmc3.v` 把 R0 锁成 `{cpu_dout[7:1], 1'b0}`，所以 `$00` 与 `$01` 是**同一个 1 KiB bank**——bit 0 是"奇/偶 1 KiB 选择"，它落在本地 `chr_addr[11]` 上而不在寄存器里（真实 MMC3 是 2 KiB 粒度）。TB 的处理方式是**把相等测量出来**：断言 DUT 自己的 `chr_final_addr[16:10]` 在这两步之间**逐位相同**，同时断言三份预载 bank 图像两两不同。所以"第二档没有新画面"来自寄存器选中了同一块 bank，**与图像无关**，也**不是**把期望值改小。
+- 三档里有两档改变了到达的字节与画面（`00` → `40`），第三档不能，而且**任何预载都救不了它**——它选的寄存器值就是同一个。
+
+### 固定期望输出摘要
+
+`$display` 行的前缀可以在 `tb_nes_system_v6.v` 里逐字对上；下面是本轮实测填进去的数值：
+
+| 断言行前缀 | 实测 |
+| --- | --- |
+| `P0-1 RESET/IDENTITY` | 复位窗口内 `chr_req = 0`、`chr_final_addr = 0`；两个实例 `dbg_mapper_id = 0/0`；全程 `max chr_final_addr = 0x0000` |
+| `P0-2 CHR-TRANSLATION` | `checked = 62720`、`err = 0`；本地项读自 `ab_v6.u_ppu.chr_addr`；`local[12:0] == final[12:0]`、`final[16:13] == 0` |
+| `P0-2 CART-WRITE` | `cart writes = 3`、`pulses = 3`，地址/数据错 `0`、宽度错 `0` |
+| `P0-3 BIT13-DROP` | 最后一帧 `chr requests = 20960`，`chr_final_addr[13]` 置位 **0** 次 |
+| `P0-3 NONVACUITY-PROBE` | 本地 `chr_addr[13]` 置位 **0** 次、本地 `chr_addr[12]` 置位 **16768** 次；打印里附完整的"没有激励能抬起 bit 13"说明 |
+| `P0-4 AB-FULL-FRAME` | `visible comparisons = 184320`（3 × 240 × 256）、`divergences = 0`；`all-ce comparisons = 268026`、`divergences = 0`；`frame period = 357368` |
+| `P0-5 PIXEL-CLASSES` | 最后一帧 `index2 = 64`、`index6 = 64`、`index1 = 61312`、`other = 0`、`index mismatches = 0`（合 61440 = 240 × 256） |
+| `P0-6 CHR-MODEL` | `chr_rdata` 对 `62720` 拍（`err = 0`）、取数单元 `bg_lo`/`bg_hi` 锁存对 `50144` 拍（`err = 0`） |
+| `P0-7 MMC3-BANK` | `$8001` 写 `00`/`01`/`41` → 寄存器 `00`/`00`/`40`；`chr beats total = 104640`，逐档 `0` 错；三次写的落点 dot `113`/`63`/`67`；`$41` 档 `chr_final_addr[16] == 1` 在 `43583/43583` 拍成立；具名 tile-0 像素索引 **1 → 1 → 8** |
+| `P0-8 NO-BUS-COLLISION` | `chr_req` 在 `446712` 个 `ce` 中连续两拍同时为高 **0** 次；两个取数单元在 `418562` 个采样拍上同拍为高 **0** 次 |
+| `P1-2 OAMDMA` | `starts = 1`、`acks = 256`、`$2004 writes = 256`、`mmio hits = 0`；`oam_ram[0..3] = 11 22 33 44` 且 256 字节与源页相同 |
+| `P1-5 MMC3-A12-AND-FORCE` | `$C000` 锁存 `07`、reload 仍为 1、计数器仍为 `00`、a12 滤波器一次没触发、整个程序 `mapper_irq` 恒低 |
+| `P1-5 IRQ-FORCE` | `mapper_irq = 1 → irq_line = 1 → dbg_irq_pending = 1` 全链逐 `clk` 成立；入口恰好 7 个 `bus_fire` 周期（min = max = 7）；`$FFFE` 被取；handler 把 `ram[0013]` 递增；force 到 0 再 `release` 之后线落回 |
+| 末行 | `PASS tb_nes_system_v6` |
+
+仿真时间远长于 v5：v6 要跑 3 帧逐 `ce` 的 v6↔v5 A/B，再加第三个 MMC3 实例与三次换 bank 后的帧。**墙钟 119.3 s**（回归目标 `system-v6`，`-g2012` 编译 + `vvp`）。
+
+**没有做变异验证。** v5 一节记录了三处定向变异，v6 这一节**没有对应的变异记录**——因此不能声称这些断言的"非空洞"性质已经用变异反证过，只能说它们在真实 RTL 上全部通过。
+
+### 运行
+
+回归目标已经登记在 `tools/sim_all.ps1` 的 `-Mode system-v6`（并进了 `-Mode all` 的第 38 位，紧跟 `system-v5`）。等价的直接调用：
+
+```powershell
+$tmp = Join-Path $env:TEMP 'op_fpga_emu'
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$v6 = @(
+  'rtl\nes_core\system\nes_system_v6.v',
+  'rtl\nes_core\system\nes_system_v5.v',
+  'rtl\nes_core\ppu\nes_ppu2c02.v',
+  'rtl\nes_core\ppu\nes_ppu_sprite.v',
+  'rtl\nes_core\ppu\nes_chr_fetch_unit.v',
+  'rtl\nes_core\ppu\nes_sprite_chr_fetch.v',
+  'rtl\nes_core\ppu\nes_oam_dma.v',
+  'rtl\nes_core\controller\nes_controller.v',
+  'rtl\nes_core\bus\nes_cpu_bus.v',
+  'rtl\nes_core\cpu\nes_cpu6502.v',
+  'rtl\nes_core\apu\nes_apu_length_lut.v',
+  'rtl\nes_core\apu\nes_apu_pulse.v',
+  'rtl\nes_core\apu\nes_apu_triangle.v',
+  'rtl\nes_core\apu\nes_apu_noise.v',
+  'rtl\nes_core\apu\nes_apu_dmc.v',
+  'rtl\nes_core\apu\nes_apu2a03.v',
+  'rtl\nes_core\mapper\nes_mapper.v',
+  'rtl\nes_core\mapper\nes_mapper_nrom.v',
+  'rtl\nes_core\mapper\nes_mapper_uxrom.v',
+  'rtl\nes_core\mapper\nes_mapper_cnrom.v',
+  'rtl\nes_core\mapper\nes_mapper_mmc1.v',
+  'rtl\nes_core\mapper\nes_mapper_mmc3.v',
+  'tb\system\tb_nes_system_v6.v'
+)
+& 'C:\iverilog\bin\iverilog.exe' -g2012 -s tb_nes_system_v6 -o (Join-Path $tmp 'tb_nes_system_v6.vvp') $v6
+& 'C:\iverilog\bin\vvp.exe' (Join-Path $tmp 'tb_nes_system_v6.vvp')
+```
+
+**`nes_system_v5.v` 必须在源文件列表里**：TB 的 `ab_v5` A/B 参照实例要能 elaborate 起来，少了它整条目标编译不过。`nes_ppu2c02.v` 的 `g_chr_external` 同时例化 `nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch`，这两个文件也必须显式列出。
+
+### 全局超时与退出码约定
+
+- 判定用 `$fatal`。任何断言不成立都让 `vvp` 以**非零退出码**结束并打印失败原因（坐标、寄存器值或时间点），脚本据此判失败。
+- `#120000000`（120 ms）有全局超时兜底，注释写明理由："第三个实例加上三次换 bank 后的帧把运行推到远超 phase 1 需要的 20 ms，所以留一堵硬墙，让卡住的 CPU、漏掉的 `frame_done` 或卡住的 `wait()` **失败而不是挂住**"。走到那里会 `$fatal("global timeout")`。
+- 成功路径是 `tb_live = 1'b0;` 然后 `$finish`，`vvp` 返回 0。`tb_live` 让全局超时那一段能区分"跑完了"和"挂住了"。
+- testbench 用 `$fatal`，所以入口用 `-g2012`（与仓库其它 TB 一致）。没有对应的 ModelSim `.do` 脚本。
+
+### v6 testbench 绕过或解释的问题
+
+- **CHR 图像靠 TB 预载，不靠 `$2007`。** 见前面那一节。v4 的程序写法在这里不成立。
+- **`force` 压 mapper 内部寄存器仍然是唯一的"造 IRQ"手段。** `nes_system_v6` 把 `mapper_ppu_a12` 硬绑 0，所以五个 mapper 里没有任何一个能自己把 `irq` 拉起来（NROM/UxROM/CNROM/MMC1 的 `irq` 恒 0，MMC3 只在 `a12_filtered` 时置 pending）。"A12 沿触发 IRQ"本身由 `tb/mapper/tb_nes_mapper_mmc3.v` 覆盖。
+- **`release` 不会恢复寄存器的驱动值。** 与 v5 相同：恢复 MMC3 IRQ 状态时先 `force` 成 0 再 `release`，否则 `mapper_irq` 会永远停在 1。
+- **P0-7 第二步的"无变化"是 RTL 语义而不是 testbench 放水。** 见前面那一节；TB 用"断言 `chr_final_addr[16:10]` 逐位相同"把相等变成测量结果。
+- **A/B 只覆盖背景与地址/时序。** v4 的逐像素 `expected_pixel_index` 模型在这一层被恢复了（v5 曾有**零像素断言**——这是 v5 的一个证据质量缺口，v6 的 A/B 补上了这一层），但精灵像素的等价性仍然没有证据。
+- **CHR 模型是零时序代价的。** 所以 P0-6 与 P0-4 证明的是"地址与协议合同成立"，**不证明任何真实存储器能满足 1 `ce` 寄存读**；`chr_req` **不是**一个可以让存储器合法拖延的背压信号。
+- **层次引用极多**（`ab_v6.u_ppu.chr_addr`、`ab_v6.u_ppu.g_chr_external.u_chr_fetch.chr_req`、`ab_v6.u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req`、`chr_mmc3.u_mapper.u_mmc3.irq_enabled_r`、`ab_v6.u_ppu.oam_ram`、`ab_v6.u_ppu.control_reg`…）。与 v0–v5 一致：RTL 里这些名字一旦重命名，testbench 会编译失败。
+- **`MAPPER_SELECT` 与 `CHR_ADDR_BITS` 都是 elaboration 期参数**：一个实例整场只有一个 mapper，`chr_final_addr` 的宽度在综合期固定为 17。
+- **没有做变异验证**，见上面那一小节。
+
+### v6 明确未实现
+
+以下是被测顶层 `nes_system_v6` 的范围限制，完整清单与理由见 `docs/modules/system-v6.md` 第 6 节：
+
+- **`$2007` 对 CHR 的写被丢弃**（PPU 外部分支没有 `chr_ram` 写 always 块，`chr_we` 恒 0）；**外部 CHR 的 `$2007` 读返回 0**（走 PPU 自己的空间译码）。**CHR 写入这件事在 v6 里不存在。**
+- **片上没有任何 CHR 存储**：那 128 KiB CHR 只存在于 testbench。真实系统需要外部存储，而 **SDRAM 控制器在仓库里还不存在**，TF 也只有命令帧发送器。
+- **MMC3 的扫描线 IRQ 计数器在系统级无法自时钟**（`mapper_ppu_a12` 硬绑 0）。`chr_final_addr[12]` 是 PPU 的 pattern-table 选择位、不是 bank 位，**不能拿来当 A12**。
+- **`CHR_ADDR_BITS = 17` 截断 MMC3 的 CHR bank bit 7**：`0x80`–`0xFF` 别名到 `0x00`–`0x7F`。已接受，不加宽。
+- **CHR 端口上没有背压**，`chr_req` 是无条件请求；一次窗口重叠会静默丢掉背景请求拍（P0-8 实测 0 次）。
+- **PPU 侧 mirroring 没接**：`nes_ppu2c02` 只有编译期参数 `MIRROR_VERTICAL`，没有运行期端口，v6 不假装接上；四屏的 4 KiB nametable RAM 同样没有。
+- **PRG RAM / `$6000-$7FFF` 没有存储阵列**、**MMC1 串行移位寄存器在系统级没有被程序驱动过**、**MAPPER_SELECT 仍是 elaboration 期参数**、`chr_final_addr` **没有被任何模块实例化使用**。
+- 与 v5 相同的总线与 CPU 缺口：`$4017` 读只回手柄位、open bus 上没有手柄位、`$4016` bit6/bit7 扩展口、第 9 次以后读恒 1、手柄物理层、DMC DMA 未激励、`OAMADDR_WRITE=0`、音频输出通路、上板频率与跨时钟域。
+- **本仓库没有任何综合、布局布线、STA、引脚分配或上板证据**；`chr_rdata` / `chr_req` / `chr_final_addr` 是 RTL 端口，不是引脚。
