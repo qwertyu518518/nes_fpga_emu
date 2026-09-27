@@ -1,10 +1,16 @@
 `timescale 1ns/1ps
 
 // CHR_ADDR_BITS is the width of chr_bank_offset and must cover the whole CHR
-// address space. 17 bits = 128 KiB, the largest CHR the supported mappers need:
-// MMC1 has 5-bit 4 KiB banks (up to 0x1F000) and MMC3 has 8-bit 1 KiB registers
-// (0x00-0xBF000). Do not lower it below 17 or MMC1 bank >= 16 and MMC3 bank
-// >= 0x40 alias back into the low 64 KiB.
+// address space. 17 bits = 128 KiB, which is exactly what MMC1 needs: its 5-bit
+// 4 KiB bank reaches 0x1F000 and the 4 KiB intra-window offset adds at most
+// 0xFFF, giving 0x1FFFF. Do not lower it below 17 or MMC1 bank >= 16 aliases back
+// into the low 64 KiB.
+// 17 is NOT enough for MMC3. nes_mapper_mmc3.v forms an 8 KiB window as
+// (chr_window_bank << 10) | ppu_addr[9:0] from a full 8-bit R register, so a
+// window above 0x7F needs address bit 17: bank 0xFF reaches 0x2FC00. At 17 bits
+// that bit is shifted out and MMC3 CHR banks 0x80-0xFF alias onto 0x00-0x7F.
+// This is a known, accepted limitation at the current width -- widening to 18
+// would remove the alias, and it is not the cause of it.
 module nes_mapper #(
     parameter integer PRG_ADDR_BITS = 17,
     parameter integer CHR_ADDR_BITS = 17,

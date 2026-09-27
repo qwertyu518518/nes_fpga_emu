@@ -6,15 +6,20 @@
 //   * Byte order is fixed: slot0.lo, slot0.hi, slot1.lo, slot1.hi, ... slot7.hi.
 //   * Shadow landing: slot g low plane -> shadow[g*16 +: 8],
 //                    slot g high plane -> shadow[g*16+8 +: 8].
-//   * Address per slot: chr_addr is a byte address into CHR, 14 bits wide, and one
-//     tile is 16 bytes, so the two planes of a tile are 8 bytes apart:
+//   * Address per slot: chr_addr is a byte address into the local 8 KiB CHR window.
+//     The port is 14 bits wide but only 13 bits of address exist (see Integration
+//     limits below), and one tile is 16 bytes, so the two planes of a tile are
+//     8 bytes apart:
 //                       low  plane = pat_addr[g*13 +: 13]
-//                       high plane = pat_addr[g*13 +: 13] + 8, reduced modulo 2**14.
-//     pat_addr[g*13 +: 13] is {table, 5'b0, tile[2:0], 1'b0, fine[2:0]} as produced
-//     by nes_ppu_sprite, i.e. it is already tile*16 + fine, with fine the row
-//     inside the tile. No scaling is applied here: this unit drives the same byte
-//     address that nes_chr_fetch_unit drives for the background.
-//     Example pat 0x1FF: low = 0x01FF, high = 0x0207.
+//                       high plane = pat_addr[g*13 +: 13] + 8
+//     pat_addr[g*13 +: 13] is {s_table, s_tile[7:0], 1'b0, s_fine[2:0]} as produced
+//     by nes_ppu_sprite (nes_ppu_sprite.v:295), i.e. 1 + 8 + 1 + 3 = 13 bits: it is
+//     already tile*16 + fine, with fine the row inside the tile. s_tile is the full
+//     8-bit OAM tile byte in 8x8 mode and {s_tile_byte[7:1], s_row[3]} in 8x16 mode
+//     (nes_ppu_sprite.v:293), with no bit masked off, so there is no 128-tile
+//     half-table anywhere in the sprite path. No scaling is applied here: this unit
+//     drives the same byte address that nes_chr_fetch_unit drives for the background.
+//     Example pat 0x1F8: low = 0x01F8, high = 0x0200.
 //     Same two bytes, other notation: nes_ppu_sprite's internal path reads them
 //     from its flat 65536-bit chr bus as chr[{pat,3'b000} +: 8] and
 //     chr[{pat,3'b000} + 13'd64 +: 8]. That is a *bit* index taken 8 bits at a
@@ -34,10 +39,20 @@
 //   shared CHR bus needs no change when both fetchers are instantiated.
 //
 // Integration limits
-//   * chr_addr[13] is pat_addr[12] lifted into the byte domain, so a pattern in
-//     0x1FF8..0x1FFF reaches the upper 8 KiB of a 16 KiB CHR; pat_addr is 13 bits,
-//     so that is the top of the range. A CHR bus only 8 KiB wide mirrors that range
-//     back to 0x0000 instead of wrapping.
+//   * The local address is 13 bits of pattern address on a 14-bit port, so
+//     chr_addr[13] is declared but structurally always 0 and no stimulus can raise
+//     it. plane_byte forms the sum in 14 bits as {1'b0, pat} + (p ? 14'd8 :
+//     14'd0); pat is 13 bits, so pat[12] -- the pattern-table select -- lands on bit
+//     12 of the sum and never on bit 13. pat is {s_table, s_tile[7:0], 1'b0,
+//     s_fine[2:0]}, so its bit 3 is the hard 1'b0 of the 16-byte alignment and
+//     pat <= 0x1FF7; the largest address this unit can emit is 0x1FF7 + 8 = 0x1FFF,
+//     the top of the one 8 KiB window. The `sum & 14'h3FFF` mask is therefore
+//     lossless rather than a wrap: nothing reaches 0x2000, so the mask never
+//     actually fires and there is no second 8 KiB above the window for it to name
+//     or mirror.  An 8 KiB CHR memory indexed on chr_addr[12:0] therefore loses
+//     nothing.  PPUCTRL[4] / [5] select WITHIN that one window rather than
+//     choosing between two banks, which is why every mapper may drop
+//     chr_addr[13] and instead consumes bit 12 as its own window select.
 //   * Prefetch runs one line ahead of the pixels that use it, and it is the
 //     ADDRESS that has to lead, not the start dot. shadow_valid rises 35 ce
 //     after start, which lands at dot 292 of the issuing line, i.e. after
