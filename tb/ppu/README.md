@@ -6,7 +6,7 @@
 
 ## 本目录的 testbench 一览
 
-本目录现在有 **5** 个 testbench，都不下载 ROM、不读外部文件：
+本目录现在有 **7** 个 testbench，都不下载 ROM、不读外部文件：
 
 | testbench | 被测对象 | 性质 | 小节 |
 | --- | --- | --- | --- |
@@ -15,8 +15,10 @@
 | `tb_nes_oam_dma.v` | `rtl/nes_core/ppu/nes_oam_dma.v` | 自检 testbench | OAM DMA testbench |
 | `tb_nes_chr_fetch_unit.v` | `rtl/nes_core/ppu/nes_chr_fetch_unit.v` | 自检 testbench | CHR 取数单元 testbench |
 | `tb_chr_fetch_feasibility.v` | 不是被测模块，是 `nes_ppu2c02`（`EXTERNAL_CHR=1'b0`） | **测量实验**，一行 RTL 都没改 | CHR 取数可行性实验 testbench |
+| `tb_nes_ppu2c02_ext_chr.v` | 同时例化 `nes_ppu2c02` 的 `EXTERNAL_CHR=0` 与 `1` 两个实例 | A/B 等价性 testbench（回归目标 `ppu-ext-chr-tb`） | “明确未实现”节记录的精灵 A/B 证据 |
+| `tb_nes_sprite_chr_fetch.v` | `rtl/nes_core/ppu/nes_sprite_chr_fetch.v` | 自检 testbench | 与取数单元 testbench 同属精灵 CHR 预取这条线 |
 
-后两个都属"外部 CHR 取数"这条线，但**它们彼此独立**：`tb_nes_chr_fetch_unit.v` 测取数单元自己的时序合同，`tb_chr_fetch_feasibility.v` 测 dot 预算。**`nes_chr_fetch_unit` 现在已经被 `nes_ppu2c02` 的 `g_chr_external` 例化**（背景取数；精灵侧由 `nes_sprite_chr_fetch` 承担），CHR 取数通路在 PPU 侧已接通，见下面两节各自的“未覆盖项”。
+后四个都属"外部 CHR 取数"这条线，但**它们彼此独立**：`tb_nes_chr_fetch_unit.v` 测背景取数单元自己的时序合同，`tb_nes_sprite_chr_fetch.v` 测精灵预取单元自己的时序合同，`tb_chr_fetch_feasibility.v` 测 dot 预算，而 `tb_nes_ppu2c02_ext_chr.v` 是把两个单元放进真实 PPU 里做 `EXTERNAL_CHR=0` vs `1` 的逐 `ce` A/B——**只有它提供像素级证据**，另外三个各自只证明单元自身的约定（见各节"未覆盖项"）。**`nes_chr_fetch_unit` 现在已经被 `nes_ppu2c02` 的 `g_chr_external` 例化**（背景取数；精灵侧由 `nes_sprite_chr_fetch` 承担），CHR 取数通路在 PPU 侧已接通，见下面两节各自的“未覆盖项”。
 
 ## 接口极性
 
@@ -532,7 +534,7 @@ C:\iverilog\bin\iverilog.exe -g2012 -Wall -o "$env:TEMP\chrfeas.vvp" -s tb_chr_f
 C:\iverilog\bin\vvp.exe "$env:TEMP\chrfeas.vvp"
 ```
 
-`-g2012` 的理由：PPU 核心本身是 Verilog-2001（`ppu-core` 能用 `-g2001` 单独 elaborate），但这个 testbench 用 `$fatal` 判死，所以入口统一 `-g2012`，与上面几个 testbench 一致；这里额外加了 `-Wall`，`-Wall` 下本 testbench **零 warning**（RTL 侧那 8 条 `@*` 数组敏感性 warning 与本实验无关，也没有被它消除：`nes_ppu_sprite.v:147,148,148,149,154` 5 条 + `nes_ppu2c02.v:197,408,413` 3 条；`tools/sim_all.ps1` 自己不加 `-Wall`，所以跑回归看不到它们）。
+`-g2012` 的理由：PPU 核心本身是 Verilog-2001（`ppu-core` 能用 `-g2001` 单独 elaborate），但这个 testbench 用 `$fatal` 判死，所以入口统一 `-g2012`，与上面几个 testbench 一致；这里额外加了 `-Wall`，`-Wall` 下本 testbench **零 warning**（RTL 侧那 9 条 `@*` 数组敏感性 warning 与本实验无关，也没有被它消除：`nes_ppu_sprite.v:333,334,334,335,340,360` 6 条 + `nes_ppu2c02.v:445,769,774` 3 条；`tools/sim_all.ps1` 自己不加 `-Wall`，所以跑回归看不到它们）。
 
 期望输出的**最后一行是 `PASS chr_fetch_feasibility`**；vvp 退出码 0，仿真时间 14.295 ms。13 组配置各打印一段 `PASS-FRAME <组名>`，每段后面是 Q1 / Q2 / Q3 三组实测数字加 Q2 的 `range_count` 直方图；随后是 pass M 的逐行明细（行 0..40、95..115、240..261，每行给 `range_count` / `sprite_pixel_dots` / `overflow_dots` / `rendered_bg_columns` / `bad_attr_columns`）；最后一行是 `Q1 dot340 bg_x_total, pass M: ...`。完整的逐行输出示例见 `docs/modules/chr-fetch-feasibility.md` 第 9 节。
 

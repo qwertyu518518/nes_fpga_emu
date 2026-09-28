@@ -417,7 +417,7 @@ FAIL tb_nes_mapper_mmc3 with 3 failing checks
 | 检查 | 结果 |
 |---|---|
 | `iverilog -g2001 -Wall -t null -s nes_mapper`（含 5 个子模块） | exit 0，零 error、零 warning |
-| `iverilog -g2001 -Wall -t null -s nes_system_v5`（完整依赖闭包） | exit 0，零 error；仅 8 条 PPU 侧既有 warning（`@*` 对数组敏感，以及**当时**的 `nes_ppu2c02` 的 `chr_rdata` 悬空——`chr_rdata` 现在已被 `g_chr_external` 的平面锁存真正读过，见 11.1），与本次改动无关 |
+| `iverilog -g2001 -Wall -t null -s nes_system_v5`（完整依赖闭包） | exit 0，零 error；**9 条 PPU 侧 `@*` 数组敏感性 warning**（`nes_ppu_sprite.v:333,334,334,335,340,360` 6 条 + `nes_ppu2c02.v:445,769,774` 3 条），**外加 1 条 `nes_system_v5.v:413` 的 `chr_rdata` 悬空**——`nes_system_v5` 的 PPU 取默认 `EXTERNAL_CHR=0`，那个分支里 `chr_rdata` 没有读者；`chr_rdata` 在 `nes_system_v6` 里才是被 `g_chr_external` 的平面锁存真正读过的（见 11.1）。与本次改动无关 |
 | `.\tools\sim_all.ps1 -Mode mapper` | `PASS (4 of 4)` |
 | `.\tools\sim_all.ps1 -Mode system` | `PASS (8 of 8)` |
 
