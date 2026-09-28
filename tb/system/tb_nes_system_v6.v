@@ -1873,7 +1873,7 @@ task load_chr_mmc3;
         // own preloaded tile-0 or the named index for that step would be a
         // measurement of an empty bank.  It is byte-for-byte the reg $40 image
         // (plane0=$FF/plane1=$FF -> pattern 3 -> $3F03=$18 -> index 8), so the
-        // rule P0-7(b) states still applies unchanged.  It is outside the three
+        // rule P0-7(b) states still applies unchanged.  It is outside the four
         // images P0-7 compares pairwise and outside all three W2 write targets.
         for (b = 0; b < 8; b = b + 1) begin
             m_chr_mem[MMC3_W2_IMG_BASE + 0 + b] = 8'hFF;
@@ -4212,7 +4212,7 @@ task check_p0_7;
                  m_addr_err[3], m_addr_err[4],
                  m_first_hi[0], m_first_hi[1], m_first_hi[2],
                  m_first_hi[3], m_first_hi[4]);
-        $display("P0-7 MMC3-BANK (b) named tile-0 indices: step1 $8001=%02h -> reg %02h -> index %0d on %0d of %0d tile-0 pixels (plane0=$FF/plane1=$00 -> pattern 1 -> $3F01=$21); step2 $8001=%02h -> reg %02h -> index %0d on %0d of %0d; step3 $8001=%02h -> reg %02h -> index %0d on %0d of %0d (plane0=$FF/plane1=$FF -> pattern 3 -> $3F03=$18); stray pixels %0d/%0d/%0d.  PARTIAL SPEC, NOT A DELETED CHECK: step 2 was specified to produce a NEW value and it cannot, because nes_mapper_mmc3.v:208 latches r0 as {data[7:1],1'b0} so $01 and $00 are the same 1 KiB bank (real MMC3 2 KiB granularity, bit 0 is the odd/even 1 KiB select and lives in local chr_addr[11]).  The named value for step 2 is therefore %0d, identical to step 1, and the dut chr_final_addr[16:10] is asserted bit-identical across the two steps (%02h vs %02h) so the equality is measured, not assumed.  Two of the three steps therefore change the arriving bytes and the picture (reg %02h -> reg %02h); the third cannot, and no preload can make it, because the register value it selects is the same.  The three preloaded images are pairwise different PASS",
+        $display("P0-7 MMC3-BANK (b) named tile-0 indices: step1 $8001=%02h -> reg %02h -> index %0d on %0d of %0d tile-0 pixels (plane0=$FF/plane1=$00 -> pattern 1 -> $3F01=$21); step2 $8001=%02h -> reg %02h -> index %0d on %0d of %0d; step3 $8001=%02h -> reg %02h -> index %0d on %0d of %0d (plane0=$FF/plane1=$FF -> pattern 3 -> $3F03=$18); stray pixels %0d/%0d/%0d.  PARTIAL SPEC, NOT A DELETED CHECK: step 2 was specified to produce a NEW value and it cannot, because nes_mapper_mmc3.v:208 latches r0 as {data[7:1],1'b0} so $01 and $00 are the same 1 KiB bank (real MMC3 2 KiB granularity, bit 0 is the odd/even 1 KiB select and lives in local chr_addr[11]).  The named value for step 2 is therefore %0d, identical to step 1, and the dut chr_final_addr[16:10] is asserted bit-identical across the two steps (%02h vs %02h) so the equality is measured, not assumed.  Two of the three steps therefore change the arriving bytes and the picture (reg %02h -> reg %02h); the third cannot, and no preload can make it, because the register value it selects is the same.  The four preloaded images are pairwise different PASS",
                  m_bank_data[0], m_bank_reg[0], m_exp_index[0], m_tile0_exp[0], m_tile0_tot[0],
                  m_bank_data[1], m_bank_reg[1], m_exp_index[1], m_tile0_exp[1], m_tile0_tot[1],
                  m_bank_data[2], m_bank_reg[2], m_exp_index[2], m_tile0_exp[2], m_tile0_tot[2],
@@ -5178,7 +5178,7 @@ initial begin
 end
 
 initial begin
-    // The third instance plus the three post-switch frames push the run well
+    // The five DUT instances plus the three post-switch frames push the run well
     // past the 20 ms phase 1 needed.  Kept as a hard wall so a hung cpu, a
     // missed frame_done or a stuck wait() still fails instead of hanging.
     #120000000;
