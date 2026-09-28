@@ -551,6 +551,26 @@ C:\iverilog\bin\vvp.exe "$env:TEMP\chrfeas.vvp"
 - **Q3 的 16 列依赖激励**：本实验刻意让每个 attribute 字节的 4 个象限互不相同、tile 号逐 tile 不同、CHR 两平面按位取反。换成"整张 attribute 表同值 + 全屏同一个 tile"，attribute 差异的**可观测**列数会变，但"象限选错"的事实与每行 16 次翻转的节拍不变。
 - ModelSim/Questa 的 `run_ppu_tb.do` 没有这条实验通道，本任务没有改那个脚本（不在写入范围内）；`tools/sim_all.ps1` 已经包含 `chr-feasibility-tb`（`Group = 'ppu'`）。
 
+## 外部 CHR A/B testbench
+
+`tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`，**1,248** 行）例化**两个** `nes_ppu2c02`——`dut_a` 是 `EXTERNAL_CHR(1'b0)`、`dut_b` 是 `EXTERNAL_CHR(1'b1)`（**6 个**外部 CHR 端口全部接出）——共用同一份 `clk` / `ce` / 寄存器激励，逐 `ce` 逐 dot 比对。这是本目录**唯一**提供像素级等价性证据的 TB；另外三个（`chr-fetch-tb` / `sprite-fetch-tb` / `chr-feasibility-tb`）各自只证明单元自身或只测预算。断言清单、固定输出与边界见 [`../../docs/modules/ppu-external-chr.md`](../../docs/modules/ppu-external-chr.md) 第 11.1.3 与 11.3.1 节。
+
+### `A6 $2007-WRITE-STROBE`：目标已改，以及**为什么这条 TB 故意没有写场景**
+
+`$2007` 对外部 CHR 的写通路已经实现（`5cc36e7` / `576cc74`），所以这条断言原来的"`chr_we` / `chr_wdata` 恒为 `1'b0` / `8'h00`"**陈旧了**。它现在断言的是 strobe 与真实寄存器周期的等价关系：
+
+- `chr_we` 为高 ⟺ 该拍是真实的 `reg_cs && reg_we && reg_addr == 7` 写周期，且 `chr_wdata == reg_din`；
+- `chr_we` **不会**在这种写周期之外为高（同一条件）；
+- 一次落在 CHR 半区地址空间的 `$2007` 写周期**必须**在该拍抬起 `chr_we`。
+
+**实测到 0 个 strobe 拍，这是诚实的 0 而不是空洞**：本 TB 的 `write_register` 只用地址 6 / 6 / 5 / 5 / 0 / 1，`read_status` 只用地址 2，**`reg_addr` 从来不是 7**，所以 strobe 合法地一次都没有被激励。
+
+**这是刻意的，不是缺口。** 这条 TB 的像素 A/B 把 `EXTERNAL_CHR = 0`（**逐 dot 组合**）与 `EXTERNAL_CHR = 1`（**一次取数提前**）放在一起比较。渲染中期写 CHR 会让**两侧结构上不再等价**：内部那一侧立刻看到新字节，外部那一侧要等 1 dot 甚至更久。如果在这里加一个写场景，上面 921,600 次背景比对与 552,960 个精灵比较点就**不再测量"外部通路等价"，而是在测量"两侧架构不同"**，它们的数字将失去意义。**所以不要"顺手"往这条 TB 里加一个 `$2007` 写场景。**
+
+`$2007` → 外部 CHR 的**端到端**证明放在 mapper 那一层：`tb/system/tb_nes_system_v6.v`（回归目标 `system-v6`），它用五块板（W1 哨兵 / 自验证对 / CHR-RAM-vs-CHR-ROM 忽略对 / MMC3 bank 限定写）把整条通路钉死。合同与逐条推导见 [`../../docs/ppu_chr_external_write.md`](../../docs/ppu_chr_external_write.md)。
+
+**本轮 `ppu-ext-chr-tb` 的 A/B 数字逐字节未变**：`S3` 七个精灵可观测量全部 `= 0`、`A3 verified request addresses=337450 verified latched plane pairs=126546`、`S2 request_beats=159296 … shadow_byte_mismatches=0`——写通路的加入**没有让 PPU 的渲染行为发生任何漂移**。
+
 ## 明确未实现
 
 - OAM DMA（`$4014`）和 CPU 停机；精确 sprite evaluation 与次 OAM 时序（次 OAM 的清空/评估/取数窗口、`m`/`n`/`o`/`p` 影子寄存器、溢出 glitch）。精灵侧的这些是 `rtl/nes_core/ppu/nes_ppu_sprite.v` 的已知边界，顶层只做功能级接线，不额外修正（读 `$2002` 抑制 hit 的 8 像素窗口、dot 255 不产生 hit、pre-render 行的 hit 行为、`$2003` 非零时精灵 0 判定退化都按那个模块的合同走）。
@@ -560,7 +580,7 @@ C:\iverilog\bin\vvp.exe "$env:TEMP\chrfeas.vvp"
 - vblank 中途把 `PPUCTRL[7]` 写成 1 不会立即产生 NMI：v0 只在 `(241,0)` 这一个判定点采样 `PPUCTRL[7]`。
 - 奇数帧跳 dot、精确背景预取时序、NTSC 之外的制式。
 - 逐 dot 可见/不可见区域对 CPU 寄存器访问的真实冲突行为：v0 统一取寄存器优先，不产生 glitch，见“同一时钟沿的冲突合同”。
-- APU、mapper 和四屏/单屏 mirroring。**CHR 外部 PPU bus 已经在 PPU 侧接通**：`nes_ppu2c02` 的 `g_chr_external` 分支同时例化 `nes_chr_fetch_unit`（背景）和 `nes_sprite_chr_fetch`（精灵），`chr_req`/`chr_addr` 由二者**无握手**地仲裁 mux 送出、`chr_rdata` 被闩进 `bg_lo_q`/`bg_hi_q` 与 128 位 `shadow`，证据是 `tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）里 `EXTERNAL_CHR=0` 与 `EXTERNAL_CHR=1` 两个实例之间的 A/B：精灵的七个可观测量在 **552,960** 个比较点上**全部 0 分歧**，1,708 个精灵决定像素跨透明背景 908 / 不透明背景前 564 / 不透明背景后 236 三类优先级，**6,144** 个 dot 恰好 8 个精灵在范围内、**2,048** 个 overflow dot。**精灵特征是逐项证明的**——那条 A/B 跑 **9 个精灵场景**，每组有自己的非空洞 `$fatal`（`case_sp_*` 计数器逐组清零，每组 `mismatched_pixels=0`）：8×16 高度（`sp1-8x16-oddtile` 40、`sp8-8x16-mixprio` 560 个精灵决定像素）、每行 8 个 sprite 上限（`sp8-8x8-limit` 2,048、`sp8-8x16-mixprio` 4,096 个"恰好 8 个在范围内"的 dot）、overflow 标志位（`sp10-overflow` 2,048 个 overflow dot）、水平翻转（`sp1-hflip` 48）、垂直翻转（`sp1-vflip` 56）、双翻转（`sp1-hvflip` 56）。**仍未覆盖**的只有 §8.2"用下一行 OAM 计数"那个 overflow **行为**差异（未实现、所以不可观测；标志位一致本身已证）与这 9 个场景之外没构造出来的优先级组合；**CHR 仲裁仍然无握手、无背压**。**边界**：这是 TB 驱动场景下的 A/B，**不是实机卡带、不是 NESdev test ROM、不是硬件**；`system-v6` 自己那条整帧 A/B 只是**背景**对比，精灵像素等价性**只有** `ppu-ext-chr-tb` 这一条。mapper 侧的 `chr_bank_offset` 接进这条**读**通路是在 System 层完成的，由 `system-v6` 目标证明（见 [`../../docs/modules/system-v6.md`](../../docs/modules/system-v6.md)）。**仍未接的是**：`$2007` 对外部 CHR 的写（`chr_we`/`chr_wdata` 恒 0）、外部 CHR 的 `$2007` 读（仍返回 0）、片上 CHR 存储（真实系统要靠尚不存在的 SDRAM）、以及 `ppu_a12`（仍绑 0，所以 MMC3 扫描线 IRQ 无法自计时）。
+- APU、mapper 和四屏/单屏 mirroring。**CHR 外部 PPU bus 已经在 PPU 侧接通**：`nes_ppu2c02` 的 `g_chr_external` 分支同时例化 `nes_chr_fetch_unit`（背景）和 `nes_sprite_chr_fetch`（精灵），`chr_req`/`chr_addr` 由二者**无握手**地仲裁 mux 送出、`chr_rdata` 被闩进 `bg_lo_q`/`bg_hi_q` 与 128 位 `shadow`，证据是 `tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）里 `EXTERNAL_CHR=0` 与 `EXTERNAL_CHR=1` 两个实例之间的 A/B：精灵的七个可观测量在 **552,960** 个比较点上**全部 0 分歧**，1,708 个精灵决定像素跨透明背景 908 / 不透明背景前 564 / 不透明背景后 236 三类优先级，**6,144** 个 dot 恰好 8 个精灵在范围内、**2,048** 个 overflow dot。**精灵特征是逐项证明的**——那条 A/B 跑 **9 个精灵场景**，每组有自己的非空洞 `$fatal`（`case_sp_*` 计数器逐组清零，每组 `mismatched_pixels=0`）：8×16 高度（`sp1-8x16-oddtile` 40、`sp8-8x16-mixprio` 560 个精灵决定像素）、每行 8 个 sprite 上限（`sp8-8x8-limit` 2,048、`sp8-8x16-mixprio` 4,096 个"恰好 8 个在范围内"的 dot）、overflow 标志位（`sp10-overflow` 2,048 个 overflow dot）、水平翻转（`sp1-hflip` 48）、垂直翻转（`sp1-vflip` 56）、双翻转（`sp1-hvflip` 56）。**仍未覆盖**的只有 §8.2"用下一行 OAM 计数"那个 overflow **行为**差异（未实现、所以不可观测；标志位一致本身已证）与这 9 个场景之外没构造出来的优先级组合；**CHR 仲裁仍然无握手、无背压**。**边界**：这是 TB 驱动场景下的 A/B，**不是实机卡带、不是 NESdev test ROM、不是硬件**；`system-v6` 自己那条整帧 A/B 只是**背景**对比，精灵像素等价性**只有** `ppu-ext-chr-tb` 这一条。mapper 侧的 `chr_bank_offset` 接进这条**读**通路是在 System 层完成的，由 `system-v6` 目标证明（见 [`../../docs/modules/system-v6.md`](../../docs/modules/system-v6.md)）。**外部 CHR 的 `$2007` 写通路已经实现**（`5cc36e7` / `576cc74`）：`g_chr_external` 驱动 `chr_waddr`（**自增前**的 `v_addr`）与 `chr_we`（**恰好 1 `clk` 宽**的组合 strobe）/`chr_wdata`，`nes_mapper.v` 一行未改，端到端证据在 `system-v6`（**96** 个写拍、**0** 翻译错、总线侧独立计数同样 96，加哨兵 / 自验证对 / 忽略对 / MMC3 bank 限定写四组非空洞检查），本目录这条 A/B TB 则是**故意没有写场景**、只保留一条诚实的 0（理由见上面那一节）。**仍未接/仍未做完的是**：外部 CHR 的 `$2007` **读回**（`ppu_space_read` 对 `< $2000` 仍返回 `8'h00`，写通了读没通）、**写与背景取数在共享 CHR 地址总线上的碰撞抑制**（实测 **22/96** 写拍与在飞背景取数相撞，0 次落在可见渲染期，**未修**）、片上 CHR 存储（真实系统要靠尚不存在的 SDRAM，**BRAM 推断也没有任何综合证据**）、以及 `ppu_a12`（仍绑 0，所以 MMC3 扫描线 IRQ 无法自计时）。
 - 合成验证：`nes_chr_fetch_unit.v` 走的是"整行顺序读、只回最后一个 tile"的形态，不是逐 dot 取数流水线；面积、时序、以及和真实外部 CHR 存储的握手都没有评估过。**它已经接进 `nes_system_v6`**，但 v6 尚未接进任何平台顶层，所以依然没有任何综合、Fitter 或时序证据。
 - 精确背景逐 dot 预取和 shift register 装载；当前背景路径按固定 dot 计数功能级取数。
 - 合成验证：`nes_ppu_sprite.v` 每个 dot 都要组合重算 64 项 OAM 范围和 8 个 slot，接进 PPU 之后面积和时序完全没有评估过（`docs/00-overview/risk-register.md` 的 R-01 仍然有效）。

@@ -1,10 +1,11 @@
-# PPU 外部 CHR：背景通路已接通并有像素级证据，精灵通路已接线并有像素级证据（覆盖仍有缺口），mapper 侧仍未接
+# PPU 外部 CHR：背景通路已接通并有像素级证据，精灵通路已接线并有像素级证据（覆盖仍有缺口），`$2007` 写通路已实现并有端到端证据（读回仍返回 0）
 
 本文记录 `nes_ppu2c02` / `nes_ppu_sprite` / `nes_chr_fetch_unit` / `nes_sprite_chr_fetch` 的**外部 CHR 改造**。它分成三部分，措辞必须和仓库现状严格对应：
 
 - **已实现（背景，有像素级证据）**：外部 CHR 的**背景 pattern 取数通路**已接通——`g_chr_external` 例化 `nes_chr_fetch_unit`，PPU 侧有 `bg_lo_q`/`bg_hi_q`/`bg_ready` 平面锁存，按逐 tile 的流水节拍取数。`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）在 5 组配置 × 3 帧下做了 **921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对，全部一致**。**外部 CHR 背景通路第一次有了像素级证据。**
 - **已接线并有像素级证据（精灵，覆盖仍有缺口）**：`g_chr_external` 现在也例化 `nes_sprite_chr_fetch`（dot 257 发 `start`），`chr_req`/`chr_addr` 是精灵优先的**组合优先 mux**（无握手），`shadow` 按 slot 解复用喂 `chr_sh`。A/B TB 证明**每行恰好 16 次精灵请求**、**mux 不篡改持有者地址**、**两个窗口不重叠**，并证明**精灵像素的等价性**——七个精灵可观测量在 **552,960** 个比较点上**全部 0 分歧**，其中 **1,708** 个精灵决定像素真的被渲染（透明背景上 **908**、不透明背景前 **564**、不透明背景后 **236**），**6,144** 个 dot 上恰好 8 个精灵在范围内、**2,048** 个 overflow dot（`ad3c17a`）。**逐项都已 A/B 证明的精灵特征**（9 个精灵场景各自隔离一项、各有自己的非空洞 `$fatal`，`case_sp_*` 计数器每组开始时清零，每组 `mismatched_pixels=0`）：8×16 高度（`sp1-8x16-oddtile` 40 / `sp8-8x16-mixprio` 560 个精灵决定像素）、每行 8 个 sprite 上限（`sp8-8x8-limit` 2,048、`sp8-8x16-mixprio` 4,096 个"恰好 8 个在范围内"的 dot）、overflow 标志位（`sp10-overflow` 2,048 个 overflow dot）、水平翻转（`sp1-hflip` 48）、垂直翻转（`sp1-vflip` 56）、双翻转（`sp1-hvflip` 56）**各自独立成立**。**仍未覆盖**：§8.2"用下一行 OAM 计数"那个 overflow **行为**差异（未实现、所以仍不可观测）、这 9 个场景之外没构造出来的优先级组合（透明背景 908 / 前 564 / 后 236 只证明这三类）、CHR 仲裁无握手无背压。（先前记在这里的 shadow **差一行**、8 位 `chr_sh` 只能交付**一个字节**两条**已修掉**，见 `3e218bf`、`c6ea299`。）见第 11 节。
-- **仍未实现**：`$2007` 对外部 CHR 的写通路（`chr_we` 恒 0）、mapper 侧 `chr_bank_offset` 接进 PPU。
+- **仍未实现**：外部 CHR 的 `$2007` **读回**（`g_chr_external` 的 `ppu_space_read` 对 `address < 14'h2000` 仍返回 `8'h00`）、写与背景取数在共享 CHR 地址总线上的**碰撞抑制**、片上 CHR 存储、运行期 nametable mirroring 端口。
+- **已实现**：`$2007` 对外部 CHR 的**写**通路（`5cc36e7` / `576cc74`）。`g_chr_external` 现在驱动 `chr_waddr`（新增的第 6 个外部 CHR 端口）/ `chr_we` / `chr_wdata` 三根线，`nes_system_v6` 上由 `nes_mapper` 的 `chr_ram_we` 门控，**96 个写拍、0 翻译错**，并有哨兵非空洞、字节级核对、自验证对、CHR-RAM/CHR-ROM 忽略对与 MMC3 bank 限定写五组证据。教学文档见 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md)，摘要见第 11.3.2 节。**注意写与读是不对称的**：写通了，`$2007` **读** CHR 仍返回 0。
 - **已完成**：`CHR_ADDR_BITS` 从 16 抬到 17（mapper 侧地址不再静默截断），见第 9 节。注意这**只修地址，不修 banking**——`chr_bank_offset` 仍然没接进 PPU。
 
 **当前进度、未实现项与证据边界以第 11 节为准。** 第 1-10 节写于背景通路落地之前，其中被实现取代的描述已在原地标注"已按事实更新"。
@@ -23,14 +24,15 @@
 parameter EXTERNAL_CHR = 1'b0
 ```
 
-5 个新端口（`chr_rdata` 是唯一输入）：
+6 个端口（`chr_rdata` 是唯一输入）：
 
 | 端口 | 方向 | 位宽 | 说明 |
 |---|---|---|---|
 | `chr_req` | out | 1 | 取数请求，1 拍 `ce` 宽脉冲 |
 | `chr_addr` | out | 14 | 请求期间保持不变的地址 |
-| `chr_we` | out | 1 | 写使能（本轮不用，见 5.3） |
-| `chr_wdata` | out | 8 | 写数据（本轮不用） |
+| `chr_waddr` | out | 14 | `$2007` 写 CHR 的地址（**已按事实更新**：原先不存在；**自增前**的 `v_addr`，非 CHR 时为 `14'h0000`，见 11.3.2） |
+| `chr_we` | out | 1 | 写使能，**恰好 1 `clk` 宽**的组合 strobe（**已按事实更新**：原先恒 `1'b0`，见 11.3.2） |
+| `chr_wdata` | out | 8 | 写数据（**已按事实更新**：原先恒 `8'h00`；现在是 `reg_din`） |
 | `chr_rdata` | in | 8 | 读回数据 |
 
 CHR 通路被 `generate` 包成两个互斥分支：
@@ -47,17 +49,17 @@ endgenerate
 
 | | `g_chr_internal` | `g_chr_external` |
 |---|---|---|
-| `ppu_space_read` | `< $2000` 读 `chr_ram[address[12:0]]` | `< $2000` **返回 `8'h00`**（未实现外部 CHR 的 `$2007` 读写） |
+| `ppu_space_read` | `< $2000` 读 `chr_ram[address[12:0]]` | `< $2000` **返回 `8'h00`**（**已按事实更新**：未实现外部 CHR 的 `$2007` **读**；同一地址空间的 `$2007` **写**已实现，见 11.3.2） |
 | `bg_pattern_low` / `bg_pattern_high` | `chr_ram[bg_pattern_addr]` / `+ 13'd8` | `(bg_ready && bg_pa_enable) ? bg_lo_q : 8'h00` / `bg_hi_q`（**已按事实更新**：不再是绑 `8'h00`） |
 | `sprite_chr_bus` | `g_chr_flatten` 8192 份 `chr_ram` 组合拼成 65536 bit | `65536'd0`（内部路径的展平总线在外部模式下用不到） |
 | `u_sprite` | `EXTERNAL_CHR=1'b0`、`chr_sh=16'h0000`、`scanline_sel=scanline` | `EXTERNAL_CHR=1'b1`、`chr_sh=sp_chr_sh`（16 bit，由 shadow 解复用出低/高两个平面）、`scanline_sel=scanline`（**已按事实更新**：不再绑全 0；`scanline_sel` 仍直连 `scanline` 是**当前正确的接法**，因为"下一行"的重定时已经搬进 `pat_addr_o` 内部，见 11.3.1） |
-| `chr_ram` 的 `$2007` 写 | 有 | **没有** |
-| `chr_req` / `chr_addr` | 不存在（内部模式不发） | 背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux**（**已按事实更新**，`nes_ppu2c02.v:686-687`，精灵优先）；`chr_we` / `chr_wdata` 绑常数 `1'b0` / `8'h00` |
+| `chr_ram` 的 `$2007` 写 | 有 | **没有**（外部模式改成打到外部端口：`chr_waddr` / `chr_we` / `chr_wdata`，见 11.3.2） |
+| `chr_req` / `chr_addr` | 不存在（内部模式不发） | 背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux**（**已按事实更新**，`nes_ppu2c02.v:686-687`，精灵优先）；`chr_waddr` / `chr_we` / `chr_wdata` **不再绑常数**（`5cc36e7` / `576cc74`），由 `v_addr` 与寄存器译码驱动（`:712-715`） |
 | 取数状态机 | 不存在（内部路径纯组合） | **有两个**：`nes_chr_fetch_unit u_chr_fetch`（`:670-684`）与 `nes_sprite_chr_fetch u_sprite_chr_fetch`（`:633-645`） |
 | 平面锁存 | 不需要（直接组合读 `chr_ram`） | **有**：`bg_lo_q` / `bg_hi_q` / `bg_ready`（`:573-575`、`:692-704`）与 128 bit `sp_shadow` |
 | `$2007` 读 + `increment_v` | 有 | 有 |
 
-**（已按事实更新）`g_chr_external` 的背景取数逻辑已经实现，精灵预取单元也已经例化**，不再是"只把输出绑常数"。`chr_req` / `chr_addr` 由背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux** 驱动（`:686-687`），`chr_rdata` 已被真正读进 `bg_lo_q` / `bg_hi_q`（背景）与 `sp_shadow`（精灵），`bg_pattern_low` / `bg_pattern_high` 读的是锁存器。仍然绑常数的是 `chr_we = 1'b0` / `chr_wdata = 8'h00`（外部 CHR 只读），`sprite_chr_bus` 仍绑 `65536'd0`（内部路径的展平总线在外部模式下用不到）。**但精灵像素的正确性已经有 A/B 证据**（`ad3c17a`：七个精灵可观测量在 552,960 个比较点上 0 分歧，1,708 个精灵决定像素跨三类优先级），精灵 A/B 里的 9 个精灵场景各自隔离一项、各有自己的非空洞 `$fatal`，8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转**逐项已被 A/B 证明**（逐条数字见 11.3.1），剩下的缺口只有 §8.2 的 overflow **行为**差异、9 个场景之外没构造出来的优先级组合与仲裁无背压。（先前记在这里的 shadow 差一行、8 位 `chr_sh` 只能交付一个字节两条**已修掉**：`chr_sh` 现在 16 bit 交付两个平面，`pat_addr_o` 改用下一行 scanline。）`nametable_ram` 的 `nt_fetch` 影子数组**已删除**，取数支路直接读 `nametable_ram` 的第二个组合读口。完整接线、取数节拍、像素级证据与仍未实现项见第 11 节。
+**（已按事实更新）`g_chr_external` 的背景取数逻辑已经实现，精灵预取单元也已经例化**，不再是"只把输出绑常数"。`chr_req` / `chr_addr` 由背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux** 驱动（`:686-687`），`chr_rdata` 已被真正读进 `bg_lo_q` / `bg_hi_q`（背景）与 `sp_shadow`（精灵），`bg_pattern_low` / `bg_pattern_high` 读的是锁存器。**`$2007` 对外部 CHR 的写通路也已实现**（`5cc36e7` / `576cc74`）：`chr_waddr` / `chr_we` / `chr_wdata` 三根线不再是常数，`chr_we` 是**恰好 1 `clk` 宽的组合 strobe**、`chr_waddr` 是**自增前**的 `v_addr`（逐条推导与证据见 11.3.2 与 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md)）。仍然绑常数的是 `sprite_chr_bus = 65536'd0`（内部路径的展平总线在外部模式下用不到）以及 `ppu_space_read` 对 `< $2000` 的 `8'h00`（**`$2007` 读回仍返回 0**，写通了读没通）。**但精灵像素的正确性已经有 A/B 证据**（`ad3c17a`：七个精灵可观测量在 552,960 个比较点上 0 分歧，1,708 个精灵决定像素跨三类优先级），精灵 A/B 里的 9 个精灵场景各自隔离一项、各有自己的非空洞 `$fatal`，8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转**逐项已被 A/B 证明**（逐条数字见 11.3.1），剩下的缺口只有 §8.2 的 overflow **行为**差异、9 个场景之外没构造出来的优先级组合与仲裁无背压。（先前记在这里的 shadow 差一行、8 位 `chr_sh` 只能交付一个字节两条**已修掉**：`chr_sh` 现在 16 bit 交付两个平面，`pat_addr_o` 改用下一行 scanline。）`nametable_ram` 的 `nt_fetch` 影子数组**已删除**，取数支路直接读 `nametable_ram` 的第二个组合读口。完整接线、取数节拍、像素级证据与仍未实现项见第 11 节。
 
 ### 1.2 `rtl/nes_core/ppu/nes_ppu_sprite.v`
 
@@ -122,7 +124,9 @@ assign scanline_chain = (^scanline_sel === 1'bx) ? scanline : scanline_sel;
 | `chr_req` | 1 拍 `ce` 宽的脉冲，不是 `ce` 电平 | `ce` 连续时成立；**`ce` 有空洞时脉冲会被拉长到多个 `clk`**（`nes_chr_fetch_unit` 的 `ce` 门控直接后果），见 11.3.5 |
 | `chr_addr` | 在 `chr_req` 期间寄存保持，请求结束后可以变 | 成立（`chr-fetch-tb` 的 A4 在全部 66 个请求拍上断言地址提前一个 `ce` 就是对的） |
 | `chr_rdata` | 在**下一个** `ce` 有效，即同步读、1 dot 延迟 | 成立（TB 的 CHR 模型是 1 拍延迟存储器） |
-| `chr_we` / `chr_wdata` | 本轮恒 0（见 5.3） | 成立，且被 `ppu-ext-chr-tb` 逐 `ce` 断言恒为 `1'b0` / `8'h00` |
+| `chr_we` | 1 拍 `clk` 宽的组合 strobe（不是 `ce` 宽） | **已按事实更新**（`5cc36e7` / `576cc74`）：由 `!reset && reg_cs && reg_we && (reg_addr == 3'd7) && (v_addr < 15'h2000)` 组合导出。`reg_cs` 是 `div_phase == 0` 的单 `clk` 脉冲，所以 strobe 与 `g_chr_internal` 的 `chr_ram` 写落在**同一个 `posedge`** 上；`system-v6` 的 P0-8 在 **0** 个连续 `ce` 上测到高，W1 / W2 各自独立复核 |
+| `chr_waddr` | strobe 为高时是**自增前**的 `v_addr`（非 CHR 时 `14'h0000`） | 成立（`system-v6` 的 `P0-2 WRITE-TRANSLATION` 在每个写拍上断言 `chr_waddr == u_ppu.v_addr` 自增前、`chr_waddr[13] == 0`） |
+| `chr_wdata` | strobe 为高时等于 `reg_din` | 成立（同一拍比对，0 错） |
 
 ### 2.2 地址合成（**仍未实现**）
 
@@ -258,7 +262,7 @@ dot 1..256     渲染期，u_sprite 只读 shadow latch
 
 - 请求地址来自 `pat_addr_o[slot*13 +: 13]`，高平面地址 = `pat_addr_o + 8`（14 位回卷）——**注意这里的 `+ 8` 是字节**，与 `nes_ppu_sprite` 内部路径的 `+ 13'd64` **位**是同一件事，见 1.2 的三处约定表。
 - `scanline_sel` **本应**在 dot 257..291 期间指向**下一行**；`nes_ppu_sprite` 已经为此加了 `scanline_sel` 输入和 `scanline_chain` 的 X 兜底，但 `nes_ppu2c02` 现在两个分支都把 `scanline_sel` 接成 `scanline`（`:659`）——**这现在是刻意的、正确的接法**（见 11.3.1 第 2 条）：预取要"下一行"的 pattern 地址，已经由 `nes_ppu_sprite` 内部独立的 next-line 链在 `pat_addr_o` 上实现（`scanline + 1`、261 回卷到 0），所以 `scanline_sel` 必须留在本行，否则会连 `s_pat_addr` 一起移到下一行、动到 `EXTERNAL_CHR=0` 路径本 dot 渲染的每一个像素。原先这里造成的"差一行"**已修掉**。
-- **`chr_we` / `chr_wdata` 保持 0。** 外部模式下 CPU 通过 `$2007` 写 CHR RAM 的通路不接（见 6.2），所以外部 CHR 在这一版里是只读的。留着端口是为了不推翻接口。
+- **（已按事实更新）`chr_we` / `chr_waddr` / `chr_wdata` 不再保持 0。** 外部模式下 CPU 通过 `$2007` 写 CHR 的通路已经接上（`5cc36e7` / `576cc74`），逐条合同与证据见 11.3.2。**这一段（5.3）是精灵 shadow 预取的叙事，端口当时留着只是为了不推翻接口**；写通路的实现与本节的调度窗口没有耦合，但它带来了一条新的失败模式——**写与背景取数在共享 CHR 地址总线上会撞**（实测 96 个写拍里 22 拍相撞），见 11.3.2。
 
 ### 5.4 pre-render 行
 
@@ -427,9 +431,9 @@ FAIL tb_nes_mapper_mmc3 with 3 failing checks
 
 **位宽修完不等于外部 CHR 能用。** 下面这些里只有第 1、3 条的状态变了：
 
-- ~~**外部 CHR 取数逻辑仍然一行都没写**~~ —— **（已按事实更新）背景取数已实现，精灵预取已接线**。`g_chr_external` 现在**同时**例化 `nes_chr_fetch_unit`（背景）与 `nes_sprite_chr_fetch`（精灵），`chr_req` / `chr_addr` 是精灵优先的**组合优先 mux**（`:686-687`，`sp_bus_sel = sp_busy`，**无握手无背压**），`chr_rdata` 被读进 PPU 侧 `bg_lo_q` / `bg_hi_q` / `bg_ready`（背景）与 `sp_shadow`（精灵）；`nt_fetch` 影子数组已删除，改直接读 `nametable_ram` 第二读口。**但** `chr_we = 1'b0` / `chr_wdata = 8'h00`、`$2007` 对外部 CHR 读恒得 0 / 写被丢弃，**精灵像素的等价性已经有 A/B 证据但专项覆盖仍有缺口**（`ad3c17a`，见 11.3.1 第 1 条）。接线、取数节拍与像素级证据见第 11.1 节，未实现项见 11.3 节。
+- ~~**外部 CHR 取数逻辑仍然一行都没写**~~ —— **（已按事实更新）背景取数已实现，精灵预取已接线**。`g_chr_external` 现在**同时**例化 `nes_chr_fetch_unit`（背景）与 `nes_sprite_chr_fetch`（精灵），`chr_req` / `chr_addr` 是精灵优先的**组合优先 mux**（`:686-687`，`sp_bus_sel = sp_busy`，**无握手无背压**），`chr_rdata` 被读进 PPU 侧 `bg_lo_q` / `bg_hi_q` / `bg_ready`（背景）与 `sp_shadow`（精灵）；`nt_fetch` 影子数组已删除，改直接读 `nametable_ram` 第二读口。**但** `$2007` 对外部 CHR **读**恒得 0（`$2007` **写**已实现，见 11.3.2）、写与取数在共享地址总线上会撞且**未修**（11.3.2）、片上无任何 CHR 存储，**精灵像素的等价性已经有 A/B 证据但专项覆盖仍有缺口**（`ad3c17a`，见 11.3.1 第 1 条）。接线、取数节拍与像素级证据见第 11.1 节，未实现项见 11.3 节。
 - **`chr_bank_offset` 仍然没接进 PPU**。`nes_system_v5` 的 `ppu_addr`/`ppu_a12` 仍绑 0，所以 CNROM/MMC1 的 CHR 切换在系统级依旧不可观测，MMC3 的 A12 扫描 IRQ 计数器在系统级依旧无法被时钟。这次抬位宽只是把 mapper 输出的**地址**修对，没有产生任何新的可观察行为。**这一条完全没有变**，见 11.3.6。
-- ~~**没有任何 TB 把 `EXTERNAL_CHR` 设成 `1'b1`**~~ —— **（已按事实更新）现在有了**。`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）在同一 testbench 里例化 `EXTERNAL_CHR=1'b0` 与 `EXTERNAL_CHR=1'b1` 两个 `nes_ppu2c02` 做 A/B 比对，5 组配置 × 3 帧、921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对全部一致。**但它那 921,600 次比对只覆盖背景**——精灵像素的等价性已由 `ad3c17a` 另行证明（见 11.3.1 第 1 条），而 `$2007` 外部 CHR 写、mapper banking 仍未覆盖或未实现，见 11.3。
+- ~~**没有任何 TB 把 `EXTERNAL_CHR` 设成 `1'b1`**~~ —— **（已按事实更新）现在有了**。`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）在同一 testbench 里例化 `EXTERNAL_CHR=1'b0` 与 `EXTERNAL_CHR=1'b1` 两个 `nes_ppu2c02` 做 A/B 比对，5 组配置 × 3 帧、921,600 次逐 `ce` 逐 dot 的 `pixel_index` + `bg_pa_enable` 比对全部一致。**但它那 921,600 次比对只覆盖背景**——精灵像素的等价性已由 `ad3c17a` 另行证明（见 11.3.1 第 1 条），而 `$2007` 外部 CHR **读**、mapper banking 仍未覆盖或未实现，见 11.3。（`$2007` 外部 CHR **写**的端到端证据在 `tb/system/tb_nes_system_v6.v`，回归目标 `system-v6`，见 11.3.2。）
 - **5 个 mapper 子模块自己的 `CHR_ADDR_BITS` 默认值仍是 16**（见 9.2 末段）。目前全靠 `nes_mapper.v` 的显式覆盖，没有直接实例化它们的顶层设计，但这是留给下一个人的陷阱。
 - **MMC3 8 bit CHR 寄存器上限 256 KiB 仍会截断**。17 bit 只覆盖 128 KiB；写 `0xC0` 以上的 bank 依然会回绕。这是"取 17 而不是 18"这个选择的已知代价，不在本轮范围内。
 - 第 10 节的落地顺序因此**只剩第 3-4 步**：第 1 步（抬位宽）与第 2 步（背景取数 + A/B 逐像素等价）都已完成。
@@ -545,7 +549,7 @@ TB 用**层次化预载**把 `dut_a.chr_ram` / `dut_b.chr_ram` / `chr_mem` 三�
 | `vblank` / `nmi_o` / `frame_done` | 逐 `ce` 比 |
 | `dbg_v` / `dbg_t` / `dbg_x` / `dbg_w` | scroll 内部状态逐 `ce` 比 |
 | `dbg_sprite0_hit` / `dbg_sprite_overflow` | 逐 `ce` 比（背景落地那一轮是透明精灵图案、两者恒 0；`ad3c17a` 之后 A/B 另加七个精灵可观量的比对，见 11.3.1 第 1 条） |
-| `chr_we` / `chr_wdata` | 必须恒为 `1'b0` / `8'h00` |
+| `chr_we` / `chr_wdata` | **（已改目标）`A6 $2007-WRITE-STROBE`**，见 11.3.2。原先的"`chr_we` 恒 `1'b0` / `chr_wdata` 恒 `8'h00`"在写通路落地后已经**陈旧**：现在断言"`chr_we` 为高 ⟺ 该拍是真实的 `reg_cs && reg_we && reg_addr == 7` 写周期，且 `chr_wdata == reg_din`"。**这条 TB 故意没有写场景**，所以实测到 0 个 strobe 拍；这是诚实的 0 而不是空洞，原因与端到端证据的位置见 11.3.2 |
 | `bg_pattern_low` / `bg_pattern_high` | `bg_pa_enable = 0` 时必须为 `8'h00`；`bg_pa_enable = 1` 且已在比对帧内时 `bg_ready` 必须为 1 |
 | `chr_req` 的地址 | 每个请求拍都与"由 A 侧 `fine_x` / `temp_addr` / `bg_y_total` / `bg_coarse_y` / `bg_vertical_sections` **独立重算**出来的期望 tile base + 平面偏移（低平面 +0、高平面 +8）"比对，触发点或地址错开一位即 fatal |
 | 锁存字节 | `bg_valid` 脉冲后一拍把 `bg_lo_q` / `bg_hi_q` 与 `chr_mem[lo_addr]` / `chr_mem[hi_addr]` 逐字节比对 |
@@ -632,15 +636,56 @@ PASS tb_nes_ppu2c02_ext_chr
 - ~~补精灵专项覆盖：**8×16**、**每行 8 个 sprite 上限**（第 9 个之后的 sprite 不渲染）、**sprite overflow 标志位**、**水平/垂直/双翻转**~~ —— **已完成**：A/B TB 现在跑 **9 个精灵场景**，每组有自己的非空洞 `$fatal`（`case_sp_*` 计数器逐组清零，每组 `mismatched_pixels=0`）——`sp1-8x16-oddtile`（8×16 + 奇 tile 字节，40 个精灵决定像素）、`sp8-8x16-mixprio`（8×16 + 8 精灵 + 混合优先级，560 个、其中"不透明背景后" 80 个）、`sp8-8x8-limit`（每行 8 个精灵，2,048 个"恰好 8 个在范围内"的 dot）、`sp10-overflow`（10 精灵，2,048 个 overflow dot，标志位 A/B 一致）、`sp1-hflip`（48）、`sp1-vflip`（56）、`sp1-hvflip`（56）。**仍未做**：§8.2"用下一行 OAM 计数"的 overflow **行为**差异（未实现，所以不可观测），以及这 9 个场景之外没构造出来的**优先级组合**。
 - 第 10 节第 3 步的"整帧逐像素相同"在**精灵打开时**现在已经**成立并被断言**（`ad3c17a`）；下一步要补的是上面那条残留（§8.2 的 overflow **行为**差异、9 个场景之外的优先级组合），以及第 4 条的仲裁无背压。
 
-#### 11.3.2 `$2007` 写 CHR 仍被丢弃
+#### 11.3.2 `$2007` 写 CHR：已实现并有端到端证据；**读回**仍返回 0，**碰撞**仍未修
 
-`chr_we = 1'b0` / `chr_wdata = 8'h00`（`nes_ppu2c02.v:689-690`），`g_chr_external` 里**没有** `chr_ram` 写 always 块，`ppu_space_read` 对 `address < 14'h2000` 返回 `8'h00`（`:537-538`）。所以：
+**（已按事实更新）这一节原来的标题是"`$2007` 写 CHR 仍被丢弃"，那句话现在不成立。** 提交 `5cc36e7` / `576cc74` 实现了写通路，端到端证据在 `tb/system/tb_nes_system_v6.v`（回归目标 `system-v6`，**5,189** 行）。教学与逐条推导见 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md)。
 
-- 外部模式下 `$2007` **读** CHR 恒得 0；
-- 外部模式下 `$2007` **写** CHR 被静默丢弃；
-- TB 靠**层次化预载** `dut_b.chr_ram` 喂 CHR（`:329-337`），**完全没有经过 `$2007` 通路**。
+##### 已实现的部分
 
-第 8 节 8.1 登记的"`$2007` 写 CHR 后渲染晚 1 dot"因此**既没被实现也没被验证**。
+`nes_ppu2c02.v:712-715`：
+
+```verilog
+assign chr_waddr = (v_addr < 15'h2000) ? v_addr[13:0] : 14'h0000;
+assign chr_we    = !reset && reg_cs && reg_we && (reg_addr == 3'd7)
+                   && (v_addr < 15'h2000);
+assign chr_wdata = reg_din;
+```
+
+`g_chr_internal` 把 `chr_waddr` 绑成 `14'h0000`（`:543`），`chr_we` / `chr_wdata` 在内部分支**仍然不驱动**（模块头注释 `:266` 记的就是这条合同）。`nes_mapper.v` **一行未改**——它的 `chr_ram_we = chr_ram_enable_r && ppu_we && (ppu_addr[13] == 1'b0)`（`:221`）本来就是对的，`ppu_we` 之前只是恒 0。`nes_system_v6` 把三个信号导出成观测端口并让**写优先**于读共用 mapper 地址总线（`mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr`）。
+
+| 证据组 | 断言 | 实测 |
+| --- | --- | --- |
+| **P0-2 WRITE-TRANSLATION** | 每个写拍从 TB 自己的 bank 模型与 PPU 的**本地** `chr_waddr` 重建期望最终地址 `expected = (tb_chr_bank_model << 13) \| (chr_waddr & 0x1fff)`，并核对 `chr_waddr == ` **自增前**的 `u_ppu.v_addr`、`chr_waddr[13] == 0`、`local[12:0] == final[12:0]`、`final[16:13] == 0`、`chr_wdata == reg_din`。**这一条是新增的**：`chr_we` 从不抬 `chr_req`，所以原先门在 `chr_req` 上的 P0-2 对写地址是**零覆盖** | **96 / 96** 核对，**0** 错 |
+| **W1 NROM-CHR-RAM-WRITE** | 96 个 `$2007` 写拍；**总线侧独立统计**的"进入 CHR 半区的 `$2007` 写"数同样 96（相等 → 每一次写恰好产生一个 strobe）；mapper 接受 96/96；写拍翻译错 0；连续两个 `ce` 上 `chr_we` 为高 **0** 拍 | 见左 |
+| **W1 SENTINEL（非空洞）** | 每块 CHR-RAM 板跨**每一个 4 KiB 块**预载的是程序所写的**逐位取反**（`ab_v6` 上传 `ff 00 00 ff ff 00` / 预载 `00 ff ff 00 00 ff`；`chr_ram_b` 反过来）。漏掉任一次写，渲染就会显示哨兵那一档 pattern 值，该处逐 `ce` A/B 与具名像素类**两条同时失败**。在程序自己置起的 `ram[0015]` 标志处：96 个字节全部等于程序常量（错 0）、仍持哨兵 **0** 个；`chr_mem[$2000+d]`（超出 PPU 能产生的**每一个**地址，`chr_final_addr` 顶到 `$1FFF`）的 48 个字节**仍是哨兵** | 96/96、0、0；48/48 |
+| **W1 SELF-VALIDATING-PAIR** | `chr_ram_b` 跑**字节完全相同的代码**、两份 PRG 镜像只差填充循环读的那两个数据单元，因此上传**互补**的图像。两块板 strobe 拍数必须相等否则 `$fatal`；`chr_ram_b` 错误地仍停在 run A 图像上的字节 **0**。最后一帧按 4 `clk`/dot 采样比较 | **245,760** 个 clk 采样、**0** 处几何差异（两次运行真在锁步）、画面在**全部 245,760** 个采样上**不同**，其中 **15,360** 个落在可见扫描线**最左 16 列**（BG tile 0 / 1 所在处） |
+| **CHR-RAM vs CHR-ROM 忽略对（`chr_rom` / `ab_v6`）** | 同一份程序、同一批地址、同一批字节，**只有 `NROM_CHR_RAM` 不同**。配对前提：两块板 strobe 数相等 | **96 vs 96**；`mapper_chr_ram_we` 在 ROM 板 **96** 个写拍上**为低 0 次**（且该板 `chr_ram_enable` 本身是 0），RAM 板上**每一个**都为高；ROM 板 **131,072** 字节里**改变 0** 个；两块板最后一帧渲染出**完全相同**的画面 |
+| **W2 MMC3 bank 限定写** | 3 个写拍、3 个被接受、写拍翻译错 0。r0 = `$00` + 本地 `$0040` 的一字节落在 `chr_final_addr $00040`；**同一个本地地址**在 r0 = `$42` 时落在 `$10840`（相距 **67,584** 字节）；第三字节在本地 `$0840`（bit 11 置位）选中 r0 的奇 1 KiB，落在 `$10c40`。跨整个 128 KiB 阵列恰好 **1 / 1 / 1** 个字节改变，别处一个都没有 | 三写三址 |
+| **P0-3（重新验证）** | `chr_final_addr[13]` 在 **96** 个写拍上置位 **0** 次；本地 bit 12 在 **16,768** 次读请求上置位 | 0 / 96 |
+| **P0-1（重新验证）** | 复位窗口内 `chr_we = 0`、`chr_waddr = 0` | 成立 |
+| **P0-7（重新验证）** | **5 步**（3 步原版 `$8001` 写 + W2 的 2 次 r0 写）逐档错 **0**，三份预载 bank 图像两两不同仍成立 | 5 步、0 错 |
+| **P0-8（重新验证）** | `chr_req` 从不在连续两个 `ce` 上为高、背景与精灵两个取数单元从不在同一 `ce` 上同时要数据（**586k** 采样拍，**0** 碰撞）；**新增**：`chr_we` 也从不在连续两个 `ce` 上为高（**0** 次） | 0 / 0 / 0 |
+
+**为什么 `ab_v6` 本身必须是 `NROM_CHR_RAM = 1`**：`mapper_chr_ram_we` 为 0 时写通路在这个 testbench 里结构上是死的（TB 的 `chr_mem` 写入被 `chr_we && mapper_chr_ram_we` 门住），什么都不会被观测到。做成 RAM 板正好让 **P0-4 整帧 A/B 自己变成这条通路最强的检查**——`ab_v5` 的内部 `chr_ram` 与 `ab_v6` 的外部 `chr_mem` 都从哨兵出发、也都只可能因为程序自己的写才变成那张图。
+
+**`ppu-ext-chr-tb` 的 A/B 数字逐字节未变**（`S3` 七个精灵可观测量全部 `= 0`、`A3 verified request addresses=337450 verified latched plane pairs=126546`、`S2 request_beats=159296 … shadow_byte_mismatches=0`）——**写通路的加入没有让 PPU 的渲染行为发生任何漂移**。
+
+##### `ppu-ext-chr-tb` 为什么故意没有写场景
+
+那条 A/B TB 的像素比对把 `EXTERNAL_CHR = 0`（**逐 dot 组合**）与 `EXTERNAL_CHR = 1`（**一次取数提前**）放在一起比。渲染中期写 CHR 会让**两侧结构上不再等价**：内部那一侧立刻看到新字节，外部那一侧要等 1 dot 甚至更久。如果在那里加一个写场景，上面 921,600 / 552,960 那几组 A/B 数字就**不再有意义**——它们会开始测量"两侧架构不同"而不是"外部通路等价"。所以这条 TB 只保留一条**诚实的 0**：`A6 $2007-WRITE-STROBE` 断言"`chr_we` 为高 ⟺ 该拍是真实的 `reg_cs && reg_we && reg_addr == 7` 写周期，且 `chr_wdata == reg_din`"，而本 TB 的 `write_register` 只用地址 6/6/5/5/0/1、`read_status` 只用地址 2，**`reg_addr` 从来不是 7**，所以 strobe 合法地为 0 拍。端到端证明放在 `system-v6`。
+
+##### 仍然开放的两条
+
+- **（a）`$2007` 读 CHR 仍返回 0——写通了，读回没通。** `nes_ppu2c02.v:557` 的 `g_chr_external` 分支里，`ppu_space_read` 对 `address < 14'h2000` 返回 `8'h00`（`:560-561`）。所以外部模式下 CPU 写进去的字节读不回来，nametable 区（`$2000-$3EFF`）的 `$2007` 读也只会别名到 CHR 前 8 KiB 并同样拿到 0。`chr_rdata` 走的是**取数单元**那条通路（`chr_req` → `chr_rdata`），与 `$2007` 读不是同一条路。**任何"CHR 读写都可回读"的表述都是错的。**
+- **（b）读写碰撞在共享 CHR 地址总线上是一个未修的潜伏隐患。** `chr_req` **不被写压制**（`nes_ppu2c02.v:709` 只是两个取数单元的组合 mux），`bg_fetch_due`（`:604`）也没有扫描线门控也没有 mask 门控，所以两者可以独立地在同一个 `ce` 上为高。实测 **96 个写拍里 22 个**与在飞的背景取数相撞；那一拍 `chr_final_addr` 上是**写地址**，因此改用**写模型**核对（`P0-2 WRITE-READ-ARBITRATION` 把这件事测量出来而不是假定），代价是取数单元那一拍锁到写地址的字节。**本轮那 22 次碰撞 0 次落在 `bg_pa_enable` 为高或精灵打开的 scanline 上**（上传程序跑在 `PPUMASK = $00` 下），所以渲染结果未受影响——**但这不等于已修复**。一个在渲染中期写 CHR 的程序会有**一个 tile 拍**取到错字节。这是硬件形状（2C02 只有一根 CHR 地址总线）而不是接线错误，修法要么压制 `chr_req`（会破坏取数节拍）、要么给总线加握手/背压（本端口**没有**）、要么把上传窗口限制在关渲染时，**三条本轮一条都没做**。
+
+##### 另外三条仍然开放
+
+- **片上没有任何 CHR 存储**：那 128 KiB CHR **只活在 testbench 里**（每个外部实例一份 TB 侧模型）。真实系统需要 SDRAM，而 SDRAM 控制器在仓库里**还不存在**。
+- **`ppu_a12` 仍绑 0**（见 11.3.6），所以 MMC3 的 A12 扫描 IRQ 在系统级仍不能自时钟。
+- **BRAM 推断没有证明**：没有 Quartus / Fitter / STA。同址同拍的写读冲突在本模型里 undefined、testbench 建模成 read-first；真双口够不够、还是必须 simple dual port，**没有综合数字就不能回答**。
+
+第 8 节 8.1 登记的"`$2007` 写 CHR 后渲染晚 1 dot"现在**第一次有了一条真实通路可以被测量**，但本轮没有为此单独构造场景，所以**它仍然既没有被量化、也没有被验证**。
 
 #### 11.3.3 渲染期间的 `$2005` scroll 写会移动触发相位，TB 未覆盖
 
@@ -674,7 +719,7 @@ PASS tb_nes_ppu2c02_ext_chr
 
 | 差异 | 当前状态 |
 |---|---|
-| 8.1 `$2007` 写 CHR 后渲染晚 1 dot | 写通路根本没实现（11.3.2），既谈不上"晚 1 dot"也没有验证 |
+| 8.1 `$2007` 写 CHR 后渲染晚 1 dot | **（已按事实更新）写通路已实现**（11.3.2），所以这条差异**现在有了一条真实通路可以被测量**；但本轮没有为它单独构造场景，**既没有被量化也没有被验证**。另有一条相邻的**实测**必须一起转述：外部路径上写拍与在飞背景取数**22/96** 相撞（0 次落在可见渲染期），这是**未修**的隐患（11.3.2 (b)） |
 | 8.2 `sprite_overflow` 变成"下一行计数" | **没有实现**。`sprite_overflow_raw` 仍是本行组合量（`nes_ppu_sprite` 侧没改）；A/B 现在逐 `ce` 比对 raw 与 registered 两种 `sprite_overflow`、**0 分歧**，并走过 **2,048 个 overflow dot**（**6,144** 个 dot 上恰好 8 个精灵在范围内），但这条"下一行计数"的**行为差异本身仍然没有实现**，所以它在当前证据里**仍不可观测为差异** |
 | 8.3 `$2007` 读 nametable 区间别名到 CHR 前 8 KiB | 行为存在（`ppu_space_read` 的 `< 14'h2000` 判据），但 TB 从不通过 `$2007` 读 nametable，**未验证** |
 
@@ -738,7 +783,8 @@ PASS tb_nes_ppu2c02_ext_chr
 - **可以说（后续轮次新增）**：精灵通路的两个架构阻塞点已解除——`chr_sh` 已加宽到 **16 bit** 并**真正交付低/高两个平面**（不再是按位或、不再把每一个不透明像素强制成 palette `3`），`pat_addr_o` 已改用**下一行** scanline，所以 dot 292 落地的 shadow 正是下一行要用的那一份（**不再差一行**）。这两条改动的理由与边界见 11.3.1 第 2、3 条。
 - **可以说（后续轮次新增）**：精灵通路的**像素等价性已有 A/B 证据**。`tb/ppu/tb_nes_ppu2c02_ext_chr.v` 在 `EXTERNAL_CHR=0` 与 `EXTERNAL_CHR=1` 两个实例之间比 **7** 个精灵可观测量（`mixed_pixel` / `sprite_pixel` / `sprite_priority` / `raw_sprite0_hit` / `raw_sprite_overflow` / `registered_sprite0_hit` / `registered_sprite_overflow`），**552,960** 个比较点**全部 0 分歧**；精灵自检显示 **1,708** 个精灵决定像素真的被渲染（透明背景上 **908**、不透明背景前 **564**、不透明背景后 **236**，三类优先级都走到），**6,144** 个 dot 上恰好 8 个精灵在范围内、**2,048** 个 overflow dot，B 从 A 的**上一条扫描线**复现 mixed-pixel 的检查是 **0 of 0**。前提是"换非透明图案 + 精灵可见性自检"，由 `ad3c17a` 补上（`3e218bf` 只解除了 `chr_sh` 单字节与 next-line 两个**架构**阻塞点，**没有**提供这条证据）。**边界**：这是 TB 驱动那几组场景下的 A/B，**不是实机卡带、不是 NESdev test ROM、不是硬件**；逐条数字与限制见 11.3.1 第 1 条。
 - **可以说（逐项，已按实测更正）**：精灵 A/B 的 **9 个精灵场景**各自隔离一项、各有自己的非空洞 `$fatal`（`case_sp_*` 计数器逐组清零，每组 `mismatched_pixels=0`），所以 **8×16 高度**（`sp1-8x16-oddtile` 40、`sp8-8x16-mixprio` 560 个精灵决定像素）、**每行 8 个 sprite 上限**（`sp8-8x8-limit` 2,048、`sp8-8x16-mixprio` 4,096 个"恰好 8 个在范围内"的 dot）、**overflow 标志位**（`sp10-overflow` 2,048 个 overflow dot 上 A/B 一致）、**水平翻转**（`sp1-hflip` 48）、**垂直翻转**（`sp1-vflip` 56）、**双翻转**（`sp1-hvflip` 56）**各自独立成立**，不是"整体覆盖里顺带走到"。
-- **不能说**：外部模式的精灵通路**整体**可用（**像素等价性、8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转都已逐项 A/B 证明，但 §8.2"用下一行 OAM 计数"的 overflow **行为**差异未实现、所以仍不可观测，9 个场景之外没构造出来的优先级组合不宣称穷尽**，而且仲裁**无握手无背压**）；外部 CHR 的 `$2007` 读写可用（写被丢弃、读恒 0）；渲染期间改 scroll 可用；mapper CHR banking 已接通；`ppu_a12` 已被真实时钟；复位后第 0 帧正确；`chr_req` 在任意 `ce` 分频下都是 1 拍脉冲。
+- **可以说（`$2007` 写通路那一轮新增，`5cc36e7` / `576cc74`）**：外部 CHR 的 `$2007` **写**通路已实现并有端到端证据。写周期产生**恰好 1 `clk` 宽**的 `chr_we`，地址是**自增前**的 `v_addr`、数据是 `reg_din`；`system-v6`（**5,189** 行）实测 **96** 个写拍、**0** 翻译错，且**总线侧独立统计**的 `$2007` 写数同样 96（每写恰好一个 strobe）。非空洞由**哨兵**（预载程序所写的逐位取反，跨每一个 4 KiB 块）保证、字节级核对 96/96、**自验证对**（同一份代码、互补图像，最后一帧 245,760 个 clk 采样上画面**全部不同**、其中 15,360 个在最左 16 列）、**CHR-RAM/CHR-ROM 忽略对**（同程序同地址同字节，ROM 板 131,072 字节改 0 个、两板画面相同）以及 **MMC3 bank 限定写**（三写落 `$00040` / `$10840` / `$10c40`）交叉锁定。逐条见 11.3.2 与 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md)。**边界**：全部来自 Icarus 下的 RTL/TB 内部一致性，是 **TB 驱动场景**，**不是实机卡带、不是 NESdev test ROM、不是硬件**；`ppu-ext-chr-tb` 的 A/B 数字**逐字节未变**，即写通路的加入没有造成任何渲染漂移。
+- **不能说**：外部模式的精灵通路**整体**可用（**像素等价性、8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转都已逐项 A/B 证明，但 §8.2"用下一行 OAM 计数"的 overflow **行为**差异未实现、所以仍不可观测，9 个场景之外没构造出来的优先级组合不宣称穷尽**，而且仲裁**无握手无背压**）；**外部 CHR 的 `$2007` 读可用**（写通了，**读回仍恒得 0**）；**写与取数的碰撞已修**（实测 96 个写拍里 **22** 个与在飞背景取数相撞，0 次落在可见渲染期，但**未修**——渲染期写 CHR 会让一个 tile 拍取错）；渲染期间改 scroll 可用；mapper CHR banking 已接通；`ppu_a12` 已被真实时钟；复位后第 0 帧正确；`chr_req` 在任意 `ce` 分频下都是 1 拍脉冲。
 - **不能说**：精灵 slot 选择的**面积与 fmax 可接受**。11.3.8 的关闭**只覆盖"重复逻辑 + 回归时长"**：`nes_ppu2c02` 不再重复实现 `nes_ppu_sprite` 已有的扫描，但**面积与时序仍然没有任何综合证据**，`nes_ppu_sprite` 内部那份 64 项 OAM 范围扫描与 nth-set 优先编码**仍然每 dot 组合重算**。
 - **不能说**：任何综合 / STA / fmax / 上板结论。上述全部证据来自 Icarus Verilog 下的 RTL/TB 内部一致性。
 
@@ -748,7 +794,7 @@ PASS tb_nes_ppu2c02_ext_chr
 2. ~~**修 shadow 差一行**（11.3.1 第 2 条）~~ —— **已完成**：`pat_addr_o` 改用下一行 scanline（模块内部的 next-line 链），见 11.3.1 第 2 条。
 3. ~~**加宽 `nes_ppu_sprite.v` 的 `chr_sh` 以交付双平面**（11.3.1 第 3 条）~~ —— **已完成**：`chr_sh` 已是 16 bit，见 11.3.1 第 3 条。精灵专项覆盖**已做**（9 个精灵场景，8×16 / 每行 8 个上限 / overflow 标志位 / 翻转逐项 A/B 证明）；**仍未做**的只有 §8.2 的 overflow **行为**差异与 9 个场景之外的优先级组合。
 4. ~~**处理精灵 slot 选择的组合开销**（11.3.8 / R-08）~~ —— **已完成**。`nes_ppu_sprite` 导出纯观测输出 `cur_slot_o[3:0]`，`nes_ppu2c02` 改为消费它而不是重算一遍（`sp_nth_set`、64 项扫描 `always` 块、11 个只服务该扫描的 reg 全部删除，`nes_ppu2c02.v` 806 → 752 行）；27 万余 tick 逐 dot 等价、A/B 四行逐字节不变，`ppu-ext-chr-tb` 821.6 s → **162.5 s**、占全量 45.26% → **16.83%**。**但面积与 fmax 仍未测量**，那部分归 R-03 / R-05，见 11.3.8。
-5. **`$2007` 对外部 CHR 的写通路**（`chr_we` / `chr_wdata` + 写延迟），以及读回语义（8.3 的别名要不要接受）。
+5. ~~**`$2007` 对外部 CHR 的写通路**（`chr_we` / `chr_waddr` / `chr_wdata`）~~ —— **已完成**（`5cc36e7` / `576cc74`），逐条见 11.3.2。**仍未做**的是这条通路上剩余的三件事：**(a)** `$2007` **读** CHR 回读（`ppu_space_read` 仍返回 `8'h00`），以及 8.3 的别名要不要接受；**(b)** 写与背景取数在共享 CHR 地址总线上的**碰撞抑制**（实测 22/96 相撞，未修）；**(c)** 片上 CHR 存储与 BRAM 推断证明（要等外部存储方案）。§8.1 那条"写后渲染晚 1 dot"现在**可以被测量**了，但本轮没有为它构造场景。
 6. **mapper 侧 `chr_bank_offset` 组合叠加**（2.2）+ `nes_system_v5` 的 `ppu_addr` / `ppu_a12` 接线，并同步处理 `tb_nes_system_v5.v:1499-1507` 那条"`ppu_a12` 绑 0"的断言。
 7. **渲染期间 `$2005` 写的相位处理**（11.3.3）与**复位后第 0 帧的 warm-up**（11.3.4）。
 
