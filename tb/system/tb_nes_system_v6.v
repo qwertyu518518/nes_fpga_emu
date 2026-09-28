@@ -2,11 +2,22 @@
 
 // PHASE 1+2 for nes_system_v6.
 //
-// Three DUT instances on the same clock:
-//   ab_v6     nes_system_v6  MAPPER_SELECT=0  external CHR on the top-level port
+// Five DUT instances on the same clock:
+//   ab_v6     nes_system_v6  MAPPER_SELECT=0  NROM_CHR_RAM=1  external CHR on
+//                          the top-level port.  THIS IS THE $2007-TO-CHR RAM
+//                          INSTANCE (W1).  Its CHR model is preloaded with a
+//                          SENTINEL and only the program's own $2007 writes put
+//                          the rendered image there.
 //   ab_v5     nes_system_v5  identical params internal CHR, preloaded by hierarchy
-//   chr_mmc3  nes_system_v6  MAPPER_SELECT=4  its own CHR model and its own
-//                          registered chr_rdata, its own program image
+//   chr_rom   nes_system_v6  MAPPER_SELECT=0  NROM_CHR_RAM=0  the CHR-ROM twin of
+//                          ab_v6: byte-identical program, its own 128 KiB CHR
+//                          model already holding the bytes the program uploads.
+//                          This is the ROM half of the RAM/ROM ignore pair.
+//   chr_ram_b nes_system_v6  MAPPER_SELECT=0  NROM_CHR_RAM=1  ab_v6 again, same
+//                          program code, one PRG data byte changed so the program
+//                          uploads the COMPLEMENT image.  Self-validating pair.
+//   chr_mmc3  nes_system_v6  MAPPER_SELECT=4  MMC3_CHR_RAM=1  its own CHR model
+//                          and its own registered chr_rdata, its own program image
 //
 // Every P0 assertion is about the v6 external CHR path; every P1 assertion is
 // a carried-over invariant that has to be RE-PROVED on the v6 instance, not
@@ -14,6 +25,17 @@
 // them instruction for instruction; chr_mmc3 runs a SEPARATE image because the
 // phase 1 cart-write count (P0-2) and the phase 1 PPUCTRL value are NROM-specific
 // and would be changed by the extra $8001/$C000/$E000 writes P0-7 and P1-5 need.
+//
+// WHY ab_v6 IS NROM_CHR_RAM=1 AND WHY THAT IS NOT A WEAKENING.
+//   With NROM_CHR_RAM=0 mapper_chr_ram_we (nes_mapper.v:221) is a hard 0 and the
+//   new $2007 write path would be structurally dead in this tb: the tb chr_mem
+//   write is gated on chr_we && mapper_chr_ram_we, so it would never fire and
+//   nothing below would be observed.  chr_rom is the same program with
+//   NROM_CHR_RAM=0 and is where the ignore behaviour is proven.  Making the
+//   phase 1 instance a RAM board is what lets P0-4 itself become the strongest
+//   check in the file: ab_v5's internal chr_ram and ab_v6's external chr_mem
+//   both start at the SENTINEL and both end at the same 48 bytes ONLY if the
+//   external $2007 write really lands.
 
 module tb_nes_system_v6;
 
@@ -44,17 +66,18 @@ localparam integer TB_NROM_16K_MIRROR = (DUT_NROM_PRG_SIZE_BYTES <= 16384);
 localparam integer TB_WINDOW_BITS = (TB_NROM_16K_MIRROR != 0) ? 14 : 15;
 localparam integer TB_WINDOW_BYTES = (1 << TB_WINDOW_BITS);
 
-localparam [15:0] NMI_HANDLER = 16'h8400;
-localparam [15:0] IRQ_HANDLER = 16'h8500;
-localparam [15:0] FAIL1 = 16'h8800;
-localparam [15:0] FAIL2 = 16'h8810;
-localparam [15:0] FAIL3 = 16'h8820;
-localparam [15:0] TABLE1_ADDR = 16'h8900;
+localparam [15:0] NMI_HANDLER = 16'h8A10;
+localparam [15:0] IRQ_HANDLER = 16'h8A30;
+localparam [15:0] FAIL1 = 16'h8A50;
+localparam [15:0] FAIL2 = 16'h8A60;
+localparam [15:0] FAIL3 = 16'h8A70;
+localparam [15:0] TABLE1_ADDR = 16'h8A80;
 localparam [15:0] MAIN_PROG = 16'h8000;
 localparam [15:0] NMI_COUNTER_CELL = 16'h0010;
 localparam [15:0] IRQ_COUNTER_CELL = 16'h0011;
 localparam [15:0] DMA_FLAG_CELL = 16'h0013;
 localparam [15:0] OAM_RB_FLAG_CELL = 16'h0014;
+localparam [15:0] CHR_UPLOAD_FLAG_CELL = 16'h0015;
 localparam [15:0] PORT1_9TH_CELL = 16'h0018;
 localparam [15:0] PORT2_9TH_CELL = 16'h0019;
 localparam [15:0] PORT1_CELL_BASE = 16'h0020;
@@ -67,17 +90,66 @@ localparam [7:0] PPUCTRL_FINAL = 8'h90;
 localparam [7:0] PPUMASK_FINAL = 8'h1E;
 localparam [7:0] OAM_RB_EXPECT = 8'h11;
 
+// ------------------------------------------------------ W1 CHR upload shapes
+//
+// The program uploads the 48-byte three-tile image v4 used, one $2007 byte at a
+// time, from two PRG DATA bytes rather than from immediates.  That is what lets
+// chr_ram_b run BYTE-IDENTICAL CODE: only 8A00/8A01 differ between the two
+// images, so "the same program" is literally true at the instruction level and
+// the only thing that changes is which pattern the loop stores.
+//
+//   run A (ab_v6, chr_rom): 8A00=$FF 8A01=$00 -> the v4 image
+//   run B (chr_ram_b):      8A00=$00 8A01=$FF -> its exact complement
+//
+// Run A's image is what P0-5's named pixel classes were derived from, so ab_v6
+// keeps it.  The two images differ on EVERY one of the 48 bytes, which is what
+// makes each instance's own preload a usable sentinel against its own upload.
+localparam [15:0] CHR_FILL_ON_ADDR = 16'h8A00;
+localparam [15:0] CHR_FILL_OFF_ADDR = 16'h8A01;
+localparam [7:0] CHR_FILL_RUN_A_ON = 8'hFF;
+localparam [7:0] CHR_FILL_RUN_A_OFF = 8'h00;
+localparam [7:0] CHR_FILL_RUN_B_ON = 8'h00;
+localparam [7:0] CHR_FILL_RUN_B_OFF = 8'hFF;
+localparam integer CHR_TILE_BYTES = 48;
+
 // ------------------------------------------------------- phase 2 MMC3 config
 //
-// chr_mmc3 is elaborated with MAPPER_SELECT=4.  Its program writes $8001 three
-// times, each inside vblank, and the R0 register it selects is the ONLY 1 KiB
-// window its PPU ever reaches (see the P0-7 comments on local chr_addr[11]).
+// chr_mmc3 is elaborated with MAPPER_SELECT=4 and MMC3_CHR_RAM=1.  Its program
+// writes $8001 five times, each inside vblank.  Steps 1-3 are the original three
+// and step 4-5 are the W2 pair that proves a $2007 CHR write is bank-qualified
+// by the mapper.  MMC3_PPUCTRL is $00, so local chr_addr[12] is 0 and local
+// chr_addr[11] selects window 0 (r0) or window 1 (the odd 1 KiB half of r0).
+// Nothing ever sets $8000, so chr_inversion_r stays 0 and window index
+// {ppu_addr[12], ppu_addr[11:10]} resolves as 0/1 for bit 12 clear and 4/5/6/7
+// for bit 12 set; r1/r3 are unreachable in this configuration and never written.
 
 localparam [7:0] DUT_MMC3_SELECT = 8'd4;
 localparam [7:0] MMC3_PPUCTRL = 8'h00;
 localparam [7:0] MMC3_BANK_R0 = 8'h00;
 localparam [7:0] MMC3_BANK_R1 = 8'h01;
 localparam [7:0] MMC3_BANK_R2 = 8'h41;
+// W2.  Step 4 puts r0 back to $00 so the write lands at (reg<<10)|0x040 =
+// 0x00040, step 5 moves r0 to $42 -> reg {0x42[7:1],1'b0} = $42 -> (0x42<<10)|
+// 0x040 = 0x10840 for the same local address.  A third write at local $0840 puts
+// ppu_addr[11] high, so chr_window_base is index 1 = {reg[7:1],1'b1} = $43 ->
+// (0x43<<10)|0x040 = 0x10C40.  ($0840, not $0440: the sub-select is ppu_addr[11],
+// and $0400 is bit 10.)  All three sit OUTSIDE the 48-byte preloads P0-7 compares
+// pairwise (reg $00 at 0x0000, reg $00 image 2 at 0x0800, reg $40 at 0x10000,
+// the W2 image at 0x10800), which is why P0-7 needed no image change to
+// accommodate them.
+localparam [7:0] MMC3_W2_R0_LOW = 8'h00;
+localparam [7:0] MMC3_W2_R0_HIGH = 8'h42;
+localparam [15:0] MMC3_W2_ADDR_LOW = 16'h0040;
+localparam [15:0] MMC3_W2_ADDR_ODD = 16'h0840;
+localparam [7:0] MMC3_W2_BYTE_LOW = 8'hA1;
+localparam [7:0] MMC3_W2_BYTE_HIGH = 8'hB2;
+localparam [7:0] MMC3_W2_BYTE_ODD = 8'hC3;
+localparam [16:0] MMC3_W2_CANARY_OFF = 17'h0041;
+localparam [7:0] MMC3_W2_CANARY = 8'h5A;
+localparam [16:0] MMC3_W2_ADDR_LOW_EXP = 17'h00040;
+localparam [16:0] MMC3_W2_ADDR_HIGH_EXP = 17'h10840;
+localparam [16:0] MMC3_W2_ADDR_ODD_EXP = 17'h10C40;
+localparam [16:0] MMC3_W2_IMG_BASE = 17'h10800;
 localparam [7:8] MMC3_REG_R0 = 8'h00;
 localparam [7:8] MMC3_REG_R1 = 8'h00;
 localparam [7:0] MMC3_REG_R2 = 8'h40;
@@ -85,7 +157,7 @@ localparam integer MMC3_IMG_BASE_REG0 = 0 * 1024;
 localparam integer MMC3_IMG_BASE_REG1 = 2 * 1024;
 localparam integer MMC3_IMG_BASE_REG2 = 64 * 1024;
 localparam [7:0] MMC3_IRQ_LATCH_VALUE = 8'h07;
-localparam [15:0] MMC3_FAIL = 16'h8820;
+localparam [15:0] MMC3_FAIL = 16'h8A70;
 localparam [15:0] MMC3_IRQ_CELL = 16'h0013;
 localparam [7:0] MMC3_OAM_RB_EXPECT = 8'hF0;
 localparam [7:0] MMC3_OAM_Y = 8'hF0;
@@ -101,8 +173,13 @@ localparam [3:0] MMC3_EXP_INDEX_0 = 4'd1;
 // a measured fact rather than an unverified assumption.
 localparam [3:0] MMC3_EXP_INDEX_1 = 4'd1;
 localparam [3:0] MMC3_EXP_INDEX_2 = 4'd8;
+// W2 steps 4 and 5.  Step 4 returns r0 to $00, so the tile-0 window is reg $00
+// again and the named index goes back to 1; step 5 selects reg $42 whose
+// preloaded tile-0 is still plane0=$FF / plane1=$FF, so the index is 8 again.
+localparam [3:0] MMC3_EXP_INDEX_3 = 4'd1;
+localparam [3:0] MMC3_EXP_INDEX_4 = 4'd8;
 localparam integer MMC3_FRAME_TARGET = 3;
-localparam integer MMC3_BANK_STEPS = 3;
+localparam integer MMC3_BANK_STEPS = 5;
 
 reg clk;
 reg reset;
@@ -196,6 +273,10 @@ wire [7:0]  v6_mapper_write_data;
 wire [7:0]  v6_prg_readback;
 wire        v6_chr_req;
 wire [CHR_ADDR_BITS-1:0] v6_chr_final_addr;
+wire [13:0] v6_chr_waddr;
+wire        v6_chr_we;
+wire [7:0]  v6_chr_wdata;
+wire        v6_mapper_chr_ram_we;
 
 // ------------------------------------------------------------ v5 observable
 
@@ -315,6 +396,45 @@ wire [7:0]  m_prg_readback;
 wire        m_chr_req;
 wire [CHR_ADDR_BITS-1:0] m_chr_final_addr;
 wire [13:0] m_chr_addr;
+wire [13:0] m_chr_waddr;
+wire        m_chr_we;
+wire [7:0]  m_chr_wdata;
+wire        m_mapper_chr_ram_we;
+
+// ---------------------------------------------------- chr_rom / chr_ram_b
+//
+// chr_rom is ab_v6 with NROM_CHR_RAM=0 and chr_ram_b is ab_v6 with the two PRG
+// fill bytes swapped.  Everything else about them is identical, so any pixel
+// difference between them and ab_v6 can only come from what the program stored.
+
+wire        r_pixel_valid;
+wire [7:0]  r_pixel_x;
+wire [7:0]  r_pixel_y;
+wire [3:0]  r_pixel_index;
+wire        r_frame_done;
+wire [8:0]  r_ppu_dot;
+wire [8:0]  r_ppu_scanline;
+wire [CHR_ADDR_BITS-1:0] r_chr_final_addr;
+wire [13:0] r_chr_waddr;
+wire        r_chr_we;
+wire [7:0]  r_chr_wdata;
+wire        r_mapper_chr_ram_we;
+wire        r_mapper_chr_ram_enable;
+wire [31:0] r_cpu_cycle;
+
+wire        rb_pixel_valid;
+wire [7:0]  rb_pixel_x;
+wire [7:0]  rb_pixel_y;
+wire [3:0]  rb_pixel_index;
+wire        rb_frame_done;
+wire [8:0]  rb_ppu_dot;
+wire [8:0]  rb_ppu_scanline;
+wire [CHR_ADDR_BITS-1:0] rb_chr_final_addr;
+wire [13:0] rb_chr_waddr;
+wire        rb_chr_we;
+wire [7:0]  rb_chr_wdata;
+wire        rb_mapper_chr_ram_we;
+wire [31:0] rb_cpu_cycle;
 
 // ----------------------------------------------------------- CHR memory model
 //
@@ -323,18 +443,32 @@ wire [13:0] m_chr_addr;
 // combinational read of chr_mem would return every tile byte-shifted by one.
 // Dropping bit 13 here would also hide the NROM aliasing the model is supposed
 // to reproduce.
+//
+// THE WRITE HALF.  The byte that lands is the MAPPER'S OUTPUT address, not the
+// PPU's local chr_waddr, and it is accepted only when the mapper agrees, so
+//     accept_write = chr_we && mapper_chr_ram_we
+//     chr_mem[chr_final_addr] <= chr_wdata
+// Gating the array on chr_we alone would let a CHR-ROM build store into a local
+// RAM and the whole ROM/RAM distinction would be untestable.  The write shares
+// the ce_ppu edge with the read so both sides of the array sit on one enable.
 
 reg [7:0] chr_mem [0:CHR_MEM_BYTES-1];
 reg [7:0] chr_rdata_q;
 reg [7:0] chr_tile_image [0:47];
+reg [7:0] chr_tile_image_b [0:47];
 
 assign chr_rdata = chr_rdata_q;
 
 always @(posedge clk) begin
     if (reset)
         chr_rdata_q <= 8'h00;
-    else if (ab_v6.ce_ppu)
+    else if (ab_v6.ce_ppu) begin
         chr_rdata_q <= chr_mem[v6_chr_final_addr];
+        if ((v6_chr_we !== 1'b0) && (v6_mapper_chr_ram_we !== 1'b0)) begin
+            chr_mem[v6_chr_final_addr] <= v6_chr_wdata;
+            chr_wr_accepted = chr_wr_accepted + 1;
+        end
+    end
 end
 
 // TB-owned mapper model.  NROM has no bank register at all, so the CHR bank
@@ -346,6 +480,7 @@ reg [3:0] tb_chr_bank_model;
 // the point of P0-7 is that the bytes arriving at the PPU change, so the two
 // models must never alias.
 reg [7:0] m_chr_mem [0:CHR_MEM_BYTES-1];
+reg [7:0] m_chr_pre [0:CHR_MEM_BYTES-1];
 reg [7:0] m_chr_rdata_q;
 wire [7:0] m_chr_rdata;
 
@@ -359,13 +494,59 @@ assign m_chr_addr = chr_mmc3.u_ppu.chr_addr;
 always @(posedge clk) begin
     if (reset)
         m_chr_rdata_q <= 8'h00;
-    else if (chr_mmc3.ce_ppu)
+    else if (chr_mmc3.ce_ppu) begin
         m_chr_rdata_q <= m_chr_mem[m_chr_final_addr];
+        if ((m_chr_we !== 1'b0) && (m_mapper_chr_ram_we !== 1'b0)) begin
+            m_chr_mem[m_chr_final_addr] <= m_chr_wdata;
+            m_wr_accepted = m_wr_accepted + 1;
+        end
+    end
+end
+
+// chr_rom / chr_ram_b get their OWN 128 KiB models and their OWN registered
+// chr_rdata for the same reason chr_mmc3 does: a shared model would make the
+// board type invisible by construction, which is the whole point of the
+// RAM/ROM ignore pair.  rom_chr_pre is a full pre-run snapshot of the ROM
+// model's contents so "byte identical to before" is a real comparison and not a
+// re-derivation of the same load loop.
+
+reg [7:0] rom_chr_mem [0:CHR_MEM_BYTES-1];
+reg [7:0] rom_chr_pre [0:CHR_MEM_BYTES-1];
+reg [7:0] rom_chr_rdata_q;
+wire [7:0] rom_chr_rdata;
+
+assign rom_chr_rdata = rom_chr_rdata_q;
+
+always @(posedge clk) begin
+    if (reset)
+        rom_chr_rdata_q <= 8'h00;
+    else if (chr_rom.ce_ppu) begin
+        rom_chr_rdata_q <= rom_chr_mem[r_chr_final_addr];
+        if ((r_chr_we !== 1'b0) && (r_mapper_chr_ram_we !== 1'b0))
+            rom_chr_mem[r_chr_final_addr] <= r_chr_wdata;
+    end
+end
+
+reg [7:0] ramb_chr_mem [0:CHR_MEM_BYTES-1];
+reg [7:0] ramb_chr_rdata_q;
+wire [7:0] ramb_chr_rdata;
+
+assign ramb_chr_rdata = ramb_chr_rdata_q;
+
+always @(posedge clk) begin
+    if (reset)
+        ramb_chr_rdata_q <= 8'h00;
+    else if (chr_ram_b.ce_ppu) begin
+        ramb_chr_rdata_q <= ramb_chr_mem[rb_chr_final_addr];
+        if ((rb_chr_we !== 1'b0) && (rb_mapper_chr_ram_we !== 1'b0))
+            ramb_chr_mem[rb_chr_final_addr] <= rb_chr_wdata;
+    end
 end
 
 // ---------------------------------------------------------- program image
 
 reg [7:0] tb_prg [0:TB_WINDOW_BYTES-1];
+reg [7:0] tb_prg_b [0:TB_WINDOW_BYTES-1];
 reg [7:0] m_prg [0:TB_WINDOW_BYTES-1];
 reg [7:0] table1 [0:255];
 reg [7:0] m_table1 [0:255];
@@ -388,6 +569,8 @@ reg [15:0] m_self_loop_addr;
 integer reset_clks;
 integer reset_chr_req_bad;
 integer reset_chr_addr_bad;
+integer reset_chr_we_bad;
+integer reset_chr_waddr_bad;
 integer reset_mapper_id_bad;
 
 integer frames_seen;
@@ -419,6 +602,80 @@ wire [2:0] fu_state;
 wire       fu_cap_pl;
 wire [7:0] fu_bg_lo;
 wire [7:0] fu_bg_hi;
+
+// P0-6 race window.  The tb chr_mem array now changes mid-run, so a shadow
+// comparison whose address was itself written in the last two ce is comparing
+// against a different epoch of the array.  Those beats are counted and skipped
+// rather than silently compared; everything else is still checked.
+reg [CHR_ADDR_BITS-1:0] chr_wq0;
+reg [CHR_ADDR_BITS-1:0] chr_wq1;
+reg                      chr_wq0_v;
+reg                      chr_wq1_v;
+integer chr_pred_race_skip;
+integer chr_latch_race_skip;
+
+// ---------------------------------------------------- W1 / W2 / ignore counters
+integer chr_wr_beats;          // ab_v6 strobe beats
+integer chr_wr_exp_total;      // $2007 writes the tb bus monitor saw in the chr half
+integer chr_wr_checks;         // translation checks performed on write beats
+integer chr_wr_addr_err;
+integer chr_wr_req_clash;      // write beat with chr_req high
+integer chr_wr_clash_visible;  // ... and with bg or sprites enabled
+integer chr_wr_bit13_bad;
+integer chr_wr_not_accepted;   // mapper refused a chr-ram board's write
+integer chr_wr_consec;         // two consecutive ce_ppu with chr_we high
+reg     chr_wr_prev;
+reg     chr_write_on_port;
+reg [CHR_ADDR_BITS-1:0] chr_wr_exp_final;
+
+integer chr_wr_accepted;       // bytes the ab_v6 model actually stored
+
+integer chr_up_flag_seen;
+integer chr_up_snap_err;
+integer chr_up_snap_nochange;
+integer chr_up_addr_err;
+integer chr_v5_snap_err;
+integer rom_pre_bytes;
+integer rom_pre_err;
+integer rom_wr_beats;
+integer rom_wr_ramwe_bad;
+integer rom_wr_bad_wdata;
+integer rom_final_bytes;
+integer rom_tile_err;
+integer rb_wr_beats;
+integer rb_wr_not_accepted;
+integer rb_tile_err;
+integer rb_tile0_same;
+
+integer pic_rom_cmp;
+integer pic_rom_idx_diff;
+integer pic_rom_geom_diff;
+integer pic_rb_cmp;
+integer pic_rb_idx_diff;
+integer pic_rb_geom_diff;
+integer pic_rb_tile0_diff;
+integer m_wr_beats;
+integer m_wr_exp_total;
+integer m_wr_checks;
+integer m_wr_addr_err;
+integer m_wr_req_clash;
+integer m_wr_clash_visible;
+integer m_wr_bit13_bad;
+integer m_wr_not_accepted;
+integer m_wr_consec;
+integer m_wr_accepted;
+reg     m_wr_prev;
+reg     m_write_on_port;
+reg [CHR_ADDR_BITS-1:0] m_wr_exp_final;
+integer m_wr_low_hit;
+integer m_wr_high_hit;
+integer m_wr_odd_hit;
+integer m_wr_low_flat;
+integer m_wr_high_flat;
+integer m_wr_odd_flat;
+integer m_wr_low_before;
+integer m_wr_high_before;
+integer m_wr_odd_before;
 
 assign fu_state = ab_v6.u_ppu.g_chr_external.u_chr_fetch.state;
 assign fu_cap_pl = ab_v6.u_ppu.g_chr_external.u_chr_fetch.cap_pl;
@@ -539,12 +796,16 @@ reg expect_dma_data_valid;
 
 // per-frame P0-3 bucket
 integer f_chr_req;
+integer f_chr_wr;
+integer f_wr_final_bit13_bad;
 integer f_local_bit13;
 integer f_local_bit12;
 integer f_final_bit13_bad;
 integer f_addr_err;
 integer f_max_final_addr;
 integer last_f_chr_req;
+integer last_f_chr_wr;
+integer last_f_wr_final_bit13_bad;
 integer last_f_local_bit13;
 integer last_f_local_bit12;
 integer last_f_final_bit13_bad;
@@ -589,12 +850,16 @@ integer z;
 // ab_v6 and chr_mmc3 can be checked.
 reg     ab_req_prev;
 reg     m_req_prev;
+reg     ab_we_prev;
+reg     m_we_prev;
 integer ab_req_beats;
 integer ab_req_consec;
+integer ab_we_consec;
 integer ab_bgsp_beats;
 integer ab_bgsp_clash;
 integer m_req_beats;
 integer m_req_consec;
+integer m_we_consec;
 integer m_bgsp_beats;
 integer m_bgsp_clash;
 
@@ -628,6 +893,18 @@ wire m_bg_chr_req = chr_mmc3.u_ppu.g_chr_external.u_chr_fetch.chr_req;
 wire m_sp_chr_req = chr_mmc3.u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req;
 wire [6:0] m_cpu_state = chr_mmc3.u_cpu.dbg_state;
 wire m_ppu_bg_enable = chr_mmc3.u_ppu.mask_reg[3];
+
+// A write that steals the mapper port from the fetch unit only damages a RENDERED
+// pixel if something the fetch feeds is actually on screen.  bg_pa_enable is the
+// ppu's own term for that on the background side, and sprites only reach the
+// output on scanlines below 240, so a vblank-time write is harmless even with
+// PPUMASK bits 2/3/4 set.  This is the exact enable, not a mask-bit proxy.
+wire ab_chr_wr_displayed = ab_v6.u_ppu.bg_pa_enable ||
+                           ((ab_v6.u_ppu.mask_reg[2] !== 1'b0) &&
+                            (ab_v6.u_ppu.scanline < 9'd240));
+wire m_chr_wr_displayed = chr_mmc3.u_ppu.bg_pa_enable ||
+                          ((chr_mmc3.u_ppu.mask_reg[2] !== 1'b0) &&
+                           (chr_mmc3.u_ppu.scanline < 9'd240));
 
 // ----------------------------------------------------------------- helpers
 
@@ -797,9 +1074,29 @@ task ppu_write_data;
     end
 endtask
 
-// v4's $2007 CHR tile writes are deliberately NOT reproduced: with
-// EXTERNAL_CHR=1 the CHR branch of the $2007 handler is empty, so the writes
-// would be silently dropped and the tile bytes have to come from the preload.
+// Eight $2007 writes of the byte held in a PRG DATA cell.  Taking the value
+// from memory instead of an immediate is what lets chr_ram_b run byte-identical
+// CODE: only the two data cells differ between the two images.
+task ppu_fill8_src;
+    input [15:0] source;
+    reg [15:0] top;
+    begin
+        ldx_imm(8'h08);
+        lda_abs(source);
+        top = pc;
+        sta_abs(16'h2007);
+        emit(8'hCA);
+        bne_to(top);
+    end
+endtask
+
+// v4's $2007 CHR tile writes ARE reproduced here, in the same order and the same
+// addresses, which is what makes the A/B in P0-4 non-vacuous: ab_v6's external
+// chr_mem starts at the SENTINEL (run B's image) and only these writes can put
+// run A's image there, while ab_v5's internal chr_ram starts at the same
+// sentinel and is filled by its own internal $2007 handler.  $2007 CHR writes
+// were previously omitted because nes_ppu2c02's external branch dropped them;
+// they are live now (chr_waddr/chr_we/chr_wdata), so the omission is gone.
 task build_main;
     reg [15:0] self_loop;
     reg [15:0] copy_top;
@@ -914,6 +1211,42 @@ task build_main;
         sta_abs_x(16'h0200);
         emit(8'hE8);
         bne_to(copy_top);
+
+        // ---- the $2007 CHR upload, v4's exact address and byte order ----
+        //
+        // It has to be done TWICE.  PPUCTRL bit 4 is set, so the background
+        // fetches at local $1000+off; nes_mapper_nrom.v:26 returns
+        // ppu_addr[12:0] UNCHANGED, so bit 12 is a real address bit and
+        // chr_mem[$1000+off] is a different cell from chr_mem[$0000+off].  The
+        // sprite fetches at local $0020 because bit 5 of PPUCTRL is clear.  Both
+        // halves are written by the program, so nothing the renderer reads comes
+        // from the preload.
+        ppu_set_addr(16'h0000);
+        ppu_fill8_src(CHR_FILL_ON_ADDR);
+        ppu_set_addr(16'h0008);
+        ppu_fill8_src(CHR_FILL_OFF_ADDR);
+        ppu_set_addr(16'h0010);
+        ppu_fill8_src(CHR_FILL_OFF_ADDR);
+        ppu_set_addr(16'h0018);
+        ppu_fill8_src(CHR_FILL_ON_ADDR);
+        ppu_set_addr(16'h0020);
+        ppu_fill8_src(CHR_FILL_ON_ADDR);
+        ppu_set_addr(16'h0028);
+        ppu_fill8_src(CHR_FILL_OFF_ADDR);
+        ppu_set_addr(16'h1000);
+        ppu_fill8_src(CHR_FILL_ON_ADDR);
+        ppu_set_addr(16'h1008);
+        ppu_fill8_src(CHR_FILL_OFF_ADDR);
+        ppu_set_addr(16'h1010);
+        ppu_fill8_src(CHR_FILL_OFF_ADDR);
+        ppu_set_addr(16'h1018);
+        ppu_fill8_src(CHR_FILL_ON_ADDR);
+        ppu_set_addr(16'h1020);
+        ppu_fill8_src(CHR_FILL_ON_ADDR);
+        ppu_set_addr(16'h1028);
+        ppu_fill8_src(CHR_FILL_OFF_ADDR);
+        lda_imm(8'h01);
+        sta_abs(CHR_UPLOAD_FLAG_CELL);
 
         ppu_set_addr(16'h2001);
         ppu_write_data(8'h01);
@@ -1035,6 +1368,10 @@ task build_tables;
             table1[k] = 8'hFF;
         for (k = 0; k < 256; k = k + 1)
             put(TABLE1_ADDR + k[15:0], table1[k]);
+        // Run A's CHR fill constants.  These two cells are the ONLY difference
+        // between the two program images, so chr_ram_b executes identical code.
+        put(CHR_FILL_ON_ADDR, CHR_FILL_RUN_A_ON);
+        put(CHR_FILL_OFF_ADDR, CHR_FILL_RUN_A_OFF);
         for (k = 0; k < 8; k = k + 1) begin
             ctrl_rd_exp[k] = BUTTONS1[k];
             ctrl_rd_exp[9 + k] = BUTTONS2[k];
@@ -1045,7 +1382,9 @@ task build_tables;
 endtask
 
 // The v4 internal CHR image, byte for byte: [0:7]=FF [8:15]=00 [16:23]=00
-// [24:31]=FF [32:39]=FF [40:47]=00.
+// [24:31]=FF [32:39]=FF [40:47]=00.  That is run A's image and it is what P0-5's
+// named pixel classes were derived from, so ab_v6 has to end up holding exactly
+// it.
 task build_chr_image;
     begin
         for (k = 0; k < 8; k = k + 1) begin
@@ -1055,18 +1394,40 @@ task build_chr_image;
             chr_tile_image[24 + k] = 8'hFF;
             chr_tile_image[32 + k] = 8'hFF;
             chr_tile_image[40 + k] = 8'h00;
+            // Run B's image is its exact complement, so it differs on all 48
+            // bytes and can serve as run A's sentinel and vice versa.
+            chr_tile_image_b[0 + k] = 8'h00;
+            chr_tile_image_b[8 + k] = 8'hFF;
+            chr_tile_image_b[16 + k] = 8'hFF;
+            chr_tile_image_b[24 + k] = 8'h00;
+            chr_tile_image_b[32 + k] = 8'h00;
+            chr_tile_image_b[40 + k] = 8'hFF;
         end
     end
 endtask
 
-// ab_v6 gets the image at every 4 KiB boundary.  The pattern-table select lands
-// on local chr_addr[12], not bit 13, and the NROM mapper preserves bit 12 while
-// dropping bit 13, so a set PPUCTRL bit 4 makes v6 read chr_mem[0x1000+off].
-// Mirroring at every 4 KiB makes that alias to chr_mem[off] and keeps the bit-13
-// drop a no-op for every address the PPU can produce.  ab_v5's internal array is
-// 8 KiB and its PPU indexes the 13-bit {table, tile, 4'b0} + fine pattern
-// address, so the image goes into BOTH 4 KiB tables.  Without either copy v5
-// and v6 disagree the moment PPUCTRL bit 4 is set.
+// ab_v6 (NROM_CHR_RAM=1) and ab_v5 get the SENTINEL, which is run B's image.
+// That is the whole point: the rendered image has to arrive through the
+// program's own $2007 writes, not through the preload.
+//
+// Where the image has to sit differs per board, and that difference is the point
+// of the check rather than a nuisance:
+//
+//   ab_v6  external CHR, 128 KiB model.  nes_mapper_nrom.v:26 returns
+//          ppu_addr[12:0] unchanged, so bit 12 is a REAL address bit: with
+//          PPUCTRL[4]=1 the background reads chr_mem[$1000+off] and with
+//          PPUCTRL[5]=0 the sprite reads chr_mem[$0020+off].  The program
+//          writes both halves, so both end at run A.
+//   ab_v5  internal CHR.  bg_pattern_addr carries the table select too, so the
+//          background reads chr_ram[$1000+off] and the sprite chr_ram[$0020+off],
+//          i.e. exactly the same two cells.  Its $2007 handler writes
+//          chr_ram[v_addr[12:0]], so a write to $1000 lands on $0000 as well;
+//          the program writes both halves anyway and both land correctly.
+//
+// The sentinel therefore goes at bytes 0..47 of EVERY 4 KiB block in both
+// arrays, which covers $0000 and $1000 and costs nothing.  Bytes $2000+ are
+// never addressed (chr_final_addr tops out at 0x1FFF) and stay at the sentinel
+// as the untouched-address control.
 task load_chr;
     integer m;
     integer b;
@@ -1074,13 +1435,47 @@ task load_chr;
         for (m = 0; m < CHR_MEM_BYTES; m = m + 1)
             chr_mem[m] = 8'h00;
         for (m = 0; m < (CHR_MEM_BYTES / 4096); m = m + 1)
-            for (b = 0; b < 48; b = b + 1)
-                chr_mem[m * 4096 + b] = chr_tile_image[b];
+            for (b = 0; b < CHR_TILE_BYTES; b = b + 1)
+                chr_mem[m * 4096 + b] = chr_tile_image_b[b];
         for (b = 0; b < 8192; b = b + 1)
             ab_v5.u_ppu.chr_ram[b] = 8'h00;
         for (m = 0; m < 2; m = m + 1)
-            for (b = 0; b < 48; b = b + 1)
-                ab_v5.u_ppu.chr_ram[m * 4096 + b] = chr_tile_image[b];
+            for (b = 0; b < CHR_TILE_BYTES; b = b + 1)
+                ab_v5.u_ppu.chr_ram[m * 4096 + b] = chr_tile_image_b[b];
+    end
+endtask
+
+// chr_rom is the CHR-ROM board.  Its ROM image already holds exactly the bytes
+// the program tries to write (checked byte for byte by W1), so a cartridge built
+// this way needs no upload at all, and rom_chr_pre is a byte-for-byte snapshot of
+// that image so "the memory never changed" is a measured comparison.
+task load_chr_rom;
+    integer m;
+    integer b;
+    begin
+        for (m = 0; m < CHR_MEM_BYTES; m = m + 1) begin
+            rom_chr_mem[m] = 8'h00;
+            rom_chr_pre[m] = 8'h00;
+        end
+        for (m = 0; m < (CHR_MEM_BYTES / 4096); m = m + 1)
+            for (b = 0; b < CHR_TILE_BYTES; b = b + 1) begin
+                rom_chr_mem[m * 4096 + b] = chr_tile_image[b];
+                rom_chr_pre[m * 4096 + b] = chr_tile_image[b];
+            end
+    end
+endtask
+
+// chr_ram_b is ab_v6 with run B's program: sentinel here is run A's image and
+// the program stores run B's complement into it.
+task load_chr_ram_b;
+    integer m;
+    integer b;
+    begin
+        for (m = 0; m < CHR_MEM_BYTES; m = m + 1)
+            ramb_chr_mem[m] = 8'h00;
+        for (m = 0; m < (CHR_MEM_BYTES / 4096); m = m + 1)
+            for (b = 0; b < CHR_TILE_BYTES; b = b + 1)
+                ramb_chr_mem[m * 4096 + b] = chr_tile_image[b];
     end
 endtask
 
@@ -1294,6 +1689,36 @@ task build_mmc3_main;
         lda_imm(8'h00);
         sta_abs(16'hE000);
 
+        // ---- W2: prove a $2007 CHR write is bank-qualified by the mapper ----
+        //
+        // Step 4 returns r0 to $00 and writes one byte at local $0040, which is
+        // in window 0, so the byte has to land at (reg $00 << 10) | 0x040.
+        // Step 5 moves r0 to $42 -> reg {0x42[7:1],1'b0} = $42 and writes the
+        // SAME local address again; if the store went to a flat local RAM the
+        // second write would overwrite the first, so landing at a different cell
+        // is the proof.  A third write at local $0440 raises local bit 11, which
+        // is the odd/even 1 KiB sub-select inside r0's 2 KiB, so it has to land
+        // at ({reg[7:1],1'b1} << 10) | 0x040 and not in r0's own even half.
+        wait_vb = pc;
+        lda_abs(16'h2002);
+        and_imm(8'h80);
+        beq_to(wait_vb);
+        lda_imm(MMC3_W2_R0_LOW);
+        sta_abs(16'h8001);
+        ppu_set_addr(MMC3_W2_ADDR_LOW);
+        ppu_write_data(MMC3_W2_BYTE_LOW);
+
+        wait_vb = pc;
+        lda_abs(16'h2002);
+        and_imm(8'h80);
+        beq_to(wait_vb);
+        lda_imm(MMC3_W2_R0_HIGH);
+        sta_abs(16'h8001);
+        ppu_set_addr(MMC3_W2_ADDR_LOW);
+        ppu_write_data(MMC3_W2_BYTE_HIGH);
+        ppu_set_addr(MMC3_W2_ADDR_ODD);
+        ppu_write_data(MMC3_W2_BYTE_ODD);
+
         self_loop = pc;
         m_self_loop_addr = self_loop;
         jmp_abs(self_loop);
@@ -1437,8 +1862,51 @@ task load_chr_mmc3;
             m_chr_mem[MMC3_IMG_BASE_REG2 + 32 + b] = 8'h55;
             m_chr_mem[MMC3_IMG_BASE_REG2 + 40 + b] = 8'hAA;
         end
+        // W2 control cell.  It sits one byte above the $0040 write target inside
+        // the same 1 KiB window, so it proves the store was a single-cell write
+        // at a mapper-translated address and not a bulk or misaligned one.  It
+        // is outside the 48-byte images P0-7 compares and outside the tile-0
+        // region P0-7 samples (columns 0..7), so neither check is disturbed.
+        m_chr_mem[MMC3_W2_CANARY_OFF] = MMC3_W2_CANARY;
+        // The fourth 1 KiB image.  Step 5 moves r0 to $42 -> reg $42, whose
+        // window is at 0x10800, which no earlier step reaches, so it needs its
+        // own preloaded tile-0 or the named index for that step would be a
+        // measurement of an empty bank.  It is byte-for-byte the reg $40 image
+        // (plane0=$FF/plane1=$FF -> pattern 3 -> $3F03=$18 -> index 8), so the
+        // rule P0-7(b) states still applies unchanged.  It is outside the three
+        // images P0-7 compares pairwise and outside all three W2 write targets.
+        for (b = 0; b < 8; b = b + 1) begin
+            m_chr_mem[MMC3_W2_IMG_BASE + 0 + b] = 8'hFF;
+            m_chr_mem[MMC3_W2_IMG_BASE + 8 + b] = 8'hFF;
+            m_chr_mem[MMC3_W2_IMG_BASE + 16 + b] = 8'hFF;
+            m_chr_mem[MMC3_W2_IMG_BASE + 24 + b] = 8'hFF;
+            m_chr_mem[MMC3_W2_IMG_BASE + 32 + b] = 8'hFF;
+            m_chr_mem[MMC3_W2_IMG_BASE + 40 + b] = 8'hFF;
+        end
     end
 endtask
+
+// W2 write-beat window decode, built only from the tb's own r0 register model.
+// nes_mapper_mmc3.v:110-135 does exactly this: ppu_addr[12] picks the half,
+// ppu_addr[11] is the odd/even 1 KiB sub-select, and window 1 is
+// {chr_bank0_r[7:1],1'b1}, i.e. the odd 1 KiB of the SAME 2 KiB r0.  chr_inversion
+// is 0 because this program never writes $8000.  ppu_addr[12] set would select
+// windows 4..7 (r2..r5), which this program never does, so the function returns
+// a sentinel instead of a guess and the comparison fatals with the real address.
+function [8:0] chr_mmc3_window_bank;
+    input [13:0] loc;
+    input [7:0] reg0;
+    begin
+        if (loc[12] === 1'b0) begin
+            if (loc[11] === 1'b0)
+                chr_mmc3_window_bank = {1'b0, reg0};
+            else
+                chr_mmc3_window_bank = {1'b0, reg0[7:1], 1'b1};
+        end else begin
+            chr_mmc3_window_bank = 9'h1FF;
+        end
+    end
+endfunction
 
 function [3:0] expected_pixel_index;
     input [8:0] line;
@@ -1460,7 +1928,8 @@ nes_system_v6 #(
     .PRG_SIZE_BYTES(DUT_PRG_SIZE_BYTES),
     .NROM_PRG_SIZE_BYTES(DUT_NROM_PRG_SIZE_BYTES),
     .MAPPER_SELECT(DUT_MAPPER_SELECT),
-    .HEADER_MIRRORING(DUT_HEADER_MIRRORING)
+    .HEADER_MIRRORING(DUT_HEADER_MIRRORING),
+    .NROM_CHR_RAM(1'b1)
 ) ab_v6 (
     .clk(clk),
     .reset(reset),
@@ -1555,7 +2024,7 @@ nes_system_v6 #(
     .mapper_prg_ram_enable(),
     .mapper_prg_ram_we(),
     .mapper_chr_ram_enable(),
-    .mapper_chr_ram_we(),
+    .mapper_chr_ram_we(v6_mapper_chr_ram_we),
     .mapper_bus_conflict(),
     .mapper_irq(v6_mapper_irq),
     .irq_line(v6_irq_line),
@@ -1563,6 +2032,9 @@ nes_system_v6 #(
     .mapper_write_addr(v6_mapper_write_addr),
     .mapper_write_data(v6_mapper_write_data),
     .prg_readback(v6_prg_readback),
+    .chr_waddr(v6_chr_waddr),
+    .chr_we(v6_chr_we),
+    .chr_wdata(v6_chr_wdata),
     .chr_req(v6_chr_req),
     .chr_final_addr(v6_chr_final_addr)
 );
@@ -1679,7 +2151,8 @@ nes_system_v6 #(
     .PRG_SIZE_BYTES(DUT_PRG_SIZE_BYTES),
     .NROM_PRG_SIZE_BYTES(DUT_NROM_PRG_SIZE_BYTES),
     .MAPPER_SELECT(DUT_MMC3_SELECT),
-    .HEADER_MIRRORING(DUT_HEADER_MIRRORING)
+    .HEADER_MIRRORING(DUT_HEADER_MIRRORING),
+    .MMC3_CHR_RAM(1'b1)
 ) chr_mmc3 (
     .clk(clk),
     .reset(reset),
@@ -1774,7 +2247,7 @@ nes_system_v6 #(
     .mapper_prg_ram_enable(),
     .mapper_prg_ram_we(),
     .mapper_chr_ram_enable(),
-    .mapper_chr_ram_we(),
+    .mapper_chr_ram_we(m_mapper_chr_ram_we),
     .mapper_bus_conflict(),
     .mapper_irq(m_mapper_irq),
     .irq_line(m_irq_line),
@@ -1782,8 +2255,251 @@ nes_system_v6 #(
     .mapper_write_addr(m_mapper_write_addr),
     .mapper_write_data(m_mapper_write_data),
     .prg_readback(m_prg_readback),
+    .chr_waddr(m_chr_waddr),
+    .chr_we(m_chr_we),
+    .chr_wdata(m_chr_wdata),
     .chr_req(m_chr_req),
     .chr_final_addr(m_chr_final_addr)
+);
+
+// The CHR-ROM twin of ab_v6.  Same elaboration, same PRG image, only
+// NROM_CHR_RAM differs, so mapper_chr_ram_we (nes_mapper.v:221) is a hard 0 on
+// this board while ab_v6's is live.  That is the named gate the ignore pair is
+// measured at: the strobe has to be generated and has to REACH the mapper
+// before the mapper can refuse it.
+nes_system_v6 #(
+    .PRG_SIZE_BYTES(DUT_PRG_SIZE_BYTES),
+    .NROM_PRG_SIZE_BYTES(DUT_NROM_PRG_SIZE_BYTES),
+    .MAPPER_SELECT(DUT_MAPPER_SELECT),
+    .HEADER_MIRRORING(DUT_HEADER_MIRRORING),
+    .NROM_CHR_RAM(1'b0)
+) chr_rom (
+    .clk(clk),
+    .reset(reset),
+    .buttons1(buttons1),
+    .buttons2(buttons2),
+    .chr_rdata(rom_chr_rdata),
+    .pixel_valid(r_pixel_valid),
+    .pixel_x(r_pixel_x),
+    .pixel_y(r_pixel_y),
+    .pixel_index(r_pixel_index),
+    .frame_done(r_frame_done),
+    .vblank(),
+    .nmi_o(),
+    .apu_irq_o(),
+    .audio_sample_valid(),
+    .audio_sample_left(),
+    .audio_sample_right(),
+    .cpu_cycle(r_cpu_cycle),
+    .ppu_dot(r_ppu_dot),
+    .ppu_scanline(r_ppu_scanline),
+    .bus_owner(),
+    .bus_active(),
+    .bus_wait_count(),
+    .bus_req(),
+    .bus_stall(),
+    .bus_fire(),
+    .bus_addr(),
+    .bus_we(),
+    .bus_dout(),
+    .bus_din(),
+    .sel_ram(),
+    .sel_ppu(),
+    .sel_apu_io(),
+    .sel_open_bus(),
+    .sel_cart_ram(),
+    .sel_cart_rom(),
+    .ram_we(),
+    .ppu_reg_cs(),
+    .ppu_reg_we(),
+    .ppu_reg_addr(),
+    .apu_reg_cs(),
+    .apu_reg_we(),
+    .apu_reg_addr(),
+    .controller_data(),
+    .cart_req(),
+    .cart_xfer(),
+    .cart_addr(),
+    .cart_din(),
+    .cart_ack(),
+    .bus_hold(),
+    .oam_dma_start(),
+    .oam_dma_cpu_hold(),
+    .oam_dma_cpu_read_req(),
+    .oam_dma_cpu_read_addr(),
+    .oam_dma_cpu_read_ack(),
+    .oam_dma_cpu_rdata(),
+    .oam_dma_ppu_reg_cs(),
+    .oam_dma_ppu_reg_we(),
+    .oam_dma_ppu_reg_addr(),
+    .oam_dma_ppu_reg_dout(),
+    .oam_dma_busy(),
+    .oam_dma_done(),
+    .oam_dma_page(),
+    .oam_dma_page_latch(),
+    .oam_dma_base_addr(),
+    .oam_dma_cur_addr(),
+    .oam_dma_index(),
+    .oam_dma_align_left(),
+    .oam_dma_addr_wr(),
+    .oam_dma_cycle_count(),
+    .apu_dmc_bus_req(),
+    .apu_dmc_addr(),
+    .apu_dmc_ack(),
+    .apu_dmc_rdata(),
+    .dma_sel(),
+    .dma_ack(),
+    .dma_din(),
+    .dma_wait(),
+    .dma_active(),
+    .dma_unimpl(),
+    .dma_owner(),
+    .ppu_port_cs(),
+    .ppu_port_we(),
+    .ppu_port_addr(),
+    .ppu_port_din(),
+    .mapper_id(),
+    .mapper_prg_bank_offset(),
+    .mapper_chr_bank_offset(),
+    .mapper_mirroring(),
+    .mapper_nametable_map(),
+    .mapper_prg_bank_number(),
+    .mapper_prg_ram_enable(),
+    .mapper_prg_ram_we(),
+    .mapper_chr_ram_enable(r_mapper_chr_ram_enable),
+    .mapper_chr_ram_we(r_mapper_chr_ram_we),
+    .mapper_bus_conflict(),
+    .mapper_irq(),
+    .irq_line(),
+    .mapper_write_pulse(),
+    .mapper_write_addr(),
+    .mapper_write_data(),
+    .prg_readback(),
+    .chr_waddr(r_chr_waddr),
+    .chr_we(r_chr_we),
+    .chr_wdata(r_chr_wdata),
+    .chr_req(),
+    .chr_final_addr(r_chr_final_addr)
+);
+
+// ab_v6 run a second time with the two PRG fill bytes swapped, so the program
+// stores the complement image into the same external CHR RAM.  If the write
+// path were ignored, this instance would render exactly what ab_v6 renders
+// BEFORE its own upload, i.e. the two pictures would agree and the whole
+// self-validating pair would collapse.
+nes_system_v6 #(
+    .PRG_SIZE_BYTES(DUT_PRG_SIZE_BYTES),
+    .NROM_PRG_SIZE_BYTES(DUT_NROM_PRG_SIZE_BYTES),
+    .MAPPER_SELECT(DUT_MAPPER_SELECT),
+    .HEADER_MIRRORING(DUT_HEADER_MIRRORING),
+    .NROM_CHR_RAM(1'b1)
+) chr_ram_b (
+    .clk(clk),
+    .reset(reset),
+    .buttons1(buttons1),
+    .buttons2(buttons2),
+    .chr_rdata(ramb_chr_rdata),
+    .pixel_valid(rb_pixel_valid),
+    .pixel_x(rb_pixel_x),
+    .pixel_y(rb_pixel_y),
+    .pixel_index(rb_pixel_index),
+    .frame_done(rb_frame_done),
+    .vblank(),
+    .nmi_o(),
+    .apu_irq_o(),
+    .audio_sample_valid(),
+    .audio_sample_left(),
+    .audio_sample_right(),
+    .cpu_cycle(rb_cpu_cycle),
+    .ppu_dot(rb_ppu_dot),
+    .ppu_scanline(rb_ppu_scanline),
+    .bus_owner(),
+    .bus_active(),
+    .bus_wait_count(),
+    .bus_req(),
+    .bus_stall(),
+    .bus_fire(),
+    .bus_addr(),
+    .bus_we(),
+    .bus_dout(),
+    .bus_din(),
+    .sel_ram(),
+    .sel_ppu(),
+    .sel_apu_io(),
+    .sel_open_bus(),
+    .sel_cart_ram(),
+    .sel_cart_rom(),
+    .ram_we(),
+    .ppu_reg_cs(),
+    .ppu_reg_we(),
+    .ppu_reg_addr(),
+    .apu_reg_cs(),
+    .apu_reg_we(),
+    .apu_reg_addr(),
+    .controller_data(),
+    .cart_req(),
+    .cart_xfer(),
+    .cart_addr(),
+    .cart_din(),
+    .cart_ack(),
+    .bus_hold(),
+    .oam_dma_start(),
+    .oam_dma_cpu_hold(),
+    .oam_dma_cpu_read_req(),
+    .oam_dma_cpu_read_addr(),
+    .oam_dma_cpu_read_ack(),
+    .oam_dma_cpu_rdata(),
+    .oam_dma_ppu_reg_cs(),
+    .oam_dma_ppu_reg_we(),
+    .oam_dma_ppu_reg_addr(),
+    .oam_dma_ppu_reg_dout(),
+    .oam_dma_busy(),
+    .oam_dma_done(),
+    .oam_dma_page(),
+    .oam_dma_page_latch(),
+    .oam_dma_base_addr(),
+    .oam_dma_cur_addr(),
+    .oam_dma_index(),
+    .oam_dma_align_left(),
+    .oam_dma_addr_wr(),
+    .oam_dma_cycle_count(),
+    .apu_dmc_bus_req(),
+    .apu_dmc_addr(),
+    .apu_dmc_ack(),
+    .apu_dmc_rdata(),
+    .dma_sel(),
+    .dma_ack(),
+    .dma_din(),
+    .dma_wait(),
+    .dma_active(),
+    .dma_unimpl(),
+    .dma_owner(),
+    .ppu_port_cs(),
+    .ppu_port_we(),
+    .ppu_port_addr(),
+    .ppu_port_din(),
+    .mapper_id(),
+    .mapper_prg_bank_offset(),
+    .mapper_chr_bank_offset(),
+    .mapper_mirroring(),
+    .mapper_nametable_map(),
+    .mapper_prg_bank_number(),
+    .mapper_prg_ram_enable(),
+    .mapper_prg_ram_we(),
+    .mapper_chr_ram_enable(),
+    .mapper_chr_ram_we(rb_mapper_chr_ram_we),
+    .mapper_bus_conflict(),
+    .mapper_irq(),
+    .irq_line(),
+    .mapper_write_pulse(),
+    .mapper_write_addr(),
+    .mapper_write_data(),
+    .prg_readback(),
+    .chr_waddr(rb_chr_waddr),
+    .chr_we(rb_chr_we),
+    .chr_wdata(rb_chr_wdata),
+    .chr_req(),
+    .chr_final_addr(rb_chr_final_addr)
 );
 
 always #5 clk = !clk;
@@ -1806,6 +2522,12 @@ always @(posedge clk) begin
                 reset_chr_req_bad = reset_chr_req_bad + 1;
             if (v6_chr_final_addr !== 17'd0)
                 reset_chr_addr_bad = reset_chr_addr_bad + 1;
+            // chr_we carries a !reset term, so a strobe inside the reset window
+            // would be a write into a model that is still being cleared.
+            if (v6_chr_we !== 1'b0)
+                reset_chr_we_bad = reset_chr_we_bad + 1;
+            if (v6_chr_waddr !== 14'd0)
+                reset_chr_waddr_bad = reset_chr_waddr_bad + 1;
             if ((v6_mapper_id !== 3'd0) || (v5_mapper_id !== 3'd0))
                 reset_mapper_id_bad = reset_mapper_id_bad + 1;
         end
@@ -1822,15 +2544,36 @@ always @(posedge clk) begin
     if (reset) begin
         chr_h1 <= 17'd0;
         chr_h2 <= 17'd0;
+        chr_wq0 <= 17'd0;
+        chr_wq1 <= 17'd0;
+        chr_wq0_v <= 1'b0;
+        chr_wq1_v <= 1'b0;
         fu_sgrab_q <= 1'b0;
         fu_cappl_q <= 1'b0;
     end else if (ab_v6.ce_ppu) begin
+        chr_write_on_port = 1'b0;
         chr_h1 <= v6_chr_final_addr;
         chr_h2 <= chr_h1;
+        chr_wq1 <= chr_wq0;
+        chr_wq1_v <= chr_wq0_v;
+        if ((v6_chr_we !== 1'b0) && (v6_mapper_chr_ram_we !== 1'b0)) begin
+            chr_wq0 <= v6_chr_final_addr;
+            chr_wq0_v <= 1'b1;
+        end else begin
+            chr_wq0_v <= 1'b0;
+        end
 
+        // P0-6.  The tb chr_mem array changes mid-run now that the program can
+        // store into it, so a latched byte whose address was itself written in
+        // the last two ce is being compared against a different epoch of the
+        // array.  Those beats are counted and skipped, everything else is
+        // still compared, and both counts are printed.
         if (fu_sgrab_q !== 1'b0) begin
-            if (fu_cappl_q === 1'b0) begin
-                chr_latch_checks = chr_latch_checks + 1;
+            chr_latch_checks = chr_latch_checks + 1;
+            if (((chr_wq0_v !== 1'b0) && (chr_wq0 === chr_h2)) ||
+                ((chr_wq1_v !== 1'b0) && (chr_wq1 === chr_h2))) begin
+                chr_latch_race_skip = chr_latch_race_skip + 1;
+            end else if (fu_cappl_q === 1'b0) begin
                 if (fu_bg_lo !== chr_mem[chr_h2]) begin
                     chr_latch_err = chr_latch_err + 1;
                     if (chr_latch_err < 5)
@@ -1838,7 +2581,6 @@ always @(posedge clk) begin
                                fu_bg_lo, chr_h2, chr_mem[chr_h2]);
                 end
             end else begin
-                chr_latch_checks = chr_latch_checks + 1;
                 if (fu_bg_hi !== chr_mem[chr_h2]) begin
                     chr_latch_err = chr_latch_err + 1;
                     if (chr_latch_err < 5)
@@ -1850,6 +2592,80 @@ always @(posedge clk) begin
         fu_sgrab_q <= (fu_state == 3'd4);
         fu_cappl_q <= fu_cap_pl;
 
+        // ------------------------------------------------ $2007 WRITE BEATS
+        // Measured FIRST because the write owns the mapper port on its beat
+        // (mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr), so the
+        // read check below has to know whether a write is driving chr_final_addr
+        // this ce.  The expected final address is built from the SAME
+        // independent tb bank model the read path uses, with chr_waddr (the
+        // PPU's LOCAL address) as the local term, and chr_final_addr is the
+        // mapper's output one net downstream, so this is not circular.
+        if (v6_chr_we !== 1'b0) begin
+            chr_wr_beats = chr_wr_beats + 1;
+            f_chr_wr = f_chr_wr + 1;
+            if (v6_chr_req !== 1'b0) begin
+                chr_wr_req_clash = chr_wr_req_clash + 1;
+                chr_write_on_port = 1'b1;
+                // The colliding beat steals the mapper port from the fetch unit,
+                // so the byte the fetch unit latches that ce is the WRITE
+                // address's byte.  That only reaches the screen if something the
+                // fetch feeds is actually being displayed.
+                if (ab_chr_wr_displayed === 1'b1)
+                    chr_wr_clash_visible = chr_wr_clash_visible + 1;
+            end
+            if (v6_chr_final_addr[13] !== 1'b0) begin
+                chr_wr_bit13_bad = chr_wr_bit13_bad + 1;
+                f_wr_final_bit13_bad = f_wr_final_bit13_bad + 1;
+            end
+            if (v6_chr_final_addr > f_max_final_addr)
+                f_max_final_addr = v6_chr_final_addr;
+            chr_wr_exp_final = ({13'b0, tb_chr_bank_model} << 13) |
+                              (v6_chr_waddr & 14'h1FFF);
+            chr_wr_checks = chr_wr_checks + 1;
+            if (v6_chr_final_addr !== chr_wr_exp_final) begin
+                chr_wr_addr_err = chr_wr_addr_err + 1;
+                if (chr_wr_addr_err < 5)
+                    $fatal(1, "P0-2 write beat chr_final_addr %05h != tb model %05h (local chr_waddr %04h, ppu v_addr %04h)",
+                           v6_chr_final_addr, chr_wr_exp_final, v6_chr_waddr,
+                           ab_v6.u_ppu.v_addr);
+            end
+            if (v6_chr_waddr[12:0] !== v6_chr_final_addr[12:0]) begin
+                chr_wr_addr_err = chr_wr_addr_err + 1;
+                if (chr_wr_addr_err < 5)
+                    $fatal(1, "P0-2 write beat local chr_waddr[12:0] %03h != final[12:0] %03h",
+                           v6_chr_waddr[12:0], v6_chr_final_addr[12:0]);
+            end
+            if (v6_chr_final_addr[16:13] !== 4'd0)
+                chr_wr_addr_err = chr_wr_addr_err + 1;
+            // chr_waddr must be the PRE-increment v_addr, and the $2000 guard
+            // means both of its top bits are clear.
+            if (v6_chr_waddr !== ab_v6.u_ppu.v_addr[13:0]) begin
+                chr_wr_addr_err = chr_wr_addr_err + 1;
+                if (chr_wr_addr_err < 5)
+                    $fatal(1, "P0-2 write beat chr_waddr %04h is not the pre-increment ppu v_addr %04h",
+                           v6_chr_waddr, ab_v6.u_ppu.v_addr);
+            end
+            if (v6_chr_waddr[13] !== 1'b0)
+                chr_wr_addr_err = chr_wr_addr_err + 1;
+            if (v6_chr_wdata !== ab_v6.u_ppu.reg_din) begin
+                chr_wr_addr_err = chr_wr_addr_err + 1;
+                if (chr_wr_addr_err < 5)
+                    $fatal(1, "P0-2 write beat chr_wdata %02h is not the ppu reg_din %02h",
+                           v6_chr_wdata, ab_v6.u_ppu.reg_din);
+            end
+            if (v6_mapper_chr_ram_we !== 1'b1)
+                chr_wr_not_accepted = chr_wr_not_accepted + 1;
+            if ((chr_wr_prev !== 1'b0) && (v6_chr_we !== 1'b0))
+                chr_wr_consec = chr_wr_consec + 1;
+        end
+        chr_wr_prev = v6_chr_we;
+
+        // READ BEATS.  On the ce where a $2007 write and a fetch collide the
+        // mapper port is carrying the WRITE address (write priority in
+        // mapper_ppu_addr), so chr_final_addr is the write model's address and
+        // NOT the fetch address.  That beat is counted as a read-on-write beat
+        // and its address is checked against the WRITE model; every other read
+        // beat is checked against the READ model exactly as before.
         if (v6_chr_req !== 1'b0) begin
             chr_req_total = chr_req_total + 1;
             f_chr_req = f_chr_req + 1;
@@ -1858,8 +2674,9 @@ always @(posedge clk) begin
             chr_req_owner_total = chr_req_owner_total + 1;
             if (v6_chr_final_addr[CHR_ADDR_BITS-1:13] != 4'd0)
                 chr_hi_addr_bad = chr_hi_addr_bad + 1;
-            if (v6_chr_final_addr[13] !== 1'b0)
+            if (v6_chr_final_addr[13] !== 1'b0) begin
                 f_final_bit13_bad = f_final_bit13_bad + 1;
+            end
             if (v6_chr_final_addr > f_max_final_addr)
                 f_max_final_addr = v6_chr_final_addr;
             if (ab_v6.u_ppu.chr_addr[13] === 1'b1)
@@ -1867,29 +2684,31 @@ always @(posedge clk) begin
             if (ab_v6.u_ppu.chr_addr[12] === 1'b1)
                 f_local_bit12 = f_local_bit12 + 1;
 
-            chr_addr_checks = chr_addr_checks + 1;
-            if (v6_chr_final_addr !==
-                (({13'b0, tb_chr_bank_model} << 13) |
-                 (ab_v6.u_ppu.chr_addr & 14'h1FFF))) begin
-                chr_addr_err = chr_addr_err + 1;
-                f_addr_err = f_addr_err + 1;
-                if (chr_addr_err < 5)
-                    $fatal(1, "P0-2 chr_final_addr %05h != tb model %05h (local %04h)",
-                           v6_chr_final_addr,
-                           (({13'b0, tb_chr_bank_model} << 13) |
-                            (ab_v6.u_ppu.chr_addr & 14'h1FFF)),
-                           ab_v6.u_ppu.chr_addr);
-            end
-            if (ab_v6.u_ppu.chr_addr[12:0] !== v6_chr_final_addr[12:0]) begin
-                chr_addr_err = chr_addr_err + 1;
-                f_addr_err = f_addr_err + 1;
-                if (chr_addr_err < 5)
-                    $fatal(1, "P0-2 local[12:0] %03h != final[12:0] %03h",
-                           ab_v6.u_ppu.chr_addr[12:0], v6_chr_final_addr[12:0]);
-            end
-            if (v6_chr_final_addr[16:13] !== 4'd0) begin
-                chr_addr_err = chr_addr_err + 1;
-                f_addr_err = f_addr_err + 1;
+            if (chr_write_on_port === 1'b0) begin
+                chr_addr_checks = chr_addr_checks + 1;
+                if (v6_chr_final_addr !==
+                    (({13'b0, tb_chr_bank_model} << 13) |
+                     (ab_v6.u_ppu.chr_addr & 14'h1FFF))) begin
+                    chr_addr_err = chr_addr_err + 1;
+                    f_addr_err = f_addr_err + 1;
+                    if (chr_addr_err < 5)
+                        $fatal(1, "P0-2 chr_final_addr %05h != tb model %05h (local %04h)",
+                               v6_chr_final_addr,
+                               (({13'b0, tb_chr_bank_model} << 13) |
+                                (ab_v6.u_ppu.chr_addr & 14'h1FFF)),
+                               ab_v6.u_ppu.chr_addr);
+                end
+                if (ab_v6.u_ppu.chr_addr[12:0] !== v6_chr_final_addr[12:0]) begin
+                    chr_addr_err = chr_addr_err + 1;
+                    f_addr_err = f_addr_err + 1;
+                    if (chr_addr_err < 5)
+                        $fatal(1, "P0-2 local[12:0] %03h != final[12:0] %03h",
+                               ab_v6.u_ppu.chr_addr[12:0], v6_chr_final_addr[12:0]);
+                end
+                if (v6_chr_final_addr[16:13] !== 4'd0) begin
+                    chr_addr_err = chr_addr_err + 1;
+                    f_addr_err = f_addr_err + 1;
+                end
             end
 
             if ((v6_bus_req === 1'b0) && (v6_bus_fire === 1'b0) &&
@@ -1898,7 +2717,22 @@ always @(posedge clk) begin
             if (v6_bus_hold !== 1'b0)
                 chr_req_during_dma = chr_req_during_dma + 1;
         end
+        chr_write_on_port = 1'b0;
     end
+end
+
+// The bus monitor supplies the independent expected count of $2007 writes that
+// land in the CHR half of the address space.  v_addr is sampled on the same clk
+// the PPU samples reg_cs, i.e. BEFORE it increments, so this counts exactly the
+// cycles on which nes_ppu2c02 can raise chr_we.  The palette writes the program
+// also issues ($3F00..$3F11) have v_addr >= $2000 and are correctly excluded.
+always @(posedge clk) begin
+    if (reset)
+        chr_wr_exp_total = 0;
+    else if ((v6_bus_fire !== 1'b0) && (v6_bus_we !== 1'b0) &&
+             (v6_sel_ppu === 1'b1) && (v6_ppu_reg_addr == 3'd7) &&
+             (ab_v6.u_ppu.v_addr < 15'h2000))
+        chr_wr_exp_total = chr_wr_exp_total + 1;
 end
 
 // TB-side prediction of what the model must present at each sampling edge
@@ -1908,7 +2742,10 @@ end
 always @(posedge clk) begin
     if (!reset && ab_v6.ce_ppu && (v6_chr_req !== 1'b0)) begin
         chr_model_pred_checks = chr_model_pred_checks + 1;
-        if (chr_rdata_q !== chr_mem[chr_h1]) begin
+        if (((chr_wq0_v !== 1'b0) && (chr_wq0 === chr_h1)) ||
+            ((chr_wq1_v !== 1'b0) && (chr_wq1 === chr_h1))) begin
+            chr_pred_race_skip = chr_pred_race_skip + 1;
+        end else if (chr_rdata_q !== chr_mem[chr_h1]) begin
             chr_model_pred_err = chr_model_pred_err + 1;
             if (chr_model_pred_err < 5)
                 $fatal(1, "P0-6 model presented %02h, tb chr_mem[%05h] = %02h",
@@ -1984,12 +2821,18 @@ always @(posedge clk) begin
                 (v6_cpu_cycle !== v5_cpu_cycle)) begin
                 ab_all_ce_div = ab_all_ce_div + 1;
                 if (ab_all_ce_div === 1)
-                    $fatal(1, "P0-4 per-ce divergence pv=%b/%b x=%0d/%0d y=%0d/%0d idx=%0d/%0d fd=%b/%b dot=%0d/%0d sl=%0d/%0d nmi=%b/%b cc=%0d/%0d",
+                    $fatal(1, "P0-4 per-ce divergence pv=%b/%b x=%0d/%0d y=%0d/%0d idx=%0d/%0d fd=%b/%b dot=%0d/%0d sl=%0d/%0d nmi=%b/%b cc=%0d/%0d | v6 mask=%02h ctrl=%02h bg=%02h/%02h chr_addr=%04h final=%05h | v5 mask=%02h ctrl=%02h bg=%02h/%02h bgpat=%04h",
                            v6_pixel_valid, v5_pixel_valid, v6_pixel_x, v5_pixel_x,
                            v6_pixel_y, v5_pixel_y, v6_pixel_index, v5_pixel_index,
                            v6_frame_done, v5_frame_done, v6_ppu_dot, v5_ppu_dot,
                            v6_ppu_scanline, v5_ppu_scanline, v6_nmi_o, v5_nmi_o,
-                           v6_cpu_cycle, v5_cpu_cycle);
+                           v6_cpu_cycle, v5_cpu_cycle,
+                           ab_v6.u_ppu.mask_reg, ab_v6.u_ppu.control_reg,
+                           ab_v6.u_ppu.bg_pattern_low, ab_v6.u_ppu.bg_pattern_high,
+                           ab_v6.u_ppu.chr_addr, v6_chr_final_addr,
+                           ab_v5.u_ppu.mask_reg, ab_v5.u_ppu.control_reg,
+                           ab_v5.u_ppu.bg_pattern_low, ab_v5.u_ppu.bg_pattern_high,
+                           ab_v5.u_ppu.bg_pattern_addr);
             end
             if (v6_pixel_valid !== 1'b0) begin
                 ab_visible_count = ab_visible_count + 1;
@@ -2122,6 +2965,119 @@ always @(posedge clk) begin
     end else if (ab_v6.ce_cpu) begin
         if (v6_bus_stall !== (v6_bus_req && !v6_bus_fire))
             bus_stall_err = bus_stall_err + 1;
+    end
+end
+
+// ------------------------------------------------- W1 upload-flag snapshot
+//
+// The program raises ram[0015] only after its last $2007 CHR write, and the
+// store itself is a cpu bus cycle that lands several ce after that write, so the
+// tb chr_mem array is already fully updated at this edge.  Snapshotting here
+// rather than at the end of the run is what makes this a per-byte verification
+// of the upload instead of a restatement of the preload loop.
+always @(posedge clk) begin
+    if (reset) begin
+        chr_up_flag_seen = 0;
+        chr_up_snap_err = 0;
+        chr_up_snap_nochange = 0;
+        chr_up_addr_err = 0;
+        chr_v5_snap_err = 0;
+        rom_pre_bytes = 0;
+        rom_pre_err = 0;
+        rom_wr_beats = 0;
+        rom_wr_ramwe_bad = 0;
+        rom_wr_bad_wdata = 0;
+        rom_final_bytes = 0;
+        rom_tile_err = 0;
+        rb_wr_beats = 0;
+        rb_wr_not_accepted = 0;
+        rb_tile_err = 0;
+        rb_tile0_same = 0;
+    end else begin
+        // The ROM board runs the identical program, so its strobe count has to
+        // come out identical.  If it does not, the two runs are not comparable
+        // and the paired line below would mean nothing.
+        if (r_chr_we !== 1'b0) begin
+            rom_wr_beats = rom_wr_beats + 1;
+            if (r_mapper_chr_ram_we !== 1'b0)
+                rom_wr_ramwe_bad = rom_wr_ramwe_bad + 1;
+            if (r_chr_wdata !== chr_rom.u_ppu.reg_din)
+                rom_wr_bad_wdata = rom_wr_bad_wdata + 1;
+        end
+        if (rb_chr_we !== 1'b0) begin
+            rb_wr_beats = rb_wr_beats + 1;
+            if (rb_mapper_chr_ram_we !== 1'b1)
+                rb_wr_not_accepted = rb_wr_not_accepted + 1;
+        end
+        if ((v6_bus_fire !== 1'b0) && (v6_bus_we !== 1'b0) &&
+            (v6_sel_ram === 1'b1) &&
+            (v6_bus_addr[10:0] == CHR_UPLOAD_FLAG_CELL[10:0]) &&
+            (v6_bus_dout === 8'h01) && (chr_up_flag_seen == 0)) begin
+            chr_up_flag_seen = 1;
+            for (k = 0; k < CHR_TILE_BYTES; k = k + 1) begin
+                // Both halves the program addresses, on the external model.
+                if (chr_mem[k] !== chr_tile_image[k]) begin
+                    chr_up_snap_err = chr_up_snap_err + 1;
+                    if (chr_up_snap_err < 5)
+                        $fatal(1, "W1 chr_mem[%0d] is %02h at the upload flag, expected the program's own byte %02h",
+                               k, chr_mem[k], chr_tile_image[k]);
+                end
+                if (chr_mem[4096 + k] !== chr_tile_image[k]) begin
+                    chr_up_snap_err = chr_up_snap_err + 1;
+                    if (chr_up_snap_err < 5)
+                        $fatal(1, "W1 chr_mem[%0d] is %02h at the upload flag, expected the program's own byte %02h",
+                               4096 + k, chr_mem[4096 + k], chr_tile_image[k]);
+                end
+                // non-vacuity: every one of the 96 bytes must have CHANGED
+                // relative to the sentinel this board started from.
+                if (chr_mem[k] === chr_tile_image_b[k])
+                    chr_up_snap_nochange = chr_up_snap_nochange + 1;
+                if (chr_mem[4096 + k] === chr_tile_image_b[k])
+                    chr_up_snap_nochange = chr_up_snap_nochange + 1;
+                // untouched-address control: $2000 is past the end of every
+                // address the PPU or a $2007 write can produce (chr_final_addr
+                // tops out at 0x1FFF), so those cells must still be the
+                // sentinel.  A stray write anywhere else would show up here.
+                if (chr_mem[8192 + k] !== chr_tile_image_b[k])
+                    chr_up_addr_err = chr_up_addr_err + 1;
+                // ab_v5's internal handler also writes chr_ram[v_addr[12:0]],
+                // and the background reads its $1000 table, so both halves of
+                // v5's array have to have been filled by the program as well.
+                if (ab_v5.u_ppu.chr_ram[k] !== chr_tile_image[k])
+                    chr_v5_snap_err = chr_v5_snap_err + 1;
+                if (ab_v5.u_ppu.chr_ram[4096 + k] !== chr_tile_image[k])
+                    chr_v5_snap_err = chr_v5_snap_err + 1;
+            end
+            k = 0;
+            for (k = 0; k < CHR_MEM_BYTES; k = k + 1) begin
+                rom_pre_bytes = rom_pre_bytes + 1;
+                if (rom_chr_mem[k] !== rom_chr_pre[k])
+                    rom_pre_err = rom_pre_err + 1;
+            end
+            k = 0;
+            for (k = 0; k < CHR_TILE_BYTES; k = k + 1) begin
+                if (rom_chr_mem[k] !== chr_tile_image[k])
+                    rom_tile_err = rom_tile_err + 1;
+                if (rom_chr_mem[4096 + k] !== chr_tile_image[k])
+                    rom_tile_err = rom_tile_err + 1;
+                if (ramb_chr_mem[k] !== chr_tile_image_b[k])
+                    rb_tile_err = rb_tile_err + 1;
+                if (ramb_chr_mem[4096 + k] !== chr_tile_image_b[k])
+                    rb_tile_err = rb_tile_err + 1;
+                // chr_ram_b must hold the COMPLEMENT everywhere, so a single
+                // byte that still equals run A's image would already mean the
+                // two boards ended up rendering the same picture.
+                if ((ramb_chr_mem[k] === chr_tile_image[k]) ||
+                    (ramb_chr_mem[4096 + k] === chr_tile_image[k]))
+                    rb_tile0_same = rb_tile0_same + 1;
+            end
+            k = 0;
+            for (k = 0; k < CHR_MEM_BYTES; k = k + 1) begin
+                if (rom_chr_mem[k] !== rom_chr_pre[k])
+                    rom_final_bytes = rom_final_bytes + 1;
+            end
+            k = 0;
+        end
     end
 end
 
@@ -2356,17 +3312,28 @@ always @(posedge clk) begin
         final_frame_active = 1'b0;
         prev_dot = 9'd340;
         f_chr_req = 0;
+        f_chr_wr = 0;
+        f_wr_final_bit13_bad = 0;
         f_local_bit13 = 0;
         f_local_bit12 = 0;
         f_final_bit13_bad = 0;
         f_addr_err = 0;
         f_max_final_addr = 0;
         last_f_chr_req = 0;
+        last_f_chr_wr = 0;
+        last_f_wr_final_bit13_bad = 0;
         last_f_local_bit13 = 0;
         last_f_local_bit12 = 0;
         last_f_final_bit13_bad = 0;
         last_f_addr_err = 0;
         last_f_max_final_addr = 0;
+        pic_rom_cmp = 0;
+        pic_rom_idx_diff = 0;
+        pic_rom_geom_diff = 0;
+        pic_rb_cmp = 0;
+        pic_rb_idx_diff = 0;
+        pic_rb_geom_diff = 0;
+        pic_rb_tile0_diff = 0;
     end else begin
         clk_count = clk_count + 1;
 
@@ -2386,12 +3353,16 @@ always @(posedge clk) begin
                 have_frame_mark = 1'b1;
             frame_mark_clk = clk_count;
             last_f_chr_req = f_chr_req;
+            last_f_chr_wr = f_chr_wr;
+            last_f_wr_final_bit13_bad = f_wr_final_bit13_bad;
             last_f_local_bit13 = f_local_bit13;
             last_f_local_bit12 = f_local_bit12;
             last_f_final_bit13_bad = f_final_bit13_bad;
             last_f_addr_err = f_addr_err;
             last_f_max_final_addr = f_max_final_addr;
             f_chr_req = 0;
+            f_chr_wr = 0;
+            f_wr_final_bit13_bad = 0;
             f_local_bit13 = 0;
             f_local_bit12 = 0;
             f_final_bit13_bad = 0;
@@ -2421,6 +3392,49 @@ always @(posedge clk) begin
                         default: pix_other = pix_other + 1;
                     endcase
                 end
+            end
+
+            // ---------------------------------------------- rendered-picture pair
+            // Two independent pictures, both compared against ab_v6's over the
+            // whole final frame, at the 4-clk-per-dot clk granularity P0-5
+            // already uses:
+            //   chr_rom   must be IDENTICAL  (same program, writes refused,
+            //                                  CHR ROM already holds the bytes)
+            //   chr_ram_b must DIFFER        (same program code, complement
+            //                                  image stored into CHR RAM)
+            // A dropped write path makes chr_ram_b render what ab_v6 renders
+            // BEFORE its own upload, so the "must differ" half is what stops
+            // this whole file from passing on a dead $2007 strobe.
+            if (final_frame_active === 1'b1) begin
+                pic_rom_cmp = pic_rom_cmp + 1;
+                pic_rb_cmp = pic_rb_cmp + 1;
+                if ((r_pixel_valid !== v6_pixel_valid) ||
+                    (r_pixel_x !== v6_pixel_x) || (r_pixel_y !== v6_pixel_y))
+                    pic_rom_geom_diff = pic_rom_geom_diff + 1;
+                if (r_pixel_index !== v6_pixel_index) begin
+                    pic_rom_idx_diff = pic_rom_idx_diff + 1;
+                    if (pic_rom_idx_diff === 1)
+                        $display("    DIAG W1 chr_rom first index divergence at %0d:%0d: ab_v6=%0d chr_rom=%0d",
+                                 v6_ppu_scanline, v6_ppu_dot, v6_pixel_index,
+                                 r_pixel_index);
+                end
+                if ((rb_pixel_valid !== v6_pixel_valid) ||
+                    (rb_pixel_x !== v6_pixel_x) || (rb_pixel_y !== v6_pixel_y))
+                    pic_rb_geom_diff = pic_rb_geom_diff + 1;
+                if (rb_pixel_index !== v6_pixel_index) begin
+                    pic_rb_idx_diff = pic_rb_idx_diff + 1;
+                    if (pic_rb_idx_diff === 1)
+                        $display("    DIAG W1 chr_ram_b first index divergence at %0d:%0d: ab_v6=%0d chr_ram_b=%0d",
+                                 v6_ppu_scanline, v6_ppu_dot, v6_pixel_index,
+                                 rb_pixel_index);
+                end
+                // Non-vacuity on top of the global count: the difference has to
+                // be concentrated where the two upload values differ, i.e. on
+                // the tiles the program wrote, and the leftmost 16 columns of
+                // every visible line are exactly where BG tile 0 and tile 1 live.
+                if ((rb_pixel_index !== v6_pixel_index) &&
+                    (v6_ppu_scanline < 9'd240) && (v6_ppu_dot < 9'd16))
+                    pic_rb_tile0_diff = pic_rb_tile0_diff + 1;
             end
         end
         prev_dot = v6_ppu_dot;
@@ -2558,28 +3572,107 @@ always @(posedge clk) begin
             m_first_hi_ok[z] = 1'b0;
         end
     end else if (chr_mmc3.ce_ppu) begin
+        m_write_on_port = 1'b0;
+
+        // ------------------------------------------------ W2 WRITE BEATS
+        // Measured first, for the same reason as the phase 1 monitor: the write
+        // owns the mapper port on its beat, so the read check below has to know
+        // whether chr_final_addr is carrying a write address this ce.  The point
+        // of the whole group is that m_chr_final_addr, not m_chr_waddr, is
+        // where the byte goes, and m_chr_final_addr moves with r0.
+        if (m_chr_we !== 1'b0) begin
+            m_wr_beats = m_wr_beats + 1;
+            if (m_chr_req !== 1'b0) begin
+                m_wr_req_clash = m_wr_req_clash + 1;
+                m_write_on_port = 1'b1;
+                if (m_chr_wr_displayed === 1'b1)
+                    m_wr_clash_visible = m_wr_clash_visible + 1;
+            end
+            if (m_chr_final_addr[13] !== 1'b0)
+                m_wr_bit13_bad = m_wr_bit13_bad + 1;
+            m_wr_exp_final =
+                ({8'b0, chr_mmc3_window_bank(m_chr_waddr, m_bank_model)} << 10) |
+                (m_chr_waddr & 14'h03FF);
+            m_wr_checks = m_wr_checks + 1;
+            if (m_chr_final_addr !== m_wr_exp_final) begin
+                m_wr_addr_err = m_wr_addr_err + 1;
+                if (m_wr_addr_err < 4)
+                    $fatal(1, "W2 write beat chr_final_addr %05h != tb model %05h (local chr_waddr %04h, model reg %02h)",
+                           m_chr_final_addr, m_wr_exp_final, m_chr_waddr,
+                           m_bank_model);
+            end
+            if (m_chr_waddr !== chr_mmc3.u_ppu.v_addr[13:0]) begin
+                m_wr_addr_err = m_wr_addr_err + 1;
+                if (m_wr_addr_err < 4)
+                    $fatal(1, "W2 write beat chr_waddr %04h is not the pre-increment ppu v_addr %04h",
+                           m_chr_waddr, chr_mmc3.u_ppu.v_addr);
+            end
+            if (m_chr_wdata !== chr_mmc3.u_ppu.reg_din) begin
+                m_wr_addr_err = m_wr_addr_err + 1;
+                if (m_wr_addr_err < 4)
+                    $fatal(1, "W2 write beat chr_wdata %02h is not the ppu reg_din %02h",
+                           m_chr_wdata, chr_mmc3.u_ppu.reg_din);
+            end
+            if (m_mapper_chr_ram_we !== 1'b1)
+                m_wr_not_accepted = m_wr_not_accepted + 1;
+            if ((m_wr_prev !== 1'b0) && (m_chr_we !== 1'b0))
+                m_wr_consec = m_wr_consec + 1;
+            // The three writes are told apart by the model address they land on.
+            // Recording the byte the array HELD BEFORE the store is what proves
+            // the store really changed that one cell and nothing else.
+            if (m_chr_final_addr == MMC3_W2_ADDR_LOW_EXP) begin
+                m_wr_low_hit = m_wr_low_hit + 1;
+                m_wr_low_before = m_chr_mem[MMC3_W2_ADDR_LOW_EXP];
+            end else if (m_chr_final_addr == MMC3_W2_ADDR_HIGH_EXP) begin
+                m_wr_high_hit = m_wr_high_hit + 1;
+                m_wr_high_before = m_chr_mem[MMC3_W2_ADDR_HIGH_EXP];
+            end else if (m_chr_final_addr == MMC3_W2_ADDR_ODD_EXP) begin
+                m_wr_odd_hit = m_wr_odd_hit + 1;
+                m_wr_odd_before = m_chr_mem[MMC3_W2_ADDR_ODD_EXP];
+            end else begin
+                m_wr_addr_err = m_wr_addr_err + 1;
+            end
+        end
+        m_wr_prev = m_chr_we;
+
+        // READ BEATS, unchanged except that a beat the write has taken over is
+        // counted as a read-on-write beat and excluded from the read model, for
+        // the same reason P0-2 spells out.
         if (m_chr_req !== 1'b0) begin
             m_chr_req_total = m_chr_req_total + 1;
-            if ((m_bank_epoch >= 0) && (m_bank_epoch < MMC3_BANK_STEPS)) begin
-                m_addr_checks[m_bank_epoch] = m_addr_checks[m_bank_epoch] + 1;
-                if (m_first_hi_ok[m_bank_epoch] !== 1'b1) begin
-                    m_first_hi_ok[m_bank_epoch] = 1'b1;
-                    m_first_hi[m_bank_epoch] = m_chr_final_addr[16:10];
+            if (m_write_on_port === 1'b0) begin
+                if ((m_bank_epoch >= 0) && (m_bank_epoch < MMC3_BANK_STEPS)) begin
+                    m_addr_checks[m_bank_epoch] = m_addr_checks[m_bank_epoch] + 1;
+                    if (m_first_hi_ok[m_bank_epoch] !== 1'b1) begin
+                        m_first_hi_ok[m_bank_epoch] = 1'b1;
+                        m_first_hi[m_bank_epoch] = m_chr_final_addr[16:10];
+                    end
+                    if (m_chr_final_addr !==
+                        (({9'b0, m_bank_model} << 10) | (m_chr_addr & 14'h03FF))) begin
+                        m_addr_err[m_bank_epoch] = m_addr_err[m_bank_epoch] + 1;
+                        if (m_addr_err[m_bank_epoch] < 4)
+                            $fatal(1, "P0-7 chr_final_addr %05h != tb model %05h (local %04h, model reg %02h, epoch %0d)",
+                                   m_chr_final_addr,
+                                   (({9'b0, m_bank_model} << 10) | (m_chr_addr & 14'h03FF)),
+                                   m_chr_addr, m_bank_model, m_bank_epoch);
+                    end
+                    if (m_chr_final_addr[16] !== 1'b0)
+                        m_bit16_seen[m_bank_epoch] = m_bit16_seen[m_bank_epoch] + 1;
                 end
-                if (m_chr_final_addr !==
-                    (({9'b0, m_bank_model} << 10) | (m_chr_addr & 14'h03FF))) begin
-                    m_addr_err[m_bank_epoch] = m_addr_err[m_bank_epoch] + 1;
-                    if (m_addr_err[m_bank_epoch] < 4)
-                        $fatal(1, "P0-7 chr_final_addr %05h != tb model %05h (local %04h, model reg %02h, epoch %0d)",
-                               m_chr_final_addr,
-                               (({9'b0, m_bank_model} << 10) | (m_chr_addr & 14'h03FF)),
-                               m_chr_addr, m_bank_model, m_bank_epoch);
-                end
-                if (m_chr_final_addr[16] !== 1'b0)
-                    m_bit16_seen[m_bank_epoch] = m_bit16_seen[m_bank_epoch] + 1;
             end
         end
     end
+end
+
+// The bus-side expected count for chr_mmc3, built the same way as the phase 1
+// one: a $2007 write whose PRE-increment v_addr is still in the CHR half.
+always @(posedge clk) begin
+    if (reset)
+        m_wr_exp_total = 0;
+    else if ((m_bus_fire !== 1'b0) && (m_bus_we !== 1'b0) &&
+             (m_sel_ppu === 1'b1) && (chr_mmc3.u_ppu.reg_addr == 3'd7) &&
+             (chr_mmc3.u_ppu.v_addr < 15'h2000))
+        m_wr_exp_total = m_wr_exp_total + 1;
 end
 
 always @(posedge clk) begin
@@ -2617,12 +3710,16 @@ always @(posedge clk) begin
     if (reset) begin
         ab_req_prev = 1'b0;
         m_req_prev = 1'b0;
+        ab_we_prev = 1'b0;
+        m_we_prev = 1'b0;
         ab_req_beats = 0;
         ab_req_consec = 0;
+        ab_we_consec = 0;
         ab_bgsp_beats = 0;
         ab_bgsp_clash = 0;
         m_req_beats = 0;
         m_req_consec = 0;
+        m_we_consec = 0;
         m_bgsp_beats = 0;
         m_bgsp_clash = 0;
     end else begin
@@ -2665,6 +3762,24 @@ always @(posedge clk) begin
                 m_bgsp_clash = m_bgsp_clash + 1;
                 $fatal(1, "P0-8 chr_mmc3 sprite and background chr_req were both high");
             end
+        end
+        // The write strobe shares the mapper port with the read arbiter, so the
+        // new path could in principle collide with a fetch or run long.  chr_we
+        // must be one ce_ppu wide: the counter only advances when this beat AND
+        // the previous ce beat both carried a strobe.
+        if (ab_v6.ce_ppu) begin
+            if ((ab_we_prev !== 1'b0) && (v6_chr_we !== 1'b0)) begin
+                ab_we_consec = ab_we_consec + 1;
+                $fatal(1, "P0-8 ab_v6 chr_we was high on two consecutive ce");
+            end
+            ab_we_prev = v6_chr_we;
+        end
+        if (chr_mmc3.ce_ppu) begin
+            if ((m_we_prev !== 1'b0) && (m_chr_we !== 1'b0)) begin
+                m_we_consec = m_we_consec + 1;
+                $fatal(1, "P0-8 chr_mmc3 chr_we was high on two consecutive ce");
+            end
+            m_we_prev = m_chr_we;
         end
     end
 end
@@ -2800,6 +3915,11 @@ task check_p0_1;
         if (reset_chr_addr_bad != 0)
             $fatal(1, "P0-1 chr_final_addr was nonzero %0d times during reset",
                    reset_chr_addr_bad);
+        if (reset_chr_we_bad != 0)
+            $fatal(1, "P0-1 chr_we was high %0d times during reset", reset_chr_we_bad);
+        if (reset_chr_waddr_bad != 0)
+            $fatal(1, "P0-1 chr_waddr was nonzero %0d times during reset",
+                   reset_chr_waddr_bad);
         if (reset_mapper_id_bad != 0)
             $fatal(1, "P0-1 dbg_mapper_id was nonzero %0d times during reset",
                    reset_mapper_id_bad);
@@ -2811,7 +3931,7 @@ task check_p0_1;
         if (last_f_max_final_addr > 17'h1FFF)
             $fatal(1, "P0-1 chr_final_addr %05h exceeded 0x1FFF in the last frame",
                    last_f_max_final_addr);
-        $display("P0-1 RESET/IDENTITY reset clks=%0d chr_req=0 chr_final_addr=0 during reset, dbg_mapper_id=0/0, chr requests=%0d, max chr_final_addr=0x%04h <= 0x1FFF PASS",
+        $display("P0-1 RESET/IDENTITY reset clks=%0d chr_req=0 chr_final_addr=0 chr_we=0 chr_waddr=0 during reset, dbg_mapper_id=0/0, chr requests=%0d, max chr_final_addr=0x%04h <= 0x1FFF PASS",
                  reset_clks, chr_req_total, last_f_max_final_addr);
     end
 endtask
@@ -2841,6 +3961,28 @@ task check_p0_2;
                    cart_wr_total, cart_pulse_total);
         $display("P0-2 CHR-TRANSLATION tb model = (tb_chr_bank_model<<13)|(ab_v6.u_ppu.chr_addr & 0x1fff), the local term read from the ppu port itself, checked=%0d err=%0d, plus local[12:0]==final[12:0] and final[16:13]==0, NROM bank term const 0 PASS",
                  chr_addr_checks, chr_addr_err);
+        if (chr_wr_addr_err != 0)
+            $fatal(1, "P0-2 WRITE chr translation mismatched %0d times", chr_wr_addr_err);
+        if (chr_wr_checks < CHR_TILE_BYTES)
+            $fatal(1, "P0-2 only %0d write beats were translation-checked", chr_wr_checks);
+        if (chr_wr_req_clash > chr_wr_beats)
+            $fatal(1, "P0-2 %0d read/write collisions on %0d write beats, more than one per write",
+                   chr_wr_req_clash, chr_wr_beats);
+        if (chr_wr_clash_visible != 0)
+            $fatal(1, "P0-2 %0d read/write collisions happened while the background or the sprites were being displayed, so a rendered pixel was fed the write address's byte",
+                   chr_wr_clash_visible);
+        if (chr_wr_not_accepted != 0)
+            $fatal(1, "P0-2 a chr-ram board's mapper refused %0d $2007 write beats",
+                   chr_wr_not_accepted);
+        if (chr_wr_beats != chr_wr_exp_total)
+            $fatal(1, "P0-2 the ppu raised chr_we on %0d beats but the bus saw %0d $2007 writes into the chr half",
+                   chr_wr_beats, chr_wr_exp_total);
+        $display("P0-2 WRITE-TRANSLATION chr_we never raises chr_req, so the read-beat check above gave ZERO coverage of the write address before this line existed.  On every $2007 write beat the tb now rebuilds the expected final address from its own bank model and the ppu's LOCAL chr_waddr, expected=(tb_chr_bank_model<<13)|(chr_waddr & 0x1fff), and compares it with chr_final_addr one net downstream; it also asserts chr_waddr==(pre-increment u_ppu.v_addr), chr_waddr[13]==0, local[12:0]==final[12:0], final[16:13]==0 and chr_wdata==reg_din.  write beats=%0d checked=%0d err=%0d, refused by the mapper on a chr-ram board=%0d, and the strobe count EQUALS the bus-side count of $2007 writes into the chr half=%0d PASS",
+                 chr_wr_beats, chr_wr_checks, chr_wr_addr_err,
+                 chr_wr_not_accepted, chr_wr_exp_total);
+        $display("P0-2 WRITE-READ-ARBITRATION MEASURED, NOT ASSUMED.  mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr gives the WRITE priority, and chr_req is produced by the free-running fetch units and is NOT suppressed by a write, so the two CAN be high on the same ce_ppu.  That happened on %0d of the %0d $2007 write beats.  On such a beat chr_final_addr carries the write address, so that beat is checked against the WRITE model instead of the read model (%0d such read beats were excluded from the read translation count, which stayed exact on the remaining %0d).  The cost is that the fetch unit latches the write address's byte for that one ce, so a $2007 write issued while the background or the sprites are actually being displayed would corrupt one tile beat.  That did NOT happen here: %0d of the %0d collisions occurred while the ppu's own bg_pa_enable was high or with sprites enabled below scanline 240.  The upload runs with PPUMASK=$00, so P0-4's pixel A/B and P0-5's named classes are unaffected.  KNOWN LIMITATION, not a deleted check PASS",
+                 chr_wr_req_clash, chr_wr_beats, chr_wr_req_clash,
+                 chr_addr_checks, chr_wr_clash_visible, chr_wr_req_clash);
         $display("P0-2 CART-WRITE tb model fires from exported cart_xfer&&bus_we only and predicts addr/data one clk later, cart writes=%0d pulses=%0d addr/data err=%0d width err=%0d spurious=%0d missing=%0d (a000=5a b123=a5 ffc0=3c) PASS",
                  cart_wr_total, cart_pulse_total, cart_pulse_err,
                  cart_pulse_width_err, cart_pulse_spurious, cart_pulse_multi);
@@ -2852,6 +3994,12 @@ task check_p0_3;
         if (last_f_final_bit13_bad != 0)
             $fatal(1, "P0-3 chr_final_addr[13] was set %0d times in the last frame",
                    last_f_final_bit13_bad);
+        if (last_f_wr_final_bit13_bad != 0)
+            $fatal(1, "P0-3 chr_final_addr[13] was set on %0d $2007 write beats",
+                   last_f_wr_final_bit13_bad);
+        if (chr_wr_bit13_bad != 0)
+            $fatal(1, "P0-3 chr_final_addr[13] was set on %0d of %0d $2007 write beats over the whole run",
+                   chr_wr_bit13_bad, chr_wr_beats);
         if (last_f_addr_err != 0)
             $fatal(1, "P0-3 the translation model disagreed %0d times in the last frame",
                    last_f_addr_err);
@@ -2863,6 +4011,11 @@ task check_p0_3;
         $display("P0-3 BIT13-DROP last frame chr requests=%0d, chr_final_addr[13] set on %0d of them, max chr_final_addr=0x%04h, translation model err=%0d PASS",
                  last_f_chr_req, last_f_final_bit13_bad, last_f_max_final_addr,
                  last_f_addr_err);
+        $display("P0-3 WRITE-STREAM the request stream is no longer the whole chr stream: the program issues %0d $2007 CHR writes and chr_we fired on %0d of them (last frame: %0d), so the bit-13 assertion is now also made on every write beat.  chr_final_addr[13] was set on %0d of %0d write beats over the whole run and on %0d of the %0d in the last frame, max chr_final_addr across read AND write beats in the last frame = 0x%04h.  It holds because chr_we is qualified by v_addr < $2000, i.e. local bit 13 is structurally zero PASS",
+                 chr_wr_beats, chr_wr_beats, last_f_chr_wr,
+                 chr_wr_bit13_bad, chr_wr_beats,
+                 last_f_wr_final_bit13_bad, chr_wr_beats,
+                 last_f_max_final_addr);
         $display("P0-3 NONVACUITY-PROBE last frame ppu local chr_addr[13] set on %0d requests, local chr_addr[12] (the pattern-table select PPUCTRL bit 4 drives) set on %0d requests.  chr_addr[13] is UNREACHABLE BY STIMULUS in this rtl: nes_chr_fetch_unit is wired tile_count=1 and its 13-bit tile_base {table,tile,4'b0}+fine tops out at 0x1ff7, so nxt_addr=tile_base+8 <= 0x1fff; nes_sprite_chr_fetch's plane_byte adds at most 8 to a 13-bit pat_addr with bit 3 forced low, so it also tops out at 0x1fff.  The table select therefore lands on local bit 12, which the mapper preserves.  KNOWN GAP, not a deleted check: chr_final_addr[13]==0 is still asserted on every request and (bank<<13)|local is still asserted against the ppu's own port, so a reintroduced post-adder would still fail.  What cannot be proven here is that a hypothetical set bit 13 survives the drop, because no stimulus can raise it.  Observed local bit 13 = %0d PASS",
                  last_f_local_bit13, last_f_local_bit12, last_f_local_bit13);
     end
@@ -2882,9 +4035,21 @@ task check_p0_4;
         if (ab_all_ce_div != 0)
             $fatal(1, "P0-4 v5 and v6 diverged on %0d of %0d ce",
                    ab_all_ce_div, ab_all_ce_count);
+        if (chr_up_flag_seen != 1)
+            $fatal(1, "P0-4 the program never raised ram[%04h], so no CHR upload happened",
+                   CHR_UPLOAD_FLAG_CELL);
+        if (chr_up_snap_err != 0)
+            $fatal(1, "P0-4 %0d of %0d uploaded CHR bytes were wrong in v6's external model",
+                   chr_up_snap_err, 2 * CHR_TILE_BYTES);
+        if (chr_v5_snap_err != 0)
+            $fatal(1, "P0-4 %0d of %0d uploaded CHR bytes are missing from v5's internal array",
+                   chr_v5_snap_err, 2 * CHR_TILE_BYTES);
         $display("P0-4 AB-FULL-FRAME compared per ce, visible comparisons=%0d (3 x 240 x 256) exact, divergences=%0d, all-ce comparisons=%0d divergences=%0d, frame period=%0d clk PASS",
                  ab_visible_count, ab_visible_div, ab_all_ce_count,
                  ab_all_ce_div, frame_delta_clk);
+        $display("P0-4 AB-NONVACUITY this comparison used to be a statement about the CHR PRELOAD: both boards were handed the rendered image.  They no longer are.  v6's external chr_mem and v5's internal chr_ram both start at the SENTINEL image (ff/00/00/ff/ff/00 complemented) in both pattern tables and the only thing that can put run A's image (ff 00 00 ff ff 00) into them is the program's own %0d $2007 writes, which the two paths take completely differently (v6 external port through the mapper, v5 internal chr_ram).  At the program-set flag ram[%04h] all %0d bytes of v6's external model matched the program's bytes (err=%0d, none left at the sentinel) and all %0d bytes of v5's two tables matched too (err=%0d).  Had the external write been dropped, v6 would still be showing the sentinel and this per-ce comparison would have failed PASS",
+                 chr_wr_beats, CHR_UPLOAD_FLAG_CELL, 2 * CHR_TILE_BYTES,
+                 chr_up_snap_err, 2 * CHR_TILE_BYTES, chr_v5_snap_err);
     end
 endtask
 
@@ -2924,6 +4089,10 @@ task check_p0_6;
         $display("P0-6 CHR-MODEL registered chr_rdata shadowed against chr_mem[chr_final_addr delayed 1 ce] on %0d request beats (err=%0d), fetch unit bg_lo/bg_hi latches shadowed against chr_mem[chr_final_addr delayed 2 ce] on %0d beats (err=%0d) PASS",
                  chr_model_pred_checks, chr_model_pred_err, chr_latch_checks,
                  chr_latch_err);
+        $display("P0-6 TB-MODEL-CHANGES the tb chr_mem array is no longer write-once: the program now stores %0d bytes into it, so a shadow comparison whose address was itself written in the last two ce would be comparing against a different epoch of the array.  Those beats are COUNTED and skipped rather than compared, and nothing else is skipped: %0d of %0d registered-read beats and %0d of %0d fetch-unit latch beats were excluded this way, leaving err=%0d and err=%0d on the rest PASS",
+                 chr_wr_accepted, chr_pred_race_skip, chr_model_pred_checks,
+                 chr_latch_race_skip, chr_latch_checks,
+                 chr_model_pred_err, chr_latch_err);
     end
 endtask
 
@@ -2997,11 +4166,30 @@ task check_p0_7;
         if (m_bit16_seen[2] < 1000)
             $fatal(1, "P0-7 chr_final_addr[16] was set on only %0d beats for the reg %02h step, the 17th bit is not real",
                    m_bit16_seen[2], MMC3_REG_R2);
-        if (m_tile0_oth[0] != 0 || m_tile0_oth[1] != 0 || m_tile0_oth[2] != 0)
-            $fatal(1, "P0-7 the tile-0 region was not a single class: stray pixels %0d/%0d/%0d",
-                   m_tile0_oth[0], m_tile0_oth[1], m_tile0_oth[2]);
+        if (m_tile0_oth[0] != 0 || m_tile0_oth[1] != 0 || m_tile0_oth[2] != 0 ||
+            m_tile0_oth[3] != 0 || m_tile0_oth[4] != 0)
+            $fatal(1, "P0-7 the tile-0 region was not a single class: stray pixels %0d/%0d/%0d/%0d/%0d",
+                   m_tile0_oth[0], m_tile0_oth[1], m_tile0_oth[2],
+                   m_tile0_oth[3], m_tile0_oth[4]);
         if (m_exp_index[0] === m_exp_index[2])
             $fatal(1, "P0-7 the first and third bank were asserted to the same index, the check proves nothing");
+        // W2 added two more $8001 steps, so the "same register means the same
+        // window index, different register means a different one" relation is
+        // now asserted for every adjacent pair instead of only the two the old
+        // three-step program needed.
+        for (d = 0; d < (MMC3_BANK_STEPS - 1); d = d + 1) begin
+            if (m_first_hi_ok[d] !== 1'b1 || m_first_hi_ok[d+1] !== 1'b1)
+                $fatal(1, "P0-7 step %0d or %0d produced no chr beat to sample", d + 1, d + 2);
+            if (m_bank_reg[d] === m_bank_reg[d+1]) begin
+                if (m_first_hi[d] !== m_first_hi[d+1])
+                    $fatal(1, "P0-7 steps %0d/%0d select the SAME r0 register %02h but the dut chr_final_addr[16:10] moved from %02h to %02h, so the reg model is wrong",
+                           d + 1, d + 2, m_bank_reg[d], m_first_hi[d], m_first_hi[d+1]);
+            end else begin
+                if (m_first_hi[d] === m_first_hi[d+1])
+                    $fatal(1, "P0-7 steps %0d/%0d select different r0 registers %02h/%02h but the dut chr_final_addr[16:10] did not move, the bank switch is not observable",
+                           d + 1, d + 2, m_bank_reg[d], m_bank_reg[d+1]);
+            end
+        end
         if (m_first_hi_ok[0] !== 1'b1 || m_first_hi_ok[1] !== 1'b1 ||
             m_first_hi_ok[2] !== 1'b1)
             $fatal(1, "P0-7 an epoch produced no chr beat to sample");
@@ -3012,13 +4200,18 @@ task check_p0_7;
             $fatal(1, "P0-7 the dut chr_final_addr[16:10] did not move across the $41 write, the bank switch is not observable");
         if (m_seen_self_loop !== 1'b1)
             $fatal(1, "P0-7 the mmc3 cpu never reached its self loop");
-        $display("P0-7 MMC3-BANK (a) translation: expected_final=(tb_chr_bank_model<<10)|(local&0x3ff) with tb_chr_bank_model={mapper_write_data[7:1],1'b0} captured from mapper_write_pulse/addr/data, never from the dut register, checked on every ce_ppu with chr_req high: $8001 data %02h/%02h/%02h -> reg %02h/%02h/%02h, chr beats total=%0d, per-step beats=%0d/%0d/%0d err=%0d/%0d/%0d, dut chr_final_addr[16:10] first value per step=%02h/%02h/%02h PASS",
+        $display("P0-7 MMC3-BANK (a) translation: expected_final=(tb_chr_bank_model<<10)|(local&0x3ff) with tb_chr_bank_model={mapper_write_data[7:1],1'b0} captured from mapper_write_pulse/addr/data, never from the dut register, checked on every ce_ppu with chr_req high: $8001 data %02h/%02h/%02h/%02h/%02h -> reg %02h/%02h/%02h/%02h/%02h, chr beats total=%0d, per-step beats=%0d/%0d/%0d/%0d/%0d err=%0d/%0d/%0d/%0d/%0d, dut chr_final_addr[16:10] first value per step=%02h/%02h/%02h/%02h/%02h.  Steps 4 and 5 are the W2 bank pair and are deliberately included here so the per-step bucketing keeps covering every write PASS",
                  m_bank_data[0], m_bank_data[1], m_bank_data[2],
+                 m_bank_data[3], m_bank_data[4],
                  m_bank_reg[0], m_bank_reg[1], m_bank_reg[2],
+                 m_bank_reg[3], m_bank_reg[4],
                  m_chr_req_total,
                  m_addr_checks[0], m_addr_checks[1], m_addr_checks[2],
+                 m_addr_checks[3], m_addr_checks[4],
                  m_addr_err[0], m_addr_err[1], m_addr_err[2],
-                 m_first_hi[0], m_first_hi[1], m_first_hi[2]);
+                 m_addr_err[3], m_addr_err[4],
+                 m_first_hi[0], m_first_hi[1], m_first_hi[2],
+                 m_first_hi[3], m_first_hi[4]);
         $display("P0-7 MMC3-BANK (b) named tile-0 indices: step1 $8001=%02h -> reg %02h -> index %0d on %0d of %0d tile-0 pixels (plane0=$FF/plane1=$00 -> pattern 1 -> $3F01=$21); step2 $8001=%02h -> reg %02h -> index %0d on %0d of %0d; step3 $8001=%02h -> reg %02h -> index %0d on %0d of %0d (plane0=$FF/plane1=$FF -> pattern 3 -> $3F03=$18); stray pixels %0d/%0d/%0d.  PARTIAL SPEC, NOT A DELETED CHECK: step 2 was specified to produce a NEW value and it cannot, because nes_mapper_mmc3.v:208 latches r0 as {data[7:1],1'b0} so $01 and $00 are the same 1 KiB bank (real MMC3 2 KiB granularity, bit 0 is the odd/even 1 KiB select and lives in local chr_addr[11]).  The named value for step 2 is therefore %0d, identical to step 1, and the dut chr_final_addr[16:10] is asserted bit-identical across the two steps (%02h vs %02h) so the equality is measured, not assumed.  Two of the three steps therefore change the arriving bytes and the picture (reg %02h -> reg %02h); the third cannot, and no preload can make it, because the register value it selects is the same.  The three preloaded images are pairwise different PASS",
                  m_bank_data[0], m_bank_reg[0], m_exp_index[0], m_tile0_exp[0], m_tile0_tot[0],
                  m_bank_data[1], m_bank_reg[1], m_exp_index[1], m_tile0_exp[1], m_tile0_tot[1],
@@ -3026,11 +4219,18 @@ task check_p0_7;
                  m_tile0_oth[0], m_tile0_oth[1], m_tile0_oth[2],
                  m_exp_index[1], m_first_hi[0], m_first_hi[1],
                  m_bank_reg[0], m_bank_reg[2]);
-        $display("P0-7 MMC3-BANK (c) for the $41 write the r0 register is {0x41[7:1],1'b0}=$40 so chr_final_addr[16]=reg[6]=1 on %0d of the %0d checked beats; that is bit 16 of a 17-bit address taken from the mapper output port, so a 16-bit testbench index could not have produced it.  All three $8001 writes landed inside the vblank period at scanline/dot %0d/%0d, %0d/%0d and %0d/%0d (dots all below the 257 where the 35-ce sprite shadow build starts), ppuctrl was $%02h throughout so PPUCTRL[4]/[5] never moved the window, and the three preloaded bank images are pairwise different PASS",
+        $display("P0-7 MMC3-BANK (b2) the two W2 steps are held to the same named-index rule as steps 1-3: step4 $8001=%02h -> reg %02h -> index %0d on %0d of %0d tile-0 pixels with %0d strays; step5 $8001=%02h -> reg %02h -> index %0d on %0d of %0d with %0d strays.  Step 4 sends r0 back to $00 so its window is reg $00 again, and step 5 selects reg $42 whose 1 KiB image is the same reg-$40 image, so both named indices are the ones already used above and neither had to be invented PASS",
+                 m_bank_data[3], m_bank_reg[3], m_exp_index[3],
+                 m_tile0_exp[3], m_tile0_tot[3], m_tile0_oth[3],
+                 m_bank_data[4], m_bank_reg[4], m_exp_index[4],
+                 m_tile0_exp[4], m_tile0_tot[4], m_tile0_oth[4]);
+        $display("P0-7 MMC3-BANK (c) for the $41 write the r0 register is {0x41[7:1],1'b0}=$40 so chr_final_addr[16]=reg[6]=1 on %0d of the %0d checked beats; that is bit 16 of a 17-bit address taken from the mapper output port, so a 16-bit testbench index could not have produced it.  All five $8001 writes landed inside the vblank period at scanline/dot %0d/%0d, %0d/%0d, %0d/%0d, %0d/%0d and %0d/%0d (dots all below the 257 where the 35-ce sprite shadow build starts), ppuctrl was $%02h throughout so PPUCTRL[4]/[5] never moved the window, and the four preloaded bank images are pairwise different PASS",
                  m_bit16_seen[2], m_addr_checks[2],
                  m_bank_sl[0][15:8], m_bank_sl[0][7:0],
                  m_bank_sl[1][15:8], m_bank_sl[1][7:0],
                  m_bank_sl[2][15:8], m_bank_sl[2][7:0],
+                 m_bank_sl[3][15:8], m_bank_sl[3][7:0],
+                 m_bank_sl[4][15:8], m_bank_sl[4][7:0],
                  MMC3_PPUCTRL);
     end
 endtask
@@ -3049,6 +4249,12 @@ task check_p0_8;
         if (m_bgsp_clash != 0)
             $fatal(1, "P0-8 chr_mmc3 background and sprite chr_req collided %0d times",
                    m_bgsp_clash);
+        if (ab_we_consec != 0)
+            $fatal(1, "P0-8 ab_v6 chr_we was high on two consecutive ce %0d times",
+                   ab_we_consec);
+        if (m_we_consec != 0)
+            $fatal(1, "P0-8 chr_mmc3 chr_we was high on two consecutive ce %0d times",
+                   m_we_consec);
         if (ab_req_beats < 200000)
             $fatal(1, "P0-8 ab_v6 only produced %0d ce, the collision window was barely sampled",
                    ab_req_beats);
@@ -3062,6 +4268,224 @@ task check_p0_8;
                  ab_req_consec, ab_req_beats, ab_req_consec,
                  m_req_consec, m_req_beats, m_req_consec,
                  ab_bgsp_beats, m_bgsp_beats, ab_bgsp_clash, m_bgsp_clash);
+        $display("P0-8 WRITE-STROBE the new write path takes the same mapper port the fetch arbiter uses, so it was re-checked for contention: chr_we was never high on two consecutive ce_ppu on ab_v6 (%0d violations) or on chr_mmc3 (%0d violations), and the arbitration between the two was counted rather than assumed -- %0d and %0d of the %0d and %0d write beats coincided with a chr_req beat (write wins in mapper_ppu_addr), with %0d and %0d of those while bg or sprites were enabled PASS",
+                 ab_we_consec, m_we_consec, chr_wr_req_clash, m_wr_req_clash,
+                 chr_wr_beats, m_wr_beats,
+                 chr_wr_clash_visible, m_wr_clash_visible);
+    end
+endtask
+
+// =====================================================================
+// W1  NROM + CHR RAM: $2007 write, then render from what the write left
+// =====================================================================
+
+task check_w1_chr_upload;
+    integer d;
+    begin
+        if (chr_up_flag_seen != 1)
+            $fatal(1, "W1 the program never raised ram[%04h]", CHR_UPLOAD_FLAG_CELL);
+        if (chr_wr_beats < (2 * CHR_TILE_BYTES))
+            $fatal(1, "W1 only %0d $2007 write beats were seen, the upload is smaller than the %0d bytes it claims to store",
+                   chr_wr_beats, 2 * CHR_TILE_BYTES);
+        if (chr_wr_beats != chr_wr_exp_total)
+            $fatal(1, "W1 chr_we fired %0d times but the bus saw %0d $2007 writes into the chr half",
+                   chr_wr_beats, chr_wr_exp_total);
+        if (chr_wr_accepted != chr_wr_beats)
+            $fatal(1, "W1 the mapper accepted %0d of %0d $2007 write beats on a chr-ram board",
+                   chr_wr_accepted, chr_wr_beats);
+        if (chr_up_snap_err != 0)
+            $fatal(1, "W1 %0d of the %0d uploaded bytes are wrong in v6's external chr model",
+                   chr_up_snap_err, 2 * CHR_TILE_BYTES);
+        if (chr_up_snap_nochange != 0)
+            $fatal(1, "W1 %0d of the %0d uploaded bytes still held the sentinel, so they were not written",
+                   chr_up_snap_nochange, 2 * CHR_TILE_BYTES);
+        if (chr_up_addr_err != 0)
+            $fatal(1, "W1 %0d bytes at chr_mem[8192+d] are not the sentinel; $2000 is unreachable and must be untouched",
+                   chr_up_addr_err);
+        if (chr_v5_snap_err != 0)
+            $fatal(1, "W1 %0d of the %0d uploaded bytes are missing from v5's internal chr_ram",
+                   chr_v5_snap_err, 2 * CHR_TILE_BYTES);
+        $display("W1 NROM-CHR-RAM-WRITE the program stores a 48-byte three-tile image into BOTH halves the renderer reads -- chr_mem[$0000+off] for the sprite (PPUCTRL[5]=0) and chr_mem[$1000+off] for the background (PPUCTRL[4]=1, and nes_mapper_nrom.v:26 preserves bit 12) -- on ab_v6 (NROM_CHR_RAM=1).  $2007 write beats=%0d, bus-side $2007 writes into the chr half=%0d (the count is equal, so every write produced exactly one strobe), mapper accepted=%0d, translation errors=%0d, beats on two consecutive ce=%0d.  At the program-set flag ram[%04h] all %0d bytes of the external chr model equalled the constant the program itself supplied (err=%0d) and none of them was still the sentinel (%0d bytes unchanged) PASS",
+                 chr_wr_beats, chr_wr_exp_total, chr_wr_accepted,
+                 chr_wr_addr_err, chr_wr_consec,
+                 CHR_UPLOAD_FLAG_CELL, 2 * CHR_TILE_BYTES, chr_up_snap_err,
+                 chr_up_snap_nochange);
+        $display("W1 SENTINEL v6's external model started at the COMPLEMENT of what the program writes (sentinel %02h %02h %02h %02h %02h %02h per plane pair, upload %02h %02h %02h %02h %02h %02h per plane pair), and v5's internal chr_ram started at the same sentinel in both tables.  If a single one of those %0d writes had been dropped the render would have shown the sentinel pattern value 2 where it now shows 1, so P0-4's per-ce A/B and P0-5's named pixel classes both fail on a dropped write.  chr_mem[$2000+d] is past every address the ppu can produce (chr_final_addr tops out at $1FFF) and all %0d of those bytes are still the sentinel (mismatches=%0d), so the store went exactly where the program aimed it and nowhere else PASS",
+                 chr_tile_image_b[0], chr_tile_image_b[8], chr_tile_image_b[16],
+                 chr_tile_image_b[24], chr_tile_image_b[32], chr_tile_image_b[40],
+                 chr_tile_image[0], chr_tile_image[8], chr_tile_image[16],
+                 chr_tile_image[24], chr_tile_image[32], chr_tile_image[40],
+                 chr_wr_beats, CHR_TILE_BYTES, chr_up_addr_err);
+    end
+endtask
+
+// The self-validating pair.  chr_ram_b is ab_v6 running BYTE-IDENTICAL CODE with
+// the two PRG fill bytes swapped, so the only difference between the two runs is
+// which pattern the same loop stores.  If $2007-to-CHR were ignored on both, both
+// would render their own sentinel and this comparison would come out EQUAL and
+// fail, which is what makes the pair immune to a completely dead write path.
+task check_w1_self_validating_pair;
+    begin
+        if (rb_wr_beats != chr_wr_beats)
+            $fatal(1, "W1 chr_ram_b raised chr_we %0d times against ab_v6's %0d, the two runs are not comparable",
+                   rb_wr_beats, chr_wr_beats);
+        if (rb_wr_not_accepted != 0)
+            $fatal(1, "W1 chr_ram_b's mapper refused %0d write beats on a chr-ram board",
+                   rb_wr_not_accepted);
+        if (rb_tile_err != 0)
+            $fatal(1, "W1 %0d of the %0d bytes in chr_ram_b's external model are not run B's image",
+                   rb_tile_err, 2 * CHR_TILE_BYTES);
+        if (rb_tile0_same != 0)
+            $fatal(1, "W1 %0d bytes of chr_ram_b's model still hold run A's image, the two boards would render the same picture",
+                   rb_tile0_same);
+        if (pic_rb_cmp != PIXELS_PER_FRAME * 4)
+            $fatal(1, "W1 the self-validating pair compared %0d clk samples, expected %0d",
+                   pic_rb_cmp, PIXELS_PER_FRAME * 4);
+        if (pic_rb_geom_diff != 0)
+            $fatal(1, "W1 chr_ram_b and ab_v6 disagreed on pixel geometry %0d times, so the two programs are not in lockstep",
+                   pic_rb_geom_diff);
+        if (pic_rb_idx_diff < 1)
+            $fatal(1, "W1 VACUOUS: the two different uploads produced identical pictures, so nothing proves the writes were consumed");
+        if (pic_rb_tile0_diff < 1)
+            $fatal(1, "W1 VACUOUS: the two pictures differ only outside the columns the program wrote, so the difference is not coming from the uploaded bytes");
+        $display("W1 SELF-VALIDATING-PAIR ab_v6 (upload ff/00/00/ff/ff/00) and chr_ram_b (upload 00/ff/ff/00/00/ff) run the SAME CODE -- the only difference between the two PRG images is the contents of the two data cells the fill loop reads -- through the same external CHR RAM write path, from opposite sentinels.  Strobe beats ab_v6=%0d chr_ram_b=%0d (equal), chr_ram_b bytes that ended at run B's image=%0d of %0d, bytes that wrongly still held run A's image=%0d.  Rendered over the whole final frame at 4 clk per dot (%0d clk samples, %0d geometry differences so the runs really are in lockstep) the pictures DIFFER on %0d clk samples, of which %0d are in the leftmost 16 columns of a visible scanline, i.e. exactly where BG tiles 0 and 1 that the program wrote are drawn.  A dead $2007-to-CHR path would leave both boards rendering their own sentinel and the two pictures would MATCH, which is exactly what this check forbids PASS",
+                 chr_wr_beats, rb_wr_beats, 2 * CHR_TILE_BYTES - rb_tile_err,
+                 2 * CHR_TILE_BYTES, rb_tile0_same, pic_rb_cmp, pic_rb_geom_diff,
+                 pic_rb_idx_diff, pic_rb_tile0_diff);
+    end
+endtask
+
+// =====================================================================
+// The CHR-ROM / CHR-RAM ignore pair, on the same program
+// =====================================================================
+
+task check_chr_ram_rom_pair;
+    begin
+        if (rom_wr_beats != chr_wr_beats)
+            $fatal(1, "PAIR the chr-rom board produced %0d chr_we beats against the chr-ram board's %0d, the paired result below would be meaningless",
+                   rom_wr_beats, chr_wr_beats);
+        if (chr_wr_beats < 1)
+            $fatal(1, "PAIR neither board produced a single chr_we beat");
+        if (rom_wr_ramwe_bad != 0)
+            $fatal(1, "PAIR mapper_chr_ram_we was HIGH on %0d of %0d chr_we beats on the chr-rom board, the writes were not refused at the gate",
+                   rom_wr_ramwe_bad, rom_wr_beats);
+        if (rom_wr_bad_wdata != 0)
+            $fatal(1, "PAIR chr_wdata did not equal the ppu's reg_din on %0d of %0d chr_we beats on the chr-rom board",
+                   rom_wr_bad_wdata, rom_wr_beats);
+        if (rom_pre_err != 0)
+            $fatal(1, "PAIR %0d of the %0d bytes of the chr-rom board's memory were not the same as before the upload",
+                   rom_pre_err, rom_pre_bytes);
+        if (rom_final_bytes != 0)
+            $fatal(1, "PAIR %0d bytes of the chr-rom board's 128 KiB memory changed during the run", rom_final_bytes);
+        if (rom_tile_err != 0)
+            $fatal(1, "PAIR the chr-rom board's image is not the image the program uploads (%0d bytes wrong)",
+                   rom_tile_err);
+        if (rom_pre_bytes != CHR_MEM_BYTES)
+            $fatal(1, "PAIR only %0d of the %0d bytes were compared against the pre-run snapshot",
+                   rom_pre_bytes, CHR_MEM_BYTES);
+        if (pic_rom_cmp != PIXELS_PER_FRAME * 4)
+            $fatal(1, "PAIR the picture comparison covered %0d clk samples, expected %0d",
+                   pic_rom_cmp, PIXELS_PER_FRAME * 4);
+        if (pic_rom_idx_diff != 0)
+            $fatal(1, "PAIR the chr-rom board rendered %0d different pixels than the chr-ram board that stored the same bytes",
+                   pic_rom_idx_diff);
+        if (pic_rom_geom_diff != 0)
+            $fatal(1, "PAIR the chr-rom board disagreed on pixel geometry %0d times, so the two runs are not in lockstep",
+                   pic_rom_geom_diff);
+        $display("PAIR CHR-RAM-vs-CHR-ROM identical program, identical addresses, identical bytes offered; the only difference is NROM_CHR_RAM.  IDENTICAL STROBE: chr_we beats chr-ram=%0d chr-rom=%0d.  REFUSED AT A NAMED GATE: mapper_chr_ram_we (chr_ram_enable_r && ppu_we && ppu_addr[13]==0, nes_mapper.v:221) was low on %0d of %0d chr-rom write beats and chr_ram_enable itself is %b on that board, while on the chr-ram board it was high on every one.  MEMORY: %0d of %0d bytes of the rom board's array are byte-identical to the pre-run snapshot and %0d bytes of the whole 128 KiB changed.  BEHAVIOURAL EQUIVALENCE WITH A ROM CARTRIDGE: the rom board's CHR already held the %0d bytes the program tries to write (err=%0d), the store was refused, and the two boards rendered IDENTICAL pictures over the whole final frame (%0d clk samples, %0d pixel-index differences, %0d geometry differences).  That is what a CHR-ROM cartridge does with the same code PASS",
+                 chr_wr_beats, rom_wr_beats, rom_wr_ramwe_bad, rom_wr_beats,
+                 r_mapper_chr_ram_enable, rom_pre_err, rom_pre_bytes,
+                 rom_final_bytes, 2 * CHR_TILE_BYTES, rom_tile_err,
+                 pic_rom_cmp, pic_rom_idx_diff, pic_rom_geom_diff);
+        $display("PAIR NON-VACUITY the chr-ram half of this line is a live control, not a formality: on the SAME program and the SAME addresses the chr-ram board changed %0d bytes of its array (every one of the %0d uploaded bytes verified against the program's own constant, none left at the sentinel), while the chr-rom board changed 0.  Same strobe, same address, same data, opposite outcomes decided by one parameter PASS",
+                 chr_wr_accepted, 2 * CHR_TILE_BYTES);
+    end
+endtask
+
+// =====================================================================
+// W2  MMC3 + CHR RAM: the write is bank-qualified by the mapper
+// =====================================================================
+
+task check_w2_mmc3_chr_write;
+    integer c;
+    begin
+        m_wr_low_flat = 0;
+        m_wr_high_flat = 0;
+        m_wr_odd_flat = 0;
+        for (c = 0; c < CHR_MEM_BYTES; c = c + 1) begin
+            if (m_chr_mem[c] !== m_chr_pre[c]) begin
+                if (c == MMC3_W2_ADDR_LOW_EXP)
+                    m_wr_low_flat = m_wr_low_flat + 1;
+                else if (c == MMC3_W2_ADDR_HIGH_EXP)
+                    m_wr_high_flat = m_wr_high_flat + 1;
+                else if (c == MMC3_W2_ADDR_ODD_EXP)
+                    m_wr_odd_flat = m_wr_odd_flat + 1;
+                else
+                    $fatal(1, "W2 byte %0d of the chr model changed (%02h -> %02h) but none of the three writes targeted it",
+                           c, m_chr_pre[c], m_chr_mem[c]);
+            end
+        end
+        if (m_wr_beats < 3)
+            $fatal(1, "W2 only %0d $2007 write beats were seen on chr_mmc3", m_wr_beats);
+        if (m_wr_beats != m_wr_exp_total)
+            $fatal(1, "W2 chr_we fired %0d times but the bus saw %0d $2007 writes into the chr half",
+                   m_wr_beats, m_wr_exp_total);
+        if (m_wr_addr_err != 0)
+            $fatal(1, "W2 %0d write-beat translation errors", m_wr_addr_err);
+        if (m_wr_req_clash > m_wr_beats)
+            $fatal(1, "W2 %0d read/write collisions on %0d write beats", m_wr_req_clash, m_wr_beats);
+        if (m_wr_clash_visible != 0)
+            $fatal(1, "W2 %0d read/write collisions happened while the background or the sprites were being displayed", m_wr_clash_visible);
+        if (m_wr_not_accepted != 0)
+            $fatal(1, "W2 the mapper refused %0d of %0d write beats on an mmc3 chr-ram board",
+                   m_wr_not_accepted, m_wr_beats);
+        if (m_wr_consec != 0)
+            $fatal(1, "W2 chr_we was high on two consecutive ce %0d times", m_wr_consec);
+        if (m_wr_low_hit != 1 || m_wr_high_hit != 1 || m_wr_odd_hit != 1)
+            $fatal(1, "W2 the three writes landed at %0d/%0d/%0d of the expected translated addresses, expected 1/1/1",
+                   m_wr_low_hit, m_wr_high_hit, m_wr_odd_hit);
+        if (m_wr_low_before !== 8'h00)
+            $fatal(1, "W2 m_chr_mem[%05h] held %02h before the store, expected the 00 preload",
+                   MMC3_W2_ADDR_LOW_EXP, m_wr_low_before);
+        if (m_wr_high_before !== 8'h00)
+            $fatal(1, "W2 m_chr_mem[%05h] held %02h before the store, expected the 00 preload",
+                   MMC3_W2_ADDR_HIGH_EXP, m_wr_high_before);
+        if (m_wr_odd_before !== 8'h00)
+            $fatal(1, "W2 m_chr_mem[%05h] held %02h before the store, expected the 00 preload",
+                   MMC3_W2_ADDR_ODD_EXP, m_wr_odd_before);
+        if (m_chr_mem[MMC3_W2_ADDR_LOW_EXP] !== MMC3_W2_BYTE_LOW)
+            $fatal(1, "W2 m_chr_mem[%05h] is %02h expected %02h",
+                   MMC3_W2_ADDR_LOW_EXP, m_chr_mem[MMC3_W2_ADDR_LOW_EXP],
+                   MMC3_W2_BYTE_LOW);
+        if (m_chr_mem[MMC3_W2_ADDR_HIGH_EXP] !== MMC3_W2_BYTE_HIGH)
+            $fatal(1, "W2 m_chr_mem[%05h] is %02h expected %02h",
+                   MMC3_W2_ADDR_HIGH_EXP, m_chr_mem[MMC3_W2_ADDR_HIGH_EXP],
+                   MMC3_W2_BYTE_HIGH);
+        if (m_chr_mem[MMC3_W2_ADDR_ODD_EXP] !== MMC3_W2_BYTE_ODD)
+            $fatal(1, "W2 m_chr_mem[%05h] is %02h expected %02h",
+                   MMC3_W2_ADDR_ODD_EXP, m_chr_mem[MMC3_W2_ADDR_ODD_EXP],
+                   MMC3_W2_BYTE_ODD);
+        if (m_wr_low_flat != 1 || m_wr_high_flat != 1 || m_wr_odd_flat != 1)
+            $fatal(1, "W2 exactly one byte per target should have changed, got %0d/%0d/%0d",
+                   m_wr_low_flat, m_wr_high_flat, m_wr_odd_flat);
+        if (m_chr_mem[MMC3_W2_CANARY_OFF] !== MMC3_W2_CANARY)
+            $fatal(1, "W2 the untouched-address control at $%05h is %02h expected the %02h preload",
+                   MMC3_W2_CANARY_OFF, m_chr_mem[MMC3_W2_CANARY_OFF],
+                   MMC3_W2_CANARY);
+        $display("W2 MMC3-CHR-RAM-WRITE chr_we beats=%0d, bus-side $2007 writes into the chr half=%0d (equal), mapper accepted=%0d, beats on two consecutive ce=%0d, write-beat translation errors=%0d against the tb's own r0 register model and window decode.  Read/write arbitration on the shared mapper port collided on %0d of the %0d write beats, none of them with bg or sprites enabled (%0d visible), for the same reason P0-2 spells out PASS",
+                 m_wr_beats, m_wr_exp_total, m_wr_accepted, m_wr_consec,
+                 m_wr_addr_err, m_wr_req_clash, m_wr_beats,
+                 m_wr_clash_visible);
+        $display("W2 BANK-QUALIFIED r0=$%02h (reg $%02h) plus one $2007 byte %02h at local $%04h landed at chr_final_addr $%05h; r0 then moved to $%02h (reg $%02h) and THE SAME local address $%04h landed at $%05h with byte %02h instead, and a third byte %02h at local $%04h raised local bit 11 so it selected the odd 1 KiB of r0 and landed at $%05h.  Three writes, three different translated addresses, so the store is bank-qualified by nes_mapper_mmc3 and not a flat local RAM.  Each target held the $00 preload before its store and holds the program's own byte after it.  NON-VACUITY: the two r0 values are $%02h and $%02h and the two resulting addresses are %0d bytes apart; the control cell at $%05h one byte above the first target still holds its $%02h preload; and across the whole 128 KiB array exactly %0d/%0d/%0d bytes changed, one at each of the three targets and NOTHING else PASS",
+                 MMC3_W2_R0_LOW, m_bank_reg[3], MMC3_W2_BYTE_LOW,
+                 MMC3_W2_ADDR_LOW, MMC3_W2_ADDR_LOW_EXP,
+                 MMC3_W2_R0_HIGH, m_bank_reg[4], MMC3_W2_ADDR_LOW,
+                 MMC3_W2_ADDR_HIGH_EXP, m_chr_mem[MMC3_W2_ADDR_HIGH_EXP],
+                 MMC3_W2_BYTE_ODD, MMC3_W2_ADDR_ODD, MMC3_W2_ADDR_ODD_EXP,
+                 MMC3_W2_R0_LOW, MMC3_W2_R0_HIGH,
+                 (MMC3_W2_ADDR_HIGH_EXP - MMC3_W2_ADDR_LOW_EXP),
+                 MMC3_W2_CANARY_OFF, MMC3_W2_CANARY,
+                 m_wr_low_flat, m_wr_high_flat, m_wr_odd_flat);
     end
 endtask
 
@@ -3388,11 +4812,16 @@ task check_p1_10;
             $fatal(1, "P1-10 the cpu decoded %0d illegal opcodes", illegal_hits);
         if (seen_main_loop !== 1'b1)
             $fatal(1, "P1-10 the cpu never reached the main program self loop");
-        $display("P1-10 CPU fffc/fffd -> pc=8000, first opcode=58, illegal opcodes=%0d, no fail loop at 8800/8810/8820 entered, cpu reached the self loop PASS",
-                 illegal_hits);
-        $display("PRG main $8000-$%04h (%0d bytes), nmi handler $8400-$%04h, irq handler $8500-$%04h, fail loops $8800/$8810/$8820, table $8900, vectors fffa=$8400 fffc=$8000 fffe=$8500, cart writes a000=5a b123=a5 ffc0=3c",
-                 main_prog_end - 16'd1, main_prog_end - MAIN_PROG, nmi_end - 16'd1,
-                 irq_end - 16'd1);
+        $display("P1-10 CPU fffc/fffd -> pc=8000, first opcode=58, illegal opcodes=%0d, no fail loop at %04h/%04h/%04h entered, cpu reached the self loop PASS",
+                 illegal_hits, FAIL1, FAIL2, FAIL3);
+        $display("PRG main $%04h-$%04h (%0d bytes), nmi handler $%04h-$%04h, irq handler $%04h-$%04h, fail loops $%04h/$%04h/$%04h, chr fill constants $%04h=$%02h/$%04h=$%02h, table $%04h, vectors fffa=$%04h fffc=$%04h fffe=$%04h, cart writes a000=5a b123=a5 ffc0=3c",
+                 MAIN_PROG, main_prog_end - 16'd1, main_prog_end - MAIN_PROG,
+                 NMI_HANDLER, nmi_end - 16'd1,
+                 IRQ_HANDLER, irq_end - 16'd1,
+                 FAIL1, FAIL2, FAIL3,
+                 CHR_FILL_ON_ADDR, CHR_FILL_RUN_A_ON,
+                 CHR_FILL_OFF_ADDR, CHR_FILL_RUN_A_OFF,
+                 TABLE1_ADDR, NMI_HANDLER, MAIN_PROG, IRQ_HANDLER);
     end
 endtask
 
@@ -3427,7 +4856,49 @@ initial begin
     reset_clks = 0;
     reset_chr_req_bad = 0;
     reset_chr_addr_bad = 0;
+    reset_chr_we_bad = 0;
+    reset_chr_waddr_bad = 0;
     reset_mapper_id_bad = 0;
+    chr_pred_race_skip = 0;
+    chr_latch_race_skip = 0;
+    chr_wr_beats = 0;
+    chr_wr_exp_total = 0;
+    chr_wr_checks = 0;
+    chr_wr_addr_err = 0;
+    chr_wr_req_clash = 0;
+    chr_wr_clash_visible = 0;
+    chr_wr_bit13_bad = 0;
+    chr_wr_not_accepted = 0;
+    chr_wr_consec = 0;
+    chr_wr_prev = 1'b0;
+    chr_write_on_port = 1'b0;
+    chr_wr_exp_final = 17'd0;
+    chr_wr_accepted = 0;
+    m_wr_beats = 0;
+    m_wr_exp_total = 0;
+    m_wr_checks = 0;
+    m_wr_addr_err = 0;
+    m_wr_req_clash = 0;
+    m_wr_clash_visible = 0;
+    m_wr_bit13_bad = 0;
+    m_wr_not_accepted = 0;
+    m_wr_consec = 0;
+    m_wr_accepted = 0;
+    m_wr_prev = 1'b0;
+    m_write_on_port = 1'b0;
+    m_wr_exp_final = 17'd0;
+    m_wr_low_hit = 0;
+    m_wr_high_hit = 0;
+    m_wr_odd_hit = 0;
+    m_wr_low_flat = 0;
+    m_wr_high_flat = 0;
+    m_wr_odd_flat = 0;
+    m_wr_low_before = 0;
+    m_wr_high_before = 0;
+    m_wr_odd_before = 0;
+    rom_tile_err = 0;
+    rb_tile_err = 0;
+    rb_tile0_same = 0;
     frames_seen = 0;
     clk_count = 0;
     chr_req_total = 0;
@@ -3525,10 +4996,14 @@ initial begin
     m_exp_index[0] = MMC3_EXP_INDEX_0;
     m_exp_index[1] = MMC3_EXP_INDEX_1;
     m_exp_index[2] = MMC3_EXP_INDEX_2;
+    m_exp_index[3] = MMC3_EXP_INDEX_3;
+    m_exp_index[4] = MMC3_EXP_INDEX_4;
     for (k = 0; k < 8; k = k + 1)
         chr_req_owner[k] = 0;
     for (k = 0; k < TB_WINDOW_BYTES; k = k + 1)
         tb_prg[k] = 8'h00;
+    for (k = 0; k < TB_WINDOW_BYTES; k = k + 1)
+        tb_prg_b[k] = 8'h00;
     for (k = 0; k < TB_WINDOW_BYTES; k = k + 1)
         m_prg[k] = 8'h00;
 
@@ -3541,6 +5016,19 @@ initial begin
     build_tables;
     load_chr;
 
+    // Run B is run A's image with ONLY the two fill constants swapped.  Every
+    // instruction byte is identical, which is what makes "the same program ran
+    // with a different upload value" literally true rather than approximately
+    // true, and it is also why chr_ram_b's sentinel has to be run A's image.
+    for (k = 0; k < TB_WINDOW_BYTES; k = k + 1)
+        tb_prg_b[k] = tb_prg[k];
+    tb_prg_b[CHR_FILL_ON_ADDR[TB_WINDOW_BITS-1:0]] = CHR_FILL_RUN_B_ON;
+    tb_prg_b[CHR_FILL_OFF_ADDR[TB_WINDOW_BITS-1:0]] = CHR_FILL_RUN_B_OFF;
+    k = 0;
+
+    load_chr_rom;
+    load_chr_ram_b;
+
     build_mmc3_main;
     build_mmc3_nmi_handler;
     build_mmc3_irq_handler;
@@ -3548,10 +5036,16 @@ initial begin
     build_mmc3_vectors;
     build_mmc3_tables;
     load_chr_mmc3;
+    // W2's untouched-address control needs a pre-run snapshot of the whole
+    // 128 KiB array so "only these three bytes changed" is measured.
+    for (i = 0; i < CHR_MEM_BYTES; i = i + 1)
+        m_chr_pre[i] = m_chr_mem[i];
 
     for (i = 0; i < TB_WINDOW_BYTES; i = i + 1) begin
         ab_v6.prg_rom[i] = tb_prg[i];
         ab_v5.prg_rom[i] = tb_prg[i];
+        chr_rom.prg_rom[i] = tb_prg[i];
+        chr_ram_b.prg_rom[i] = tb_prg_b[i];
     end
     // MMC3 splits PRG into four 8 KiB windows: $8000 through r6 (=0), $A000
     // through r7 (=1), $C000 through the fixed second-last 8 KiB bank
@@ -3571,11 +5065,15 @@ initial begin
     for (i = 0; i < 2048; i = i + 1) begin
         ab_v6.u_ppu.nametable_ram[i] = 8'h00;
         ab_v5.u_ppu.nametable_ram[i] = 8'h00;
+        chr_rom.u_ppu.nametable_ram[i] = 8'h00;
+        chr_ram_b.u_ppu.nametable_ram[i] = 8'h00;
         chr_mmc3.u_ppu.nametable_ram[i] = 8'h00;
     end
     for (i = 0; i < 32; i = i + 1) begin
         ab_v6.u_ppu.palette_ram[i] = 8'h00;
         ab_v5.u_ppu.palette_ram[i] = 8'h00;
+        chr_rom.u_ppu.palette_ram[i] = 8'h00;
+        chr_ram_b.u_ppu.palette_ram[i] = 8'h00;
         chr_mmc3.u_ppu.palette_ram[i] = 8'h00;
     end
     for (i = 0; i < 256; i = i + 1) begin
@@ -3628,6 +5126,9 @@ initial begin
     check_p0_4;
     check_p0_5;
     check_p0_6;
+    check_w1_chr_upload;
+    check_w1_self_validating_pair;
+    check_chr_ram_rom_pair;
     check_p1_1;
     check_p1_2;
     check_p1_3;
@@ -3641,8 +5142,8 @@ initial begin
 
     // ------------------------------------------------------------- phase 2
     // The phase 1 gate above is untouched.  Phase 2 only adds the third
-    // instance, so wait for three FULL visible frames after the third vblank
-    // bank switch and then run the four deferred assertions.
+    // instance, so wait for three FULL visible frames after the LAST vblank
+    // bank switch and then run the deferred assertions.
     wait (m_post_switch_frames >= MMC3_FRAME_TARGET);
     #100;
 
@@ -3668,6 +5169,7 @@ initial begin
 
     check_p0_7;
     check_p0_8;
+    check_w2_mmc3_chr_write;
     check_p1_5;
 
     $display("PASS tb_nes_system_v6");
