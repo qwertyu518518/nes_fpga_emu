@@ -23,10 +23,17 @@
 // nes_mapper_mmc3.v:135 shifts an 8-bit bank number by 10 inside a 17-bit word,
 // so MMC3 CHR banks 0x80-0xFF alias onto 0x00-0x7F at the current width.  That is
 // a known, accepted limitation; do not lower CHR_ADDR_BITS below 17.
-// chr_we is tied to 1'b0 inside nes_ppu2c02's external branch, so ppu_we is
-// constant 0 here and mapper_chr_ram_we (chr_ram_enable_r && ppu_we && ...,
-// nes_mapper.v:215) is structurally 0: $2007 writes to CHR are still dropped.
-// External CHR reads come from the top-level chr_rdata port only.
+// chr_waddr/chr_we/chr_wdata are the $2007 write half of that same local CHR
+// port, exported here as observability taps rather than as a second bus. The
+// PPU increments v_addr on the very $2007 beat that drives the write, so
+// chr_waddr carries the PRE-increment v_addr[13:0] and is only meaningful
+// while chr_we is high; chr_we is a one-clk strobe and chr_wdata is the
+// $2007 write data. Whether the mapper actually accepts the write is decided by
+// mapper_chr_ram_we (chr_ram_enable_r && ppu_we && ppu_addr[13] == 1'b0,
+// nes_mapper.v:221), which is the authoritative post-gate signal; the CHR
+// memory behind this module must observe chr_waddr/chr_we/chr_wdata itself,
+// because external CHR data comes from the top-level chr_rdata port only and
+// has no write-back path.
 // mapper_ppu_a12 is tied 0, so MMC3 scanline IRQ still cannot self-clock at
 // system level.
 // The external CHR port has no ready/backpressure signal: the CHR memory must
@@ -150,6 +157,9 @@ module nes_system_v6 #(
     output wire [15:0] mapper_write_addr,
     output wire [7:0] mapper_write_data,
     output wire [7:0] prg_readback,
+    output wire [13:0] chr_waddr,
+    output wire chr_we,
+    output wire [7:0] chr_wdata,
     output wire chr_req,
     output wire [CHR_ADDR_BITS-1:0] chr_final_addr
 );
@@ -239,13 +249,18 @@ wire mapper_we = cart_wr_pending_q;
 wire [15:0] mapper_cpu_addr = cart_wr_pending_q ? cart_wr_addr_q : cart_addr;
 wire [7:0] mapper_cpu_dout = cart_wr_pending_q ? cart_wr_data_q : cart_dout;
 wire [13:0] ppu_chr_addr;
+wire [13:0] ppu_chr_waddr;
 wire        ppu_chr_we;
 wire [7:0]  ppu_chr_wdata;
 
-wire [13:0] mapper_ppu_addr = ppu_chr_addr;
+wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;
 wire mapper_ppu_we = ppu_chr_we;
 wire [7:0] mapper_ppu_dout = ppu_chr_wdata;
 wire mapper_ppu_a12 = 1'b0;
+
+assign chr_waddr = ppu_chr_waddr;
+assign chr_we = ppu_chr_we;
+assign chr_wdata = ppu_chr_wdata;
 
 assign chr_final_addr = mapper_chr_bank_offset;
 
@@ -471,6 +486,7 @@ nes_ppu2c02 #(
     .dbg_w(),
     .dbg_sprite0_hit(),
     .dbg_sprite_overflow(),
+    .chr_waddr(ppu_chr_waddr),
     .chr_req(chr_req),
     .chr_addr(ppu_chr_addr),
     .chr_we(ppu_chr_we),

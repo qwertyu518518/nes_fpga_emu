@@ -244,6 +244,26 @@
 //   tb_nes_ppu2c02_ext_chr.v does with its one-ce-late `chr_rdata_q`; a
 //   combinational read of chr_addr would return the wrong byte for every beat
 //   that follows an idle gap.
+//
+// chr_waddr/chr_we/chr_wdata are the $2007 write half of that same port, and in
+//   the external branch they are the only way a byte reaches CHR: the write is
+//   not mirrored into a local array, it is handed to whatever owns the CHR bus.
+//   chr_waddr carries the write address, which is the PRE-increment v_addr:
+//   reg_cs is a one-clk pulse taken at div_phase == 0, and v_addr is incremented
+//   by that same beat, so the address is only correct while it is combinational.
+//   A registered strobe would have to be paired with a new 14-bit address
+//   register (because v_addr has already moved) and would land one ce late.
+//   The guard v_addr < 15'h2000 implies v_addr[14:13] == 0, so chr_waddr and
+//   v_addr[12:0] are the same number; the mask on the port is wire hygiene, not
+//   a behavioural guard. v_addr[12] is a REAL address bit that selects the
+//   $1000-$1FFF half of the window, exactly as it does for a read. PPUCTRL[4]
+//   and PPUCTRL[5] are FETCH table selects: they steer the two fetch units and
+//   play no part in forming a $2007 write address.
+//   chr_we is a one-clk strobe qualified by reg_cs && reg_we && reg_addr == 3'd7
+//   and the $2000 guard, so it is one clk wide, and it NEVER qualifies a read:
+//   chr_req remains the sole statement that the fetch arbiter reads chr_addr on
+//   this ce, and it is unchanged. g_chr_internal has no external bus, so there
+//   it drives chr_waddr to 14'h0000 and leaves chr_we/chr_wdata at 0.
 
 `timescale 1ns/1ps
 
@@ -274,6 +294,7 @@ module nes_ppu2c02 #(
     output wire dbg_w,
     output wire dbg_sprite0_hit,
     output wire dbg_sprite_overflow,
+    output wire [13:0] chr_waddr,
     output wire chr_req,
     output wire [13:0] chr_addr,
     output wire chr_we,
@@ -519,6 +540,8 @@ generate
             end
         end
 
+        assign chr_waddr = 14'h0000;
+
         always @(posedge clk or posedge reset) begin
             if (!reset) begin
                 if (reg_cs && !reg_we && (reg_addr == 3'd7)) begin
@@ -686,8 +709,10 @@ generate
         assign chr_req = sp_bus_sel ? sp_chr_req : bg_chr_req;
         assign chr_addr = sp_bus_sel ? sp_chr_addr_raw : bg_chr_addr_raw;
 
-        assign chr_we = 1'b0;
-        assign chr_wdata = 8'h00;
+        assign chr_waddr = (v_addr < 15'h2000) ? v_addr[13:0] : 14'h0000;
+        assign chr_we    = !reset && reg_cs && reg_we && (reg_addr == 3'd7)
+                           && (v_addr < 15'h2000);
+        assign chr_wdata = reg_din;
 
         always @(posedge clk) begin
             if (reset) begin
