@@ -381,7 +381,7 @@ TB 显式传参与观察线网（全部由 grep 逐处确认，不靠推测）�
 
 `tb/system/tb_nes_system_v5.v` **不显式传** `CHR_ADDR_BITS`，它吃的是 `nes_system_v5` 的新默认值 17；TB 里那个 `localparam` 单独定义为 17，两者不一致时 `iverilog` 会在 port 连接处报宽度不匹配，正好把漂移暴露出来。
 
-`nes_mapper.v` 里的 `dbg_chr_bank_number = chr_bank_offset_r[CHR_ADDR_BITS-1:10]`（第 219 行）**没有改**，抬位宽后它自动变成 7 bit，MMC1 的 5 bit bank 和 MMC3 的 1 KiB 窗口都能正确显示。
+`nes_mapper.v` 里的 `dbg_chr_bank_number = chr_bank_offset_r[CHR_ADDR_BITS-1:10]`（第 225 行）**没有改**，抬位宽后它自动变成 7 bit，MMC1 的 5 bit bank 和 MMC3 的 1 KiB 窗口都能正确显示。
 
 5 个 mapper 子模块（`nes_mapper_nrom/cnrom/uxrom/mmc1/mmc3.v`）自己的 `CHR_ADDR_BITS` 默认值**仍然是 16，没有改**：它们不是独立可综合的顶层，`nes_mapper.v` 的每个实例都用 `.CHR_ADDR_BITS(CHR_ADDR_BITS)` 显式覆盖，TB 里唯一的直接实例 `u_mmc3_fall` 也已经显式传 17。改这 5 个文件不在本轮授权范围内，登记为遗留项。
 
@@ -513,7 +513,7 @@ tile_count_per_line = (fine_x == 0 ? 30 : 31) + 1 + mask_reg[1]
 
 #### 11.1.3 像素级等价证据
 
-`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（648 行，`$finish` 在第 640 行）在一个 testbench 里例化**两个** `nes_ppu2c02`，共用同一份 `clk` / `ce` / 寄存器激励：
+`tb/ppu/tb_nes_ppu2c02_ext_chr.v`（1,199 行，`$finish` 在第 1190 行）在一个 testbench 里例化**两个** `nes_ppu2c02`，共用同一份 `clk` / `ce` / 寄存器激励：
 
 | 实例 | 参数 | 外部 CHR 端口 |
 |---|---|---|
