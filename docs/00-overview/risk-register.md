@@ -66,7 +66,7 @@
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:65-73`：`always @*` 组合读 `cpu_ram[ram_index]`（`:67`）与 `prg_rom[prg_index]`（`:71`），同一拍直接产出 `cpu_din`。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:86`：`.bus_ready(!reset)` —— 顶层把 ready 恒定接高，CPU 从不进入等待态。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:104-114`：`ppu_space_read` 组合读 CHR/nametable/palette；背景像素通路 `:179-180`、`:183-184`、`:199` 同样是组合读。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:474-484`：`ppu_space_read` 组合读 CHR/nametable/palette；背景像素通路 `:427-428`、`:486-487`、`:445` 同样是组合读。
 - 【事实】`rtl/nes_core/cpu/nes_cpu6502.v` 的状态推进只发生在 `bus_fire` 边界，等待语义在 CPU 侧已经具备，缺口在顶层接线。
 - 【审查】`docs/00-overview/decision-log.md` D005 的“边界”已写明：CPU 与外部存储的集成 RTL 尚未存在，该决策目前只是接口和目录约束。
 - 【事实】`docs/hardware/04-memory-and-fifo.md` 第 2 节给出同步 RAM 延迟模型和 6 项必须回答的问题；第 2.3 节明确提示“用组合地址加法器直接读 BRAM，工具可能无法按预期推断存储器”。
@@ -111,8 +111,8 @@
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:26-27`：`ce_ppu = (div_phase[1:0]==2'b00)`，`ce_cpu = (div_phase==4'd0)` —— 后者恒为前者的一个子集，因此 CPU 与 PPU 永远同相。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:62`：`ppu_reg_cs = cpu_bus_fire && sel_ppu`，PPU 寄存器片选直接来自 CPU 事务完成。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:327`：滚动更新条件为 `mask_reg[3] && !reg_cs && ((scanline < 9'd240) || (scanline == 9'd261))`；`:330`（dot 8–248 每 8 dot 一次 `inc_x`）、`:329`（dot 256 的 `inc_x+inc_y`）、`:333-336`（dot 257 水平重载）、`:338-342`（pre-render dot 280–304 垂直重载）全部落在这个条件内。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:202-219`：`pixel_valid` / `pixel_index` 是纯组合输出，背景取数通路不含任何 dot 级流水或预取状态。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:869`：滚动更新条件为 `mask_reg[3] && !reg_cs && ((scanline < 9'd240) || (scanline == 9'd261))`；`:872-873`（dot 8–248 每 8 dot 一次 `inc_x`）、`:870-871`（dot 256 的 `inc_x+inc_y`）、`:875-878`（dot 257 水平重载）、`:880-884`（pre-render dot 280–304 垂直重载）全部落在这个条件内。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:747-761`：`pixel_valid` / `pixel_index` 是纯组合输出，背景取数通路不含任何 dot 级流水或预取状态。
 - 【审查】`tb/ppu/README.md`“同一时钟沿的冲突合同”已明确记录：同沿 `reg_cs=1` 时该 dot 的滚动更新**被跳过而不是延后补做**，并把它列为 v0 的明确简化。
 - 【审查】`tb/system/README.md`“时钟分配与 CPU/PPU 同相取舍”已把同相断言与“被跳过的 dot 计数”写成通过条件；同文件“集成限制”已记录 TB 只覆盖背景功能级取数，且锁死了 12 拍使能分配。
 - 【事实】`tb/ppu/README.md`“明确未实现”已列出奇数帧跳 dot 未实现。该项与本条同源但独立，不合并计数（见 L-06）。
@@ -143,14 +143,14 @@
 
 **影响**
 
-- 端口需求：**内部 CHR 路径**（`EXTERNAL_CHR = 1'b0`，即 `nes_system_v0`..`v5` 与平台顶层跑的那条）按当前 RTL，`nametable_ram` 需要 3 个组合读口（`:179` 名称、`:180` 属性、`:307` 经 `ppu_space_read` 的 `$2007` 路径）加 1 个写口（`:292`）；`chr_ram` 需要 3 个组合读口（`:183`、`:184`、`:108`）加 1 个写口（`:290`）。Cyclone IV E 的 M9K 是 1R1W，因此这些数组**按现状无法映射为 BRAM**，只能复制成多份（加深 R-04 的压力）或退化为分布式 LUT RAM（吃 LE、增延迟）。**外部 CHR 路径**（`nes_system_v6` 的 `EXTERNAL_CHR = 1'b1`）把 `chr_ram` 的多个读口换成**单口**外部总线（`chr_req` + `chr_addr` → `chr_rdata`），所以它**降低**了 BRAM 端口压力，但把压力转移成一个新的外部接口义务（见第 6 节与 R-01/R-04）。**注意两个路径不能同时按现在的写法映射 BRAM**——`nes_system_v6` 的顶层端口是纯 RTL，没有引脚、没有存储实现。
+- 端口需求：**内部 CHR 路径**（`EXTERNAL_CHR = 1'b0`，即 `nes_system_v0`..`v5` 与平台顶层跑的那条）按当前 RTL，`nametable_ram` 需要 3 个组合读口（`:427` 名称、`:428` 属性、`:526` 经 `ppu_space_read` 的 `$2007` 路径）加 1 个写口（`:835`）；`chr_ram` 需要 3 个组合读口（`:486`、`:487`、`:478`）加 1 个写口（`:518`）。Cyclone IV E 的 M9K 是 1R1W，因此这些数组**按现状无法映射为 BRAM**，只能复制成多份（加深 R-04 的压力）或退化为分布式 LUT RAM（吃 LE、增延迟）。**外部 CHR 路径**（`nes_system_v6` 的 `EXTERNAL_CHR = 1'b1`）把 `chr_ram` 的多个读口换成**单口**外部总线（`chr_req` + `chr_addr` → `chr_rdata`），所以它**降低**了 BRAM 端口压力，但把压力转移成一个新的外部接口义务（见第 6 节与 R-01/R-04）。**注意两个路径不能同时按现在的写法映射 BRAM**——`nes_system_v6` 的顶层端口是纯 RTL，没有引脚、没有存储实现。
 - 关键路径：背景像素输出 `pixel_index` 的组合链为 `dot`/`fine_x`/`t` → 加法器（`:168-171`）→ `/30` 与 `%30`（`:172`、`:174`）→ nametable 地址（`:177-178`）→ nametable 读（`:179-180`）→ CHR 地址（`:182`）→ CHR 读（`:183-184`）→ 位选择（`:185`）→ palette 索引（`:198`）→ palette 读（`:199`）→ `pixel_index`（`:213`）。其中 `/30` 与 `%30` 在 7 位输入上综合为比较器/LUT 链，位置正处于两级 RAM 地址之间。
 - 仿真的数组索引没有端口概念，因此**当前三个 TB 全绿不能排除本条风险**。它只能在综合报告中暴露。
 - 若综合后被迫复制数组，BRAM 占用会超出 R-04 的估算，平台阶段的容量结论需要重做。
 
 **证据**
 
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:38-41`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]` 均为 Verilog-2001 数组，没有端口模式、读延迟或旁路参数。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:295-298`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]` 均为 Verilog-2001 数组，没有端口模式、读延迟或旁路参数。
 - 【事实】同文件 `:179-180`（同拍两次 `nametable_ram[...]`）、`:183-184`（同拍两次 `chr_ram[...]`）、`:199`（`palette_ram[...]` 组合读进像素输出）、`:290-294`（同拍写 CHR/nametable/palette）、`:307`（`$2007` 读再走一次 `ppu_space_read`）。
 - 【事实】同文件 `:172` `bg_vertical_sections = bg_coarse_y_sum / 7'd30;` 与 `:174` `bg_coarse_y = bg_coarse_y_sum % 7'd30;`。
 - 【事实】`docs/hardware/01-ep4ce10-board.md` 与 `docs/hardware/04-memory-and-fifo.md` 记录 423,936 memory bits，等于 46 × 9,216 bit（46 个 M9K）；`04-memory-and-fifo.md` 第 1.2 节要求容量表必须列出端口模式，并警告不要按理论总量相加。
@@ -214,7 +214,7 @@
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:3-4`：模块参数 `PRG_SIZE_BYTES`，当前默认 `16384`；`:20` `PRG_INDEX_BITS = $clog2(PRG_SIZE_BYTES)`；`:39` `prg_rom [0:PRG_SIZE_BYTES-1]`；`:53-54`、`:60-61` 用 `cpu_addr[14:0]` 加位掩码形成镜像窗口。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:38`：`cpu_ram[0:2047]`。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:38-41`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]`。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:295-298`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]`。
 - 【事实】`docs/hardware/01-ep4ce10-board.md` 记录厂商例程 Fitter 报告：10,320 LE、423,936 memory bits、2 PLL、46 个 9-bit 乘法器；同文件第 11 行说明“约 52 KiB”只是数量级，不表示所有存储模式都能得到同样有效容量。
 - 【事实】`docs/hardware/04-memory-and-fifo.md` 第 1.1 节记录 423,936 bit ≈ 52,992 byte ≈ 51.75 KiB、`8_ip_ram` 是单端口 32×8 的 `altsyncram`，以及 SDRAM 例程的两个 FIFO 为 16 bit × 1024。
 - 【事实】`docs/hardware/05-vga-lcd.md` 第 85 行记录 640×480×2 byte = 614,400 byte/帧、约 36.6 MB/s，以及 NES 读与 VGA 读会竞争资源。
@@ -306,7 +306,7 @@
 **证据**
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:87-88`：`.nmi_i(ppu_nmi)`、`.irq_i(1'b0)`。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:316-320`：`nmi_o` 只在 `scanline==241 && dot==0` 这一个判定点采样 `control_reg[7]`；`:322-325` 在 `(261,0)` 自动清零。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:858-862`：`nmi_o` 只在 `scanline==241 && dot==0` 这一个判定点采样 `control_reg[7]`；`:864-867` 在 `(261,0)` 自动清零。
 - 【事实】`rtl/nes_core/cpu/nes_cpu6502.v:216`：`nmi_rise = nmi_i && !nmi_sync_reg`（上升沿识别）；`:788-790` 锁存到 `nmi_pending_reg`；`:820-827` 在取指边界服务。
 - 【审查】`tb/system/README.md`“明确未实现”写明：`irq_i` 恒为 0、测试程序全程 `PPUCTRL[7]=0`，因此 NMI 服务例程和 `$FFFA` 向量没有被覆盖；同文件的“NMI 关闭”断言正依赖这一点。
 - 【审查】`tb/cpu/README.md` 记录 NMI、BRK hijack、IRQ hijack 场景与单点 hijack 采样点近似，但 `nmi_i` 在 `tb/cpu/tb_nes_cpu6502.v` 与 `tb/cpu/tb_nes_cpu6502_bus.v` 中由 testbench 自行产生（`nmi_armed` / `nmi_addr_t` 机制）。
@@ -344,7 +344,7 @@
 | L-08 | vblank 中途把 `PPUCTRL[7]` 写 1 不产生 NMI | PPUCTRL[7] | `tb/ppu/README.md` | R-06 关闭时 |
 | L-09 | `nmi_o` 在 `(261,1)` 自动撤销，不读 `$2002` 也会释放 | NMI 电平 | `tb/ppu/README.md` | R-06 决策时 |
 | L-10 | 背景为功能级逐像素取数，不是逐 dot 预取流水线 | 全部背景渲染 | `tb/ppu/README.md`、`tb/system/README.md` | R-03 关闭时 |
-| L-11 | 精灵、sprite 0 hit、sprite overflow、8×16、优先级与翻转均未实现 | 全部精灵 | `tb/ppu/README.md`、`tb/system/README.md` | v1 范围决策时 |
+| L-11 | **精灵 8×16 高度、每行 8 个 sprite 上限、优先级、水平/垂直/双翻转与 sprite 0 hit / overflow 标志位在外部 CHR 模式下已由 9 个精灵场景逐项 A/B 证明**（`ppu-ext-chr-tb`，每组有自己的非空洞 `$fatal`）。仍未实现的是：**精确的 sprite evaluation 与次 OAM 时序**（评估窗口、次 OAM 装载、`m`/`n`/`o`/`p` 影子寄存器、溢出 glitch）、外部 CHR 模式下 §8.2 那个 overflow"用下一行 OAM 计数"的**行为**差异（标志位一致本身已证）、hit/overflow 标志不每帧自动清零且置位点早于真实硬件 dot 64..256 窗口、scanline 240..255 的精灵被 `frame_active` 屏蔽 | 全部精灵 | `tb/ppu/README.md`、`tb/system/README.md`、[`docs/modules/ppu-external-chr.md`](../modules/ppu-external-chr.md) §11.3.1 | v1 范围决策时 |
 | L-12 | APU、`$4000-$5FFF` 恒返回 0、OAM DMA、DMC DMA、mapper IRQ 均不存在 | 音频与 DMA | `tb/system/README.md` | v1 范围决策时 |
 | L-13 | testbench 用层次引用访问内部数组与 `dbg_*`，不是可移植验证接口 | 全部三个 TB | `tb/system/README.md` | TB 重构或 RTL 重命名时 |
 | L-14 | 系统 TB 锁死 12 拍使能分配（帧长 357368 clk、CPU/PPU 同相、每访问浪费一个 dot） | 系统 TB 断言 | `tb/system/README.md` | R-02 关闭时 |
@@ -375,7 +375,7 @@
 
 - **`nes_system_v5` 没有任何像素级断言。** `tb/system/tb_nes_system_v5.v` 验的是 mapper 接线（PRG 窗口、bus conflict、mirroring 观测、IRQ 线或、`force` 造的 IRQ 链路）与保留路径的握手，**它的三个程序都在第一帧之前跑完，一个 `pixel_index` 都没有比过**（`tb/system/README.md` 的 v5 一节把这一条写成"v5 testbench 绕过的问题"）。也就是说 v5 之后有**一段已合并的代码没有像素级回归保护**：v5 与 v6 之间任何影响 PPU 渲染的改动，都不会被 `system-v5` 抓到。
 - **`nes_system_v6` 的 A/B 补上了这一层**（v6↔v5 整帧逐 `ce` 像素，184,320 次可见像素 + 268,026 个不加门的 `ce`，均 0 分歧），但**它的方向是反的**：它比较的是 v6 与 v5 两个**已经存在**的顶层，不是 v6 与一份独立参考。所以它证明的是"v6 没有改变 v5 的画面"，**不是**"画面是对的"。绝对正确性仍然只有 `ppu-ext-chr-tb` 拿内部 CHR 路径做参照的那条证据。
-- **共同缺口**：v6 的 A/B **只覆盖背景**，精灵像素在两条证据里都没有；而 v5 连背景都没有像素断言。**任何"精灵通路"的回归保护目前都不存在。**
+- **共同缺口**：v6 的 A/B **只覆盖背景**；精灵像素的回归保护**只有 `ppu-ext-chr-tb` 这一条**（`ad3c17a`：同一条 A/B 已包含精灵，OAM 的 tile 号 / attribute 与 CHR 字节换成非透明图案并加了精灵可见性自检，七个精灵可观测量在 **552,960** 个比较点上**全部 0 分歧**，精灵自检 1,708 个精灵决定像素跨透明背景 908 / 不透明背景前 564 / 不透明背景后 236 三类优先级——**但它仍然是 `EXTERNAL_CHR=0` 与 `EXTERNAL_CHR=1` 之间、TB 驱动场景下的 A/B，不是实机卡带、不是 test ROM、不是硬件**；精灵特征已由那 9 个精灵场景**逐项** A/B 证明——8×16 高度（`sp1-8x16-oddtile` 40 / `sp8-8x16-mixprio` 560 个精灵决定像素）、每行 8 个 sprite 上限（`sp8-8x8-limit` 2,048 / `sp8-8x16-mixprio` 4,096 个"恰好 8 个在范围内"的 dot）、overflow 标志位（`sp10-overflow` 2,048 个 overflow dot）、水平/垂直/双翻转（`sp1-hflip` 48 / `sp1-vflip` 56 / `sp1-hvflip` 56），每组都有自己的非空洞 `$fatal`；仍未覆盖的只有 §8.2 那个 overflow **行为**差异与这 9 个场景之外没构造出来的优先级组合）；而 v5 连背景都没有像素断言。
 
 ## 7. 状态更新规则
 
@@ -422,7 +422,7 @@
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:22-27`：`reg [3:0] div_phase`，`ce_ppu = !reset && (div_phase[1:0] == 2'b00)`，`ce_cpu = !reset && (div_phase == 4'd0)`；`:32-35` 使 `div_phase` 在 0..11 之间循环，即 12 拍。比例 12:4 = 3:1 与真机一致。
 - 【事实】`tb/system/tb_nes_system_v0.v:100` 的时钟是 `always #5 clk = !clk`，即 10 ns 周期 = 100 MHz。`tb/system/README.md` 明确记录“CPU 总线周期 120 ns”“1 dot = 4 clk = 40 ns”，折算出的 CPU 是 8.333 MHz、PPU 是 25 MHz，与真机的 1.789773 / 5.369318 MHz 相差约 4.66 倍。
 - 【事实】`tb/system/tb_nes_system_v0.v:772-773` 断言帧周期恰好 357368 个 `clk`，即 262 × 341 × 4。这钉住的是主时钟**周期数**，不是绝对时间。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:277-289`：`pixel_valid` / `pixel_x` / `pixel_index` 是纯组合输出，`pixel_x` 每个 dot 变一次。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:747-761`：`pixel_valid` / `pixel_x` / `pixel_index` 是纯组合输出，`pixel_x` 每个 dot 变一次。
 - 【事实】`rtl/nes_core/video/nes_line_buffer_vga.v` 用 `wr_clk` / `rd_clk` 两个独立时钟，只让 1 bit 的 `line_ready_toggle` 过两级同步器；像素数据不出双口 RAM。
 - 【事实】`docs/modules/line-buffer-vga.md` 第 3.5 节记录读端速率必须 ≥ 写端速率的 4 倍：NTSC 写端 5.369318 MHz 的 4 倍是 21.48 MHz，低于 VGA 的 25 MHz，余量约 16%。第 5.5 节记录该模块没有背压，写端领先 2 行以上会静默丢行。
 - 【事实】`docs/hardware/08-wm8978-audio.md` 第 3 节记录例程 MCLK 为 12 MHz，并记录 12 MHz 在 256× 配置下只能得到 46.875 kHz，不是标准采样率。
@@ -504,7 +504,7 @@
 
 - **面积与 fmax 从未测量。** 本仓库没有任何综合报告，R-03 的门槛（"存在一次 PPU 单独综合的 Quartus 报告"）仍未满足。本条的关闭**只覆盖"重复逻辑 + 回归时长"**。
 - `nes_ppu_sprite` 内部那份 64 项 OAM 范围扫描与 nth-set 优先编码**仍然每 dot 组合重算**，只是不再被 PPU 层重复实现一遍。
-- 外部 CHR 精灵通路的其余限制（shadow 差一行、8 位 `chr_sh` 只能交付一个字节、仲裁无握手无背压、精灵像素无等价性证据）**一条都没有因为本条关闭而改变**，见 `docs/modules/ppu-external-chr.md` 第 11.3 节。
+- 外部 CHR 精灵通路的其余限制**没有因为本条关闭而改变**：CHR 仲裁仍然**无握手无背压**、两个取数单元靠两个窗口实测不重叠才成立；先前记在这里的"shadow 差一行"与"8 位 `chr_sh` 只能交付一个字节"两条**已修掉**（`3e218bf`、`c6ea299`——`chr_sh` 已加宽到 16 bit 并用 `{sp_plane_hi, sp_plane_lo}` 拼接真正交付低/高两个平面，`pat_addr_o` 已改用下一行 scanline，所以 `scanline_sel` 直连 `scanline` 是正确的接法）。精灵像素等价性也已由 `ppu-ext-chr-tb` 的 A/B 证明（`ad3c17a`，七个精灵可观测量在 552,960 个比较点上 0 分歧，**不是实机卡带、不是 test ROM、不是硬件**），精灵特征也已由那 9 个精灵场景**逐项** A/B 证明（8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转，每组有自己的非空洞 `$fatal`），**但仍未覆盖**的只有 §8.2 那个 overflow **行为**差异（未实现、所以不可观测；标志位一致已由 2,048 个 dot 证明）与这 9 个场景之外没构造出来的优先级组合。见 `docs/modules/ppu-external-chr.md` 第 11.3 节。
 - `verification-plan.md` 7.1 的"精灵 CHR 取数已实现 / 外部模式能渲染精灵"与"PPU 的资源与时序已知"两行**继续有效**。
 
 **门槛核对**

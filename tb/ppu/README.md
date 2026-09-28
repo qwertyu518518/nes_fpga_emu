@@ -16,7 +16,7 @@
 | `tb_nes_chr_fetch_unit.v` | `rtl/nes_core/ppu/nes_chr_fetch_unit.v` | 自检 testbench | CHR 取数单元 testbench |
 | `tb_chr_fetch_feasibility.v` | 不是被测模块，是 `nes_ppu2c02`（`EXTERNAL_CHR=1'b0`） | **测量实验**，一行 RTL 都没改 | CHR 取数可行性实验 testbench |
 
-后两个都属"外部 CHR 取数"这条线，但**它们彼此独立**：`tb_nes_chr_fetch_unit.v` 测取数单元自己的时序合同，`tb_chr_fetch_feasibility.v` 测 dot 预算。**`nes_chr_fetch_unit` 至今没有被 `nes_ppu2c02` 例化，CHR 取数通路仍未接通**，见下面两节各自的“未覆盖项”。
+后两个都属"外部 CHR 取数"这条线，但**它们彼此独立**：`tb_nes_chr_fetch_unit.v` 测取数单元自己的时序合同，`tb_chr_fetch_feasibility.v` 测 dot 预算。**`nes_chr_fetch_unit` 现在已经被 `nes_ppu2c02` 的 `g_chr_external` 例化**（背景取数；精灵侧由 `nes_sprite_chr_fetch` 承担），CHR 取数通路在 PPU 侧已接通，见下面两节各自的“未覆盖项”。
 
 ## 接口极性
 
@@ -482,7 +482,7 @@ PASS nes_chr_fetch_unit
 
 ### CHR 取数单元 testbench 未覆盖项
 
-- **`nes_chr_fetch_unit` 至今没有被 `nes_ppu2c02` 例化**。`rtl/nes_core/ppu/nes_ppu2c02.v` 里 `g_chr_external` 分支仍然是 `assign chr_req = 1'b0;` / `assign chr_addr = 14'd0;`，`chr_rdata` 在整个 PPU 里一次都没被读过。**本 TB 只证明"这个单元自己按约定走"，不证明 CHR 取数通路在硬件上接通了。**
+- **本 TB 只证明"这个单元自己按约定走"，不证明它在 PPU 里的接法。** `nes_chr_fetch_unit` 现在**已经被** `nes_ppu2c02` 的 `g_chr_external` 例化：PPU 侧按 `b_k = 8k - fine_x` 的窗口起点在 `b_k - 9` 逐 tile 流水打 `req_start`，收到 `bg_valid` 那一拍把 `bg_lo` / `bg_hi` 锁进 `bg_lo_q` / `bg_hi_q` 并置 `bg_ready`；`chr_rdata` 也真的被读了（进 PPU 的平面锁存，并喂 `nes_sprite_chr_fetch` 的 128 位 `shadow`）。**像素级证据来自另一条 TB** `tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`，`EXTERNAL_CHR=0` 与 `EXTERNAL_CHR=1` 的逐 dot A/B），不是这一条。
 - **没有和 `nes_system_v5` 的 `ce` 端到端联通**：这里的 `ce` 是 TB 自己一拍一拍的脉冲，不是系统层 PPU 的 4 分频。`chr_rdata` "下一 `ce` 有效"这条合同只对着 TB 自己的 1 拍延迟读模型成立。
 - **读模型固定 1 拍、不可背压**：ack 延迟没有参数化；外部 CHR 来不及、要多拍等待、要仲裁、要按突发读，全都没有测。SDRAM 的真实延迟与突发效率更不在范围内。
 - **只回最后一个 tile**：`bg_lo` / `bg_hi` 不是整行缓存。真实一行要出 32 组像素就得有 32 组寄存器或一个逐 dot 移位寄存器，这个模块没有、这个 TB 也没有测需要多少寄存器。
@@ -541,7 +541,7 @@ C:\iverilog\bin\vvp.exe "$env:TEMP\chrfeas.vvp"
 这一节必须和文档第 8 节一起读。
 
 - **不构成任何等价性证据**：文档第 4/5/6 节的数字全是"预算"与"反事实差异"，不是"`EXTERNAL_CHR=1` 的输出等于 `EXTERNAL_CHR=0` 的输出"。第 6 节的 16 列 / 196 列是"**如果用错实现方式**会坏多少"，不是"实现正确之后的差异"。
-- **`EXTERNAL_CHR = 1'b1` 一次都没被实例化**，本实验连外部取数分支长什么样都没跑。它和 `tb_nes_chr_fetch_unit.v` 是**两条独立的线**：一个测预算，一个测单元自己的时序合同，**两者之间那一段（`nes_chr_fetch_unit` 被 `nes_ppu2c02` 例化、`g_chr_external` 接上 `chr_req` / `chr_addr` / `chr_rdata`）还没有写**。`chr-fetch-tb` 通过**不构成**"CHR 取数通路已接通"的证据。
+- **`EXTERNAL_CHR = 1'b1` 一次都没被实例化**，本实验连外部取数分支长什么样都没跑。它和 `tb_nes_chr_fetch_unit.v` 是**两条独立的线**：一个测预算，一个测单元自己的时序合同，**两者之间那一段现在也已经写好**：`nes_chr_fetch_unit` 由 `nes_ppu2c02` 的 `g_chr_external` 例化，`chr_req` / `chr_addr` / `chr_rdata` 都接上了（精灵侧由 `nes_sprite_chr_fetch` 承担，`chr_req` / `chr_addr` 由二者无握手地仲裁 mux 送出）。像素级证据由 `ppu-ext-chr-tb` 给出；`chr-fetch-tb` 通过**仍然不构成**"CHR 取数通路已接通"的证据，它只覆盖单元自身。
 - **没有验证时序合同**：这里的 `ce` 是 TB 自己一拍一拍的 `tick_dot`，不是 `nes_system_v5` 的 `div_phase`，所以"每 dot 1 字节"这个前提本身没有被端到端验证过。
 - **没有覆盖运行期改变 scroll**：13 组配置都是"整帧固定寄存器"，`temp_addr` 在一行中途变化的场景没测。
 - **没有覆盖 CPU 在渲染期访问 `$2007`**（文档第 7 节 8.1 / 8.3 涉及的路径），也没有覆盖 `$2007` 写 CHR 与取数请求撞在同一拍的情形。
@@ -558,8 +558,8 @@ C:\iverilog\bin\vvp.exe "$env:TEMP\chrfeas.vvp"
 - vblank 中途把 `PPUCTRL[7]` 写成 1 不会立即产生 NMI：v0 只在 `(241,0)` 这一个判定点采样 `PPUCTRL[7]`。
 - 奇数帧跳 dot、精确背景预取时序、NTSC 之外的制式。
 - 逐 dot 可见/不可见区域对 CPU 寄存器访问的真实冲突行为：v0 统一取寄存器优先，不产生 glitch，见“同一时钟沿的冲突合同”。
-- APU、mapper、CHR 外部 PPU bus 和四屏/单屏 mirroring。**`rtl/nes_core/ppu/nes_chr_fetch_unit.v` 已经写出来并有自己的 testbench（见上文"CHR 取数单元 testbench"），但还没有被 `nes_ppu2c02` 例化，所以"CHR 外部 PPU bus"这一项仍未实现。**
-- 合成验证：`nes_chr_fetch_unit.v` 走的是"整行顺序读、只回最后一个 tile"的形态，不是逐 dot 取数流水线；面积、时序、以及和真实外部 CHR 存储的握手都没有评估过，也没有接进任何 System 顶层。
+- APU、mapper 和四屏/单屏 mirroring。**CHR 外部 PPU bus 已经在 PPU 侧接通**：`nes_ppu2c02` 的 `g_chr_external` 分支同时例化 `nes_chr_fetch_unit`（背景）和 `nes_sprite_chr_fetch`（精灵），`chr_req`/`chr_addr` 由二者**无握手**地仲裁 mux 送出、`chr_rdata` 被闩进 `bg_lo_q`/`bg_hi_q` 与 128 位 `shadow`，证据是 `tb/ppu/tb_nes_ppu2c02_ext_chr.v`（回归目标 `ppu-ext-chr-tb`）里 `EXTERNAL_CHR=0` 与 `EXTERNAL_CHR=1` 两个实例之间的 A/B：精灵的七个可观测量在 **552,960** 个比较点上**全部 0 分歧**，1,708 个精灵决定像素跨透明背景 908 / 不透明背景前 564 / 不透明背景后 236 三类优先级，**6,144** 个 dot 恰好 8 个精灵在范围内、**2,048** 个 overflow dot。**精灵特征是逐项证明的**——那条 A/B 跑 **9 个精灵场景**，每组有自己的非空洞 `$fatal`（`case_sp_*` 计数器逐组清零，每组 `mismatched_pixels=0`）：8×16 高度（`sp1-8x16-oddtile` 40、`sp8-8x16-mixprio` 560 个精灵决定像素）、每行 8 个 sprite 上限（`sp8-8x8-limit` 2,048、`sp8-8x16-mixprio` 4,096 个"恰好 8 个在范围内"的 dot）、overflow 标志位（`sp10-overflow` 2,048 个 overflow dot）、水平翻转（`sp1-hflip` 48）、垂直翻转（`sp1-vflip` 56）、双翻转（`sp1-hvflip` 56）。**仍未覆盖**的只有 §8.2"用下一行 OAM 计数"那个 overflow **行为**差异（未实现、所以不可观测；标志位一致本身已证）与这 9 个场景之外没构造出来的优先级组合；**CHR 仲裁仍然无握手、无背压**。**边界**：这是 TB 驱动场景下的 A/B，**不是实机卡带、不是 NESdev test ROM、不是硬件**；`system-v6` 自己那条整帧 A/B 只是**背景**对比，精灵像素等价性**只有** `ppu-ext-chr-tb` 这一条。mapper 侧的 `chr_bank_offset` 接进这条**读**通路是在 System 层完成的，由 `system-v6` 目标证明（见 [`../../docs/modules/system-v6.md`](../../docs/modules/system-v6.md)）。**仍未接的是**：`$2007` 对外部 CHR 的写（`chr_we`/`chr_wdata` 恒 0）、外部 CHR 的 `$2007` 读（仍返回 0）、片上 CHR 存储（真实系统要靠尚不存在的 SDRAM）、以及 `ppu_a12`（仍绑 0，所以 MMC3 扫描线 IRQ 无法自计时）。
+- 合成验证：`nes_chr_fetch_unit.v` 走的是"整行顺序读、只回最后一个 tile"的形态，不是逐 dot 取数流水线；面积、时序、以及和真实外部 CHR 存储的握手都没有评估过。**它已经接进 `nes_system_v6`**，但 v6 尚未接进任何平台顶层，所以依然没有任何综合、Fitter 或时序证据。
 - 精确背景逐 dot 预取和 shift register 装载；当前背景路径按固定 dot 计数功能级取数。
 - 合成验证：`nes_ppu_sprite.v` 每个 dot 都要组合重算 64 项 OAM 范围和 8 个 slot，接进 PPU 之后面积和时序完全没有评估过（`docs/00-overview/risk-register.md` 的 R-01 仍然有效）。
 

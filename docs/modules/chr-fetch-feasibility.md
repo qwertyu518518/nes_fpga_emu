@@ -61,7 +61,7 @@ testbench 直接写 `dut.nametable_ram` / `dut.chr_ram` / `dut.palette_ram` / `d
 
 **没有改 RTL 去制造 bug。** testbench 内部完整重算了一遍背景通路（`bg_model` 任务），参数只有一个 `sh ∈ {0, 1}`：
 
-- `sh = 0`：用 `bg_x_total` 本身。算式与 `nes_ppu2c02` 第 168-197 行逐条对应，包括 `mirror_nametable` 与 `palette_index_map` 两个函数的复制。
+- `sh = 0`：用 `bg_x_total` 本身。算式与 `nes_ppu2c02` 第 416-445 行逐条对应，包括 `mirror_nametable` 与 `palette_index_map` 两个函数的复制。
 - `sh = 1`：唯一的差别是 `xts = dut.bg_x_total + 1`，其余全部照抄。这**正是** `assign eff_dot = EXTERNAL_CHR ? (dot + 1) : dot;` 的效果，因为 `bg_x_total` 是整条背景通路唯一的 `dot` 入口。
 
 为了让这组测量本身可信，加了一条**逐拍自检**：在 dot 0..255 的每一拍上，`sh = 0` 的重算结果必须与 `dut.bg_palette_value`、`dut.bg_palette_index`、`dut.bg_attribute` **逐位相同**，否则立刻 `$fatal`。本实验跑完 16 帧、约 143 万拍，这条自检一次都没触发——也就是说"把 `dot` 整体 +1"这个反事实模型的**唯一**差异确实就是那 1 拍，测出来的差异数字可以直接归因给第 4 节那个陷阱。
@@ -176,7 +176,7 @@ testbench 直接写 `dut.nametable_ram` / `dut.chr_ram` / `dut.palette_ram` / `d
 | J | 31 | 7 | **83** | **10** | 31 |
 
 - `lines_where_dot340_tile_index_equals_coarse_x = 0`，13 组配置、共 4192 行，**一次都不成立**。`bg_x_total` 是行内单调计数器，它在 dot 340 的 tile 索引是"本行第 42~63 个 tile"，不是"下一行的第 0 个 tile"。取数状态机在 dot 340 必须**显式把 tile 索引强制回 `coarse_x`**，不能靠 `bg_x_total` 自然走到 0。
-- `bg_x_total` 只有 **9 bit**（`nes_ppu2c02.v:53`、`:168`）。J 组 `340 + 7 + 8*31 = 595`，9 bit 回绕成 83，tile 索引从本该有的 73 跳到 10。溢出的门槛是 `8*coarse_x + fine_x + dot ≥ 512`：在 dot 340 处 `coarse_x ≥ 22`（`fine_x=0`）或 `coarse_x ≥ 21`（`fine_x=7`）就会溢出。**可见区 dot 0..255 永远不溢出**（最坏 `255 + 7 + 248 = 510`），所以溢出只影响 hblank。
+- `bg_x_total` 只有 **9 bit**（`nes_ppu2c02.v:300`、`:416`）。J 组 `340 + 7 + 8*31 = 595`，9 bit 回绕成 83，tile 索引从本该有的 73 跳到 10。溢出的门槛是 `8*coarse_x + fine_x + dot ≥ 512`：在 dot 340 处 `coarse_x ≥ 22`（`fine_x=0`）或 `coarse_x ≥ 21`（`fine_x=7`）就会溢出。**可见区 dot 0..255 永远不溢出**（最坏 `255 + 7 + 248 = 510`），所以溢出只影响 hblank。
 - 但**溢出不影响节拍**：`bg_x_total` 每拍仍然 +1，`bg_x_total[2:0] == 3'd7` 的节拍没有被破坏，J 组的"边界最小间隔 = 8"就是证据。溢出的后果只是 hblank 里的相位/偏移量发生跳变，也就是上一条那个"dot 340 地址算错"的问题被放大，不是新增一个带宽约束。
 
 ### 4.4 Q1 结论
@@ -235,7 +235,7 @@ testbench 直接写 `dut.nametable_ram` / `dut.chr_ram` / `dut.palette_ram` / `d
 
 ### 6.1 原理
 
-整条背景通路只有一个 `dot` 入口，就是 `nes_ppu2c02.v:168` 的
+整条背景通路只有一个 `dot` 入口，就是 `nes_ppu2c02.v:416` 的
 
 ```verilog
 assign bg_x_total = {1'b0, dot} + {6'b0, fine_x} + ({4'b0, temp_addr[4:0]} << 3);
@@ -341,4 +341,4 @@ C:\iverilog\bin\vvp.exe "$env:TEMP\chrfeas.vvp"
 
 成功时最后一行是 `PASS chr_fetch_feasibility`。13 组配置各打印一段 `PASS-FRAME <组名>`，每段含 Q1 / Q2 / Q3 三组实测数字、Q2 的 `range_count` 直方图；M 组之后另有一段逐行明细（行 0..40、95..115、240..261），每行给出 `range_count` / `sprite_pixel_dots` / `overflow_dots` / `rendered_bg_columns` / `bad_attr_columns`。明细里的 `rendered_bg_columns` 在行 240..261 恒为 0，因为 `pixel_valid` 把 `scanline >= 240` 排除掉了；而原始的 `bg_shown` 信号在全部 262 行上都是 333 拍（`mask[1]=0`），这一点由断言保证、不在明细里打印。
 
-`-Wall` 下本 testbench 零 warning。RTL 侧有 **8 条既有 warning**，全部是 `@*` 对数组敏感：`nes_ppu_sprite.v:147,148,148,149,154` 共 5 条（第 148 行自己就发两条，分别是 `slot_attr` 和 `slot_pat`）加 `nes_ppu2c02.v:197,408,413` 共 3 条。这些与本实验无关，也**没有**被本实验消除——回归目标 `chr-feasibility-tb` 与 `ppu-core` 用的是同一份 PPU 源文件列表，这 8 条 warning 在两条目标上都会出现（注意 `tools/sim_all.ps1` 自己不加 `-Wall`，所以跑回归时看不到它们，本节这段数字是按上面第 9 节那条带 `-Wall` 的复现命令数的）。
+`-Wall` 下本 testbench 零 warning。RTL 侧有 **9 条既有 warning**，全部是 `@*` 对数组敏感：`nes_ppu_sprite.v:333,334,334,335,340,360` 共 6 条（第 334 行自己就发两条，分别是 `slot_attr` 和 `slot_pat`）加 `nes_ppu2c02.v:445,769,774` 共 3 条。这些与本实验无关，也**没有**被本实验消除——回归目标 `chr-feasibility-tb` 与 `ppu-core` 用的是同一份 PPU 源文件列表，这 9 条 warning 在两条目标上都会出现（注意 `tools/sim_all.ps1` 自己不加 `-Wall`，所以跑回归时看不到它们，本节这段数字是按上面第 9 节那条带 `-Wall` 的复现命令数的）。

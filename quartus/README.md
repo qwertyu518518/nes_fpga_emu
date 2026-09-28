@@ -79,7 +79,7 @@ $qsf    | Where-Object { -not (Test-Path $_) }   # 应无输出
 
 本机实测输出是 `qsf=38 disk=38 missing=0 ghost=0`，后两条命令都无输出。
 
-`rtl/nes_core/peripheral/` 下的 **5** 个模块（`wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd`）与 `ppu/nes_chr_fetch_unit.v` 都没有被 `nes_ep4ce10_top` 或任何 System 顶层实例化（`README.md` 与 `docs/00-overview/verification-plan.md` 都记着 `wm8978_i2c` 这一点），所以它们不在层次闭包里、也不需要被当前顶层综合——但它们属于仓库实际内容，列进 `VERILOG_FILE` 只是为了清单完整。它们与 `nes_ep4ce10_qsf_if` 一起按第 4.3 节的多顶层处理。**特别地：`nes_chr_fetch_unit` 尚未被 `nes_ppu2c02` 例化，CHR 外部取数通路在硬件上仍未接通**，列进 `.qsf` 不改变这一点。
+`rtl/nes_core/peripheral/` 下的 **5** 个模块（`wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd`）都没有被 `nes_ep4ce10_top` 或任何 System 顶层实例化；`ppu/nes_chr_fetch_unit.v` 也没有进 `nes_ep4ce10_top` 的层次闭包（那条路径经 `nes_system_v4`，`EXTERNAL_CHR` 取默认 0）（`README.md` 与 `docs/00-overview/verification-plan.md` 都记着 `wm8978_i2c` 这一点），所以它们不在层次闭包里、也不需要被当前顶层综合——但它们属于仓库实际内容，列进 `VERILOG_FILE` 只是为了清单完整。它们与 `nes_ep4ce10_qsf_if` 一起按第 4.3 节的多顶层处理。**特别地：`nes_chr_fetch_unit` 已被 `nes_ppu2c02` 的 `g_chr_external` 例化**（`u_chr_fetch`），精灵的 `nes_sprite_chr_fetch` 同样已被例化（`u_sprite_chr_fetch`），所以 CHR 外部**读**通路是接通的；仍开着的是 `$2007` 对外部 CHR 的**写**、外部 CHR 的 `$2007` **读**（返回 0）、片上 CHR 存储，以及 mapper 的 `ppu_a12`（仍绑 0）。列进 `.qsf` 不改变这些结论。
 
 ---
 
@@ -250,7 +250,7 @@ set_global_assignment -name TOP_LEVEL_ENTITY nes_ep4ce10_qsf_if
 
 `nes_system_v0`、`nes_system_v1`、`nes_system_v2`、`nes_system_v3`、`nes_system_v5`、`nes_mapper` 与 `nes_mapper_nrom` / `nes_mapper_uxrom` / `nes_mapper_cnrom` / `nes_mapper_mmc1` / `nes_mapper_mmc3`、`ines_header_parser`、`nes_video_scaler`、`nes_chr_fetch_unit`、`nes_sprite_chr_fetch`、`wm8978_i2c`、`nes_cdc_fifo`、`nes_i2s_shifter`、`nes_audio_i2s`、`sd_spi_cmd`、`nes_ep4ce10_pll_stub`、`nes_ep4ce10_qsf_if`（选默认顶层时）。
 
-其中 `wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd` 是补进清单的 `peripheral/` 5 个模块，`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` 是补进清单的 `ppu/` 2 个模块（见第 0.2 节）：它们进清单是为了让 `VERILOG_FILE` 与磁盘一致，**并不代表进了层次闭包**。`nes_chr_fetch_unit` 至今**没有被 `nes_ppu2c02` 例化**，CHR 外部取数通路在硬件上仍未接通；`nes_sprite_chr_fetch` 同样**没有被任何模块例化**（既不在 `nes_ppu2c02` 的 `g_chr_external` 分支里，也不在 `nes_ppu_sprite` 里），精灵 CHR 预取单元在硬件上完全没有接线，外部 CHR 模式下精灵仍然不渲染；`sd_spi_cmd` 同理没有被任何顶层例化，SD 卡通路还是独立模块。另外顶层 `nes_ep4ce10_top` 只把 `audio_sample_valid` / `audio_sample_left` 送到输出端口，WM8978 的 I2C/FIFO/I2S 通路也没接（见 `docs/hardware/08-wm8978-audio.md`）。
+其中 `wm8978_i2c` / `nes_cdc_fifo` / `nes_i2s_shifter` / `nes_audio_i2s` / `sd_spi_cmd` 是补进清单的 `peripheral/` 5 个模块，`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` 是补进清单的 `ppu/` 2 个模块（见第 0.2 节）：它们进清单是为了让 `VERILOG_FILE` 与磁盘一致，**并不代表进了层次闭包**。`nes_chr_fetch_unit` **已经**被 `nes_ppu2c02` 的 `g_chr_external` 例化（`u_chr_fetch`），`nes_sprite_chr_fetch` 同样**已经**被例化（`u_sprite_chr_fetch`），两个取数单元因此都进了 `nes_system_v6` 的层次闭包（有 `ppu-ext-chr-tb` 的像素 A/B 与 `system-v6` 的逐拍地址证据），但**都没有**进 `nes_ep4ce10_top` 的闭包；`sd_spi_cmd` 同理没有被任何顶层例化，SD 卡通路还是独立模块。另外顶层 `nes_ep4ce10_top` 只把 `audio_sample_valid` / `audio_sample_left` 送到输出端口，WM8978 的 I2C/FIFO/I2S 通路也没接（见 `docs/hardware/08-wm8978-audio.md`）。
 
 **【未验证】** 这份清单在 Quartus 里到底会产生几个顶层实体、各自占多少资源，必须看 `Analysis & Synthesis` 报告。三种处理办法（任选其一）：
 
@@ -358,5 +358,5 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 - 没有改动 `rtl/nes_core/`、`tb/`、`tools/` 和任何既有文档（`docs/hardware/01-ep4ce10-board.md` 第 3.2 节的引脚不一致只在本文件里记录，未改原文）。
 - `wm8978_i2c.v` 等 4 个 `peripheral/` 模块曾被漏在 `.qsf` 的 `VERILOG_FILE` 清单之外；其后新增的 `ppu/nes_chr_fetch_unit.v` 与 `peripheral/sd_spi_cmd.v` 也没同步进清单；本轮新增的 `ppu/nes_sprite_chr_fetch.v` 同样漏了一次。**三次都已补齐**：38 条与磁盘 38 个 `.v` 逐条一致（见第 0.2 节）。补清单只保证文件清单自洽，**不表示这些模块被综合过**。
 - 除新增这 1 条 `VERILOG_FILE` 之外，没有改动 `.qsf` 里的任何 `set_global_assignment`（器件、顶层、既有 `VERILOG_FILE` 顺序、SDC 指向全部保持原样），其余改动只在注释文字。
-- 没有综合过，因此"38 条清单被 Quartus 接受"这件事仍然未验证；`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` 都**没有被 `nes_ppu2c02` 例化**——前者是 CHR 外部**背景**取数通路，后者是精灵 CHR 预取单元，两者都仍未接通。
+- 没有综合过，因此"38 条清单被 Quartus 接受"这件事仍然未验证；`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` **都已被 `nes_ppu2c02` 的 `g_chr_external` 例化**（`u_chr_fetch` / `u_sprite_chr_fetch`）——CHR 外部**读**通路（含精灵）已接通，但两者都**没有**进 `nes_ep4ce10_top` 的层次闭包，`.qsf` 清单里它们仍按第 4.3 节的多顶层处理。
 - 没有给新增的 Verilog 加行内注释：说明性文字全部放在本文与 SDC/QSF 的注释块里。
