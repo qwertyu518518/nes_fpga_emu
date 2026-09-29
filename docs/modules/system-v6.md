@@ -20,7 +20,7 @@
 | PPU 例化 | `nes_ppu2c02 #(.MIRROR_VERTICAL(1'b0))`，默认 `EXTERNAL_CHR = 1'b0` | 同一份例化，加 `.EXTERNAL_CHR(1'b1)` |
 | `mapper_ppu_addr` | `wire [13:0] mapper_ppu_addr = 14'h0000;`（常量） | `wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;`（读地址与写地址的组合仲裁，**写优先**） |
 | `mapper_ppu_we` / `mapper_ppu_dout` | `1'b0` / `8'h00` | 接 PPU 的 `chr_we` / `chr_wdata`。外部分支不再绑 0：`chr_we` 是 `$2007` 写的组合单 `clk` 选通，`chr_wdata` 是 `reg_din` |
-| `mapper_ppu_a12` | `1'b0` | `1'b0`（**不变**，见第 6 节） |
+| `mapper_ppu_a12` | `1'b0` | `1'b0`（**不变**，见第 6 节）。TB 侧**为了验证**而 force 上去过一条建模的 A12 流，但**生产 RTL 里这一行一个字节都没改**（`nes_system_v6.v:259`），而且 TB 在 force 窗口的**两侧**都断言它读回 0 |
 | 顶层 CHR 端口 | 无 | 新增 `chr_rdata[7:0]`（in）、`chr_req`（out）、`chr_final_addr[CHR_ADDR_BITS-1:0]`（out，默认 17 bit）；写通路再加 `chr_waddr[13:0]`（out）、`chr_we`（out）、`chr_wdata[7:0]`（out） |
 | CHR | PPU 内部 8 KiB CHR RAM | **PPU 不再取自己的 CHR**，全部取数走外部 CHR 端口；`$2007` 写外部 CHR 也走这条端口 |
 | `chr_final_addr` | 无 | `assign chr_final_addr = mapper_chr_bank_offset;` |
@@ -183,7 +183,7 @@ TB 在最后一帧的 20,960 次请求上量到**本地 `chr_addr[13]` 为 1 的
 
 ## 5. `tb/system/tb_nes_system_v6.v` 怎么测
 
-5,189 行，同一个 `clk` 上**五个** DUT 实例。本机实测运行时间 **208.4 s**（回归目标 `system-v6`，`-g2012` 编译 + `vvp`）。实例从三个增加到五个，全部是为了 `$2007` 写外部 CHR 服务的。
+**5,817** 行，同一个 `clk` 上**五个** DUT 实例。本机实测运行时间 **约 256 s**（回归目标 `system-v6`，`-g2012` 编译 + `vvp`；P1-11 加入前 208.4 s，加入后本机一次实测 255.4 s）。多出的约 48 s 是 P1-11 的速率核对：它要求一整帧被两个 `frame_done` 边沿夹住，而窗口从帧中间打开，所以等待约 2.0 帧；相位 2b/2c 只额外贡献约 14,500 `clk`。实例从三个增加到五个，全部是为了 `$2007` 写外部 CHR 服务的。
 
 | 实例 | 顶层 | `MAPPER_SELECT` | CHR | 程序 | 角色 |
 | --- | --- | --- | --- | --- | --- |
@@ -269,7 +269,8 @@ P0-2 的模型**不是**从输出反推的：本地那一项是**从 PPU 自己�
 - **P1-2 OAM DMA**：`$4014` 1 次启动、256 次 ack、256 次 `$2004` 写、**0 次 MMIO 命中**；并且一条 **v6 特有风险**被专门检查——`$2004` 在**外部 CHR 的 PPU** 里仍然落进 `oam_ram`（`oam_ram[0..3] = 11 22 33 44`，256 字节全部与源页相同）。这条如果漏了，"DMA 被 CHR 读抢走"的失败模式会非常难查。
 - **P1-3 mirroring**：iNES 头的 horizontal 模式被观测到并被导出，但 `nes_ppu2c02` **没有运行期 mirroring 端口**，两个实例都以 `MIRROR_VERTICAL=0` elaboration——**模式被观测，没有被应用**。
 - **P1-4 IRQ 线或**：每个 `clk` 上 `irq_line == (mapper_irq | apu_irq)`、`dbg_irq_pending == irq_line`；NROM 的 `mapper_irq` 与被 `$4017 = $40` 禁止的 `apu_irq_o` 的高电平 clk 数都被记下。
-- **P1-5 MMC3 A12 与 `force`**：在 `chr_mmc3` 上——`$C000` 锁存 `0x07`，`$C001` 置 reload 且**一直保持 1**，计数器**仍是 0**（`a12` 滤波器一次都没触发，因为 `mapper_ppu_a12` 在 `nes_system_v6` 里硬绑 0），`$E001` 然后 `$E000` 让 `irq_enabled=0`，`mapper_irq` 在整个程序的每一个 clk 上都是低。然后 `force` 压寄存器，走通 `mapper_irq → irq_line → dbg_irq_pending`，**7 个 `bus_fire` 周期的入口**、`$FFFE` 取向量、handler 把 `ram[0013]` 递增。
+- **P1-5 MMC3 A12 与 `force`**：在 `chr_mmc3` 上——`$C000` 锁存 `0x07`，`$C001` 置 reload 且**一直保持 1**，计数器**仍是 0**（`a12` 滤波器一次都没触发，因为 `mapper_ppu_a12` 在 `nes_system_v6` 里硬绑 0），`$E001` 然后 `$E000` 让 `irq_enabled=0`，`mapper_irq` 在整个程序的每一个 clk 上都是低。然后 `force` 压寄存器，走通 `mapper_irq → irq_line → dbg_irq_pending`，**7 个 `bus_fire` 周期的入口**、`$FFFE` 取向量、handler 把 `ram[0013]` 递增。**`irq_pending_r` 在这一条里是被 force 成 1 的**，所以计数器 → pending 那段逻辑在系统级没有任何真实 RTL 覆盖。
+- **P1-11 MMC3 扫描线 IRQ 在建模 A12 刺激下自时钟**（`check_p1_5` 的最后一条语句，**不是**新回归目标）：TB 把一个**建模的** A12 流 force 到生产网 `chr_mmc3.mapper_ppu_a12`（`nes_system_v6.v:259` 那一行**一个字没改**），并断言它到达 RTL 真正采样的端口 `chr_mmc3.u_mapper.u_mmc3.ppu_a12`。**`irq_pending_r` 在这里从头到尾没有被 force**——2b 里唯一被 force 的是使能位 `irq_enabled_r`，pending 必须由 RTL 从 `irq_counter_next == 0` 产生（`nes_mapper_mmc3.v:193-194`）。四个阶段：**(2a)** IRQ 仍被禁止时计数器就在跑，跨 **482** 个被接受边沿走 7,6,5,4,3,2,1,0、**0** 序列错，`irq_pending` 与 `mapper_irq` 全程 **0** `clk` 为高；**速率核对**每个 `frame_done` 整帧恰好 **241** 次上升、`mmc3_a12_filtered` 接受 **241/241**、最小边沿间隔 **1364 clk** 对 `MMC3_A12_COOLDOWN` 需要的 **3**、高电平窗口在 **241** 条线上都恰好 240 `clk`、21 条 vblank 线上 **0** `clk`；**(2b)** 线在被接受边沿 **496** 拉起 = 使能时记录的边沿序号 **488** + **8**（使能被钉在计数器的 reload 点 `00` 上，所以"恰好 8"成立；免相位的形式 `delta == (c == 0 ? 8 : c)` 作为第二条独立断言也过），随后 **1** 次入口恰好 **7** 个 `bus_fire` 周期、`fffe` 取 **2** 次、PC 停在 `8a30` **24** `clk`、`ram[0013]` `01 → 02`；**(2c)** 在 `irq_pending_r` 仍 1 的情况下把使能位 force 成 0（**只有 RTL 能进入的组合**）→ `mapper_irq` 与 `irq_line` 组合落下，随后释放，生产网与端口**两侧**都读回 0、之后 400 `clk` 滤波器一次没触发。**声明边界**见 `tb/system/README.md` 的"### P1-11"一节：PPU 没有 VRAM 地址总线所以**没有真实 A12**，这个 0 **保持为真**；注入的是**刺激模型**而不是对这块板硬件的预测；**241 是引用的文献值**，不是对真实硬件的测量；依赖精灵的 A12 变化**没有**被建模；**没有**任何真实卡带或 NESdev test ROM 的证据。
 - **P1-6 NMI**：`nmi_o == vblank && ppuctrl[7]` 逐 clk 断言。
 - **P1-7 controller**、**P1-8 音频**（sample strobe 与非零样点、DMC 不请求总线、frame IRQ 被禁止）、**P1-9 PPU 寄存器**（v6/v5 双侧 `ctrl`/`mask`/`v`/`t`/`w`/`fine_x`/`oamaddr`/`nt[1]`/`palette` 对照，并确认 `$2005`/`$2006` 没有漂移）、**P1-10 CPU**（reset 向量、首个操作码、0 个非法 opcode、没进失败块）、**BUS owner accounting**（每一类传输的计数与总传输数闭合）。
 
@@ -291,6 +292,7 @@ P0-2 的模型**不是**从输出反推的：本地那一项是**从 PPU 自己�
 4. **不证明硬件行为。** 没有任何综合、Fitter、TimeQuest、引脚或上板证据；本机没有安装 Quartus。`ppu_ext_chr` 端口是纯 RTL 端口，不是引脚。片上 CHR 阵列的 BRAM 推断也没有被验证过。
 5. **不证明 MMC3 的 bit 7 bank 编号可用**——`CHR_ADDR_BITS = 17` 把它们截掉了（见 3.4）。
 6. **不证明渲染中途写 CHR 是安全的**——读/写仲裁冲突被测量出来了，但没有被修掉，见第 6 节。
+7. **不证明 MMC3 扫描线 IRQ 在真实卡带上的任何行为。** P1-11 证明的是"MMC3 计数器 / reload / pending 状态机与 `mapper_irq → irq_line → CPU` 入口链在被喂进一条**形状标准**的建模 A12 流时内部一致"。它**不**证明：(a) `mapper_ppu_a12` 在 RTL 里不再是 0（它仍然是 0，而且 PPU 没有 VRAM 地址总线所以**根本没有真实 A12**）；(b) 注入的模型预测了 `chr_mmc3` 这块板——那块板跑 `PPUCTRL = $00`，真实硬件每帧把计数器时钟 **0** 次；(c) 每帧 241 这个数字——它是 NESdev 的**文献值**，不是对真实硬件的测量；(d) 依赖精灵的 A12 变化——真实硬件上它可以让每条扫描线被时钟多达 4 次，而它**没有**被建模、**也不能**被建模，因为精灵 pattern 地址是 OAM 相关的；(e) 任何真实卡带——没有跑过 MMC3 游戏，也没有跑过 `nes-test-roms/mmc3_irq_tests` 的任何二进制，在 harness 有真实 ROM 装载之前也跑不了。
 
 ## 6. v6 明确未实现
 
@@ -300,7 +302,10 @@ P0-2 的模型**不是**从输出反推的：本地那一项是**从 PPU 自己�
 - **读/写仲裁冲突未修。** `chr_req`（`nes_ppu2c02.v:709`）**不会**被写抑制，`bg_fetch_due`（`:604`）也没有扫描线/掩码门控，所以同一个 `ce` 上两者可以同时为高。实测 **96 个写拍里有 22 个**与在飞的背景取数撞上；`bg_pa_enable` 为高时 **0** 个（上传期间 `PPUMASK=$00`）。写优先意味着撞上那一拍取数单元锁存的是写地址的字节——**渲染中途做 `$2007` CHR 写会损坏一个 tile 拍**。这是已知限制，不是被删掉的检查。
 - **片上没有任何 CHR 存储。** 128 KiB CHR 只存在于 testbench 里。真实系统需要外部存储（SDRAM 或 TF），**而 SDRAM 控制器在仓库里还不存在**，TF 也只有命令帧发送器。选通 `chr_we` 是组合的、不登记，所以下游存储器必须自己按单拍脉冲用；片上 CHR 阵列能否被推断成 BRAM 也没有验证过（无 Quartus/Fitter/STA）。
 - **`write_toggle` 与 `read_buffer_reg` 的既有行为未动。** `$2007` 写不清 `write_toggle`，写也不清 `read_buffer_reg`。这是**预先存在**的，且被刻意不动：对称地修任何一边都会改变 PPU 的内部分支并波及 10 个以上回归目标，留给专门的一轮。
-- **`mapper_ppu_a12` 仍绑 0**，所以 MMC3 的扫描线 IRQ 计数器在系统级**仍然无法自时钟**；系统级只能覆盖到 latch / reload / enable / disable / ack 与 IRQ 线。`chr_final_addr[12]` 已经是 PPU 的 pattern-table 选择位而不是 bank 位，所以它**不能**拿来当 A12 用。
+- **`mapper_ppu_a12` 仍绑 0**（`nes_system_v6.v:259`），所以 MMC3 的扫描线 IRQ 计数器在系统级**仍然无法自时钟**，这一点**没有被修**；`chr_final_addr[12]` 已经是 PPU 的 pattern-table 选择位而不是 bank 位，所以它**不能**拿来当 A12 用。**根因不是"忘了接线"**：本 PPU **没有 VRAM 地址总线**，所以根本不存在一个可以接出来的真实 A12（见 5.3 的 P1-11）。
+  - **但是**状态机不再是无证据的：TB 的 `check_p1_11` 把一条**建模的** A12 流 force 到那根生产网上，计数器 / reload / `irq_pending_r` 与整条 IRQ 入口链因此**由真实 RTL 产生**而不是被 force。**这条证据的类型必须说清楚**——它是**建模刺激下的内部一致性与已发表时序吻合**，不是硬件预测。`chr_mmc3` 跑 `PPUCTRL = $00`，真实硬件每帧把计数器时钟 **0** 次（那个众所周知的 MMC3 陷阱，也是商业游戏必须用 `$2006` 手动打计数器数扫描线的原因）；**每帧 241 是 NESdev 的文献值，不是实测**；依赖精灵的 A12 变化（真实硬件上每条扫描线可达 4 次）**没有**建模、**也不能**建模。完整声明边界见 `tb/system/README.md` 的"### P1-11"一节。
+  - **关掉这个缺口的正确路径**：若将来某次改动给 `nes_ppu2c02` 加上**真实的 VRAM 地址总线**，TB 那个 A12 模型就成为它**逐拍 A/B 的参照对象**，模型对不对就从假设变成可测量的量。**那**才是"真实 A12"这个说法开始站得住的时刻。
+  - 仍然没有证据的部分：没有任何 MMC3 卡带被跑过，`nes-test-roms/mmc3_irq_tests` 的任何二进制都没有被跑过，harness 也还没有真实 ROM 装载。
 - **`CHR_ADDR_BITS = 17` 截断 MMC3 的 CHR bank bit 7**，`0x80`–`0xFF` 别名到 `0x00`–`0x7F`。已接受，不要加宽（见 3.4）。
 - **PPU 没有运行期 nametable-mirroring 端口。** v5/v6 都以 `MIRROR_VERTICAL(1'b0)` elaboration；mapper 的 mirroring 输出被观测但**没有被应用**。四屏的 4 KiB nametable RAM 同样没有。
 - **CHR 端口上没有背压。** `chr_req` 是无条件请求，没有 ready/ack；一次背景/精灵请求拍的重叠会**静默丢掉**背景那一拍（读侧 P0-8 实测 0 次，但它成立只因为两个窗口不重叠；写侧见上面第二条，冲突是被测量出来的）。
@@ -353,6 +358,8 @@ testbench 本身的断言清单、固定期望输出摘要与它绕过的问题�
 
 `.\tools\sim_all.ps1 -Mode all` 在本机实测 **`Result: PASS (51 of 51)`**、0 FAIL、墙钟 **1401.6 s**（约 23.4 min）。目标数从 50 变成 51，新增的只有 `system-v6` 一个。
 
-`system-v6` 本机 **208.4 s**（加入 `$2007` 写通路、实例从三个增加到五个之后；写通路之前是 119.3 s）。全量里最慢的仍然是 `ppu-ext-chr-tb`（约 434–447 s，占全量的主导份额），其次是 `system-v6`。**本轮只保留了总量、最慢目标与新目标的逐项秒数，第 3 名及以后没有单独留存**，所以本文不重复逐目标表。
+`system-v6` 本机 **约 256 s**（P1-11 加入之后；加入前 **208.4 s**，再早的 `$2007` 写通路那一版是 119.3 s）。多出的约 48 s 全部来自 P1-11 的"每帧恰好 241 个上升沿"核对：它需要一整帧被两个 `frame_done` 边沿夹住，而 force 窗口从帧中间打开，所以等待约 2.0 帧；2b/2c 只额外贡献约 14,500 `clk`。全量里最慢的仍然是 `ppu-ext-chr-tb`（约 434–447 s，占全量的主导份额），其次是 `system-v6`。**本轮只保留了总量、最慢目标与新目标的逐项秒数，第 3 名及以后没有单独留存**，所以本文不重复逐目标表。
+
+**P1-11 没有改动任何 RTL，也没有新增回归目标**：它是 `check_p1_5` 内部的一个 task，**门数仍然是 51**。P1-11 之后 `.\tools\sim_all.ps1 -Mode all` 也重跑过并得到 **`Result: PASS (51 of 51)`、0 FAIL**；上面那个 1401.6 s 的全量墙钟与逐目标秒数是 P1-11 **之前**那一轮的留存记录，**本轮没有单独留存逐目标秒数**，所以全量占比仍以那一轮为准。
 
 **本机没有安装 Quartus**，所以这一整套数字只是 Icarus Verilog 下的 RTL/TB 内部一致性；它不构成任何综合、引脚、时序或上板证据。

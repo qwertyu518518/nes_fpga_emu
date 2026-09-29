@@ -1435,7 +1435,7 @@ $v4 = @(
 
 ## v6 testbench（`nes_system_v6`）
 
-`tb_nes_system_v6.v` 例化**五个** DUT（共用一个 `clk`），是本目录第一个在同一个 testbench 里做**两个不同顶层之间的 A/B**、并且**带外部 CHR 存储模型**的集成 testbench。**5,189** 行。本目录开头那句"本目录有五个 testbench"和表格停留在 v3，v4/v5/v6 各自成节（与 v4 的做法一致），本节只补 v6。
+`tb_nes_system_v6.v` 例化**五个** DUT（共用一个 `clk`），是本目录第一个在同一个 testbench 里做**两个不同顶层之间的 A/B**、并且**带外部 CHR 存储模型**的集成 testbench。**5,817** 行。本目录开头那句"本目录有五个 testbench"和表格停留在 v3，v4/v5/v6 各自成节（与 v4 的做法一致），本节只补 v6。
 
 顶层接口合同、CHR 地址合同（13 bit 本地窗口 / bit 12 是 pattern-table 选择 / 17 bit 最终地址 / 无组合环 / 1 `ce` 寄存读 / 无背压）以及"为什么是这样"，见 [`docs/modules/system-v6.md`](../../docs/modules/system-v6.md)。本节只写 testbench 本身。
 
@@ -1509,7 +1509,7 @@ TB 的 CHR 模型是**寄存器输出**（在 `ce_ppu` 上把 `chr_mem[chr_final
 - **P1-2 OAM DMA**：`$4014` 启动次数、`dma_ack` 次数、`$2004` 写次数、**MMIO 命中数**、写地址与数据是否等于源页。**并且专门检查一条 v6 特有风险**：`$2004` 在**外部 CHR 的 PPU** 里仍然落进 `oam_ram`（`oam_ram[0..3] = 11 22 33 44`，256 字节全部与源页相同）。这条如果漏了，"DMA 字节被 CHR 读路径抢走"会非常难查。
 - **P1-3 mirroring**：iNES 头的模式被观测并被导出，但 `nes_ppu2c02` **没有运行期 mirroring 端口**，两个实例都以 `MIRROR_VERTICAL = 0` elaboration——**模式被观测，没有被应用**。TB 把它写成显式的 KNOWN GAP 而不是省略。
 - **P1-4 IRQ 线或**：每个 `clk` 上 `irq_line == (mapper_irq | apu_irq)`、`u_cpu.dbg_irq_pending == irq_line`；同时记录 NROM 的 `mapper_irq` 高电平 `clk` 数与被 `$4017 = $40` 禁止后的 `apu_irq_o` 高电平 `clk` 数。
-- **P1-5 MMC3 A12 与 `force`**：在 `chr_mmc3` 上——`$C000` 锁存 `0x07`；`$C001` 置 reload 且**一直保持 1**；计数器**仍是 0**，因为 `mapper_ppu_a12` 在 `nes_system_v6` 里硬绑 0、a12 滤波器一次都没触发；`$E001` 然后 `$E000` 让 `irq_enabled = 0`；`mapper_irq` 在整个程序的**每一个** `clk` 上都是低。然后 `force` 压 `u_mapper.u_mmc3.irq_enabled_r` / `irq_pending_r`，走通 `mapper_irq → irq_line → dbg_irq_pending`，断言 **7 个 `bus_fire` 周期的入口**（min = max = 7、错误状态列表数 0、停顿时 0、I 标志已置位时响应数 0）、`$FFFE` 取向量的次数、handler 的地址与 `ram[0013]` 的终值。
+- **P1-5 MMC3 A12 与 `force`**：在 `chr_mmc3` 上——`$C000` 锁存 `0x07`；`$C001` 置 reload 且**一直保持 1**；计数器**仍是 0**，因为 `mapper_ppu_a12` 在 `nes_system_v6` 里硬绑 0、a12 滤波器一次都没触发；`$E001` 然后 `$E000` 让 `irq_enabled = 0`；`mapper_irq` 在整个程序的**每一个** `clk` 上都是低。然后 `force` 压 `u_mapper.u_mmc3.irq_enabled_r` / `irq_pending_r`，走通 `mapper_irq → irq_line → dbg_irq_pending`，断言 **7 个 `bus_fire` 周期的入口**（min = max = 7、错误状态列表数 0、停顿时 0、I 标志已置位时响应数 0）、`$FFFE` 取向量的次数、handler 的地址与 `ram[0013]` 的终值。**注意 `irq_pending_r` 在这一条里是被直接 `force` 成 1 的**，所以计数器 → pending 那段逻辑在系统级没有任何真实 RTL 覆盖；紧跟在 `check_p1_5` 末尾的 `check_p1_11` 补的就是这一段，见下面"### P1-11：MMC3 扫描线 IRQ 在建模 A12 刺激下自时钟"。
 - **P1-6 NMI**：`nmi_o == vblank && ppuctrl[7]` 逐 `clk` 断言，`$FFFA` 取向量次数与 `ram[0010]` 终值。
 - **P1-7 controller**、**P1-8 音频**（sample strobe 数与非零样点数、DMC 的 bus req / grant、`$4017` 对 frame IRQ 的禁止）、**P1-9 PPU 寄存器**（v6/v5 双侧 `ctrl` / `mask` / `v` / `t` / `w` / `fine_x` / `oamaddr` / `nt[1]` / palette 对照，并确认 `$2005` / `$2006` 没有漂移）、**P1-10 CPU**（reset 向量、首个操作码、0 个非法 opcode、三条失败块都没进）、**BUS owner accounting**（每一类传输的计数与总传输数闭合）。
 
@@ -1522,6 +1522,56 @@ TB 的 CHR 模型是**寄存器输出**（在 `ce_ppu` 上把 `chr_mem[chr_final
 - **位 16 的承重断言**：对 `$41` 那一档，R0 = `{0x41[7:1], 1'b0}` = `$40`，所以 `chr_final_addr[16] == reg[6] == 1`，实测在 **20956 / 20956** 拍上成立——**位 16 是 17 bit 地址里的真实一位，一个 16 bit 的 TB 下标做不出来**。
 - **第二步为什么不变**：`nes_mapper_mmc3.v:208` 把 R0 锁成 `{cpu_dout[7:1], 1'b0}`，所以 `$00` 与 `$01` 是**同一个 1 KiB bank**——bit 0 是"奇/偶 1 KiB 选择"，它落在本地 `chr_addr[11]` 上而不在寄存器里（真实 MMC3 是 2 KiB 粒度）。TB 的处理方式是**把相等测量出来**：断言 DUT 自己的 `chr_final_addr[16:10]` 在这两步之间**逐位相同**（上面那排首值 `00000000` 与 `00000000` 就是它的实测形态），同时断言**四份**预载 bank 图像两两不同（reg `$00` @ `0x0000`、reg `$00` 图像 2 @ `0x0800`、reg `$40` @ `0x10000`、W2 图像 @ `0x10800`）。所以"第二档没有新画面"来自寄存器选中了同一块 bank，**与图像无关**，也**不是**把期望值改小。
 - 五档里有两档改变了到达的字节与画面（`00` → `40`），第三档不能，而且**任何预载都救不了它**——它选的寄存器值就是同一个。
+
+### P1-11：MMC3 扫描线 IRQ 在建模 A12 刺激下自时钟
+
+P1-5 证明了计数器**不动**（`mapper_ppu_a12` 硬绑 0），代价是它只覆盖了"不该动"这一半：`irq_pending_r` 是被 `force` 成 1 的，从来没有被 RTL **产生**过，也没有任何一个 A12 边沿被滤波过、被 reload 装过。`check_p1_11` 补的是**缺激励**，不是缺结果——它作为 `check_p1_5` 的最后一条语句在同一个实例上跑，不是新回归目标。
+
+**零 RTL 改动。** `nes_system_v6.v:259` 的 `wire mapper_ppu_a12 = 1'b0;` 一字未动，`nes_ppu2c02` 没有新增端口，TB 只 `force` 了那**一根生产网** `chr_mmc3.mapper_ppu_a12`——就是顶层硬绑 0 的那一个对象，并且立刻断言它**确实到达** RTL 采样的那个端口 `chr_mmc3.u_mapper.u_mmc3.ppu_a12`。`irq_pending_r` 在这里**从头到尾没有被 force**；2b 里唯一被 force 的是 `irq_enabled_r`，也就是使能位本身。
+
+#### 承重理由：这里**不存在**真实 A12
+
+生产 PPU **没有 VRAM 地址总线**，所以没有真实的 A12 可以交给 mapper：`bg_pattern_addr` 只有 13 bit，bit 12 是 `PPUCTRL[4]`，任何地址进位都到不了 bit 12；`bg_fetch_*` 那些网只存在于 `g_chr_external` 分支里。这个绑 0 对本板是**正确的**，不是缺口：`chr_mmc3` 跑 `PPUCTRL = $00`（`tb_nes_system_v6.v:127`），而对这个配置**真实硬件每帧把 MMC3 扫描线计数器时钟 0 次**——就是那个众所周知的 MMC3 陷阱，也是商业游戏必须用 `$2006` 手动打计数器来数扫描线的原因。**因此在 RTL 里综合一个"由 dot 推导的 A12"会是硬件形状的虚构**：它会报 241，而真实硬件报 0，一个绿的测试会去认证一个错的答案。所以 A12 从 TB 侧注入，作为**纯刺激**。
+
+#### 模型表达式，以及**第四项**为什么在 NESdev 片段之外
+
+```verilog
+wire a12_model = chr_mmc3.u_ppu.mask_reg[3] &&
+                 ((chr_mmc3.u_ppu.scanline < 9'd240) ||
+                  (chr_mmc3.u_ppu.scanline == 9'd261)) &&
+                 (chr_mmc3.u_ppu.dot >= 9'd260) &&
+                 (chr_mmc3.u_ppu.dot <= 9'd319);
+```
+
+前三项就是 NESdev 那个标准写法（每个渲染扫描线在 PPU dot 260 处一个上升沿）。**第四项是实现时加的**，加它有一个**实测**理由：`nes_ppu2c02.v:875` 的 `if (ce)` 里那个 `dot` / `scanline` 计数器**不受 `mask_reg[3]` 门控**（`:894` 那个 `mask_reg[3]` 块只门控 `v_addr` 的滚动更新），所以计数器会**自由跑完全部 262 条扫描线**。实测这个未加门的 dot-only 表达式每帧上升 **262** 次；加上渲染扫描线门之后正好是 **241**（扫描线 0–239 加预备渲染线 261）。未加门的版本以 `a12_dotonly` 保留在 TB 里并且把它的 **262** 打印出来，所以这个差距是一个**测量出来的数字**，不是一场辩论。
+
+三个输入（`dot` / `scanline` / `mask_reg[3]`）**都是寄存器**，所以这个表达式是三个 `clk` 域寄存器的纯与：无毛刺、只在一个 `clk` 沿之后的 delta 里变化、没有滤波器会漏掉的子 `clk` 脉冲。`dot` 在 `ce_ppu`（1-in-4）上前进，所以高电平窗口是 60 dot = 240 `clk`、周期是 341 dot = 1364 `clk`，即恰好每 1364 `clk` 一个上升沿。
+
+#### 四个阶段
+
+- **Phase 2a + 速率核对——IRQ 仍被禁止时计数器就在跑。** 进入时 `reload=1`、`counter=00`，也就是 `$C001` 的 reload 在第一个边沿到达时**还挂着**。就在那一个 `clk` 上计数器变成 7、reload 落到 0。跨 **482** 个被接受的边沿，计数器走 7、6、5、4、3、2、1、0，**0** 次序列错；`irq_pending` 全程 **0** `clk` 为高、`mapper_irq` 全程 **0** `clk` 为高。（这正是 `nes-test-roms/mmc3_irq_tests` 合同里的两条："Counter should run even when IRQ is disabled" 与 "IRQ should never be set when disabled"。）速率核对按 `chr_mmc3.u_ppu.frame_done` 分帧：一个整帧里模型上升 **241** 次，`mmc3_a12_filtered` 接受 **241 of 241**（既没丢也没凭空造），相邻被接受边沿的最小间隔 **1364 clk** 对 `MMC3_A12_COOLDOWN` 需要的 **3 clk**（滤波器因此一次都没拒绝过），高电平窗口在全部 **241** 条线上都恰好 60 dot = 240 `clk`，在 21 条 vblank 线上模型为高的 `clk` 数为 **0**。同一帧里 `a12_dotonly` 是 **262**。
+- **Phase 2b——只 force 使能位，IRQ 在恰好第 8 个被接受边沿后拉起。** 进入时断言 `irq_pending` 仍为 0 且 `mapper_irq` 没在 force 的一瞬抬起。`mapper_irq` 在使能后的前 **8** 个被接受边沿里保持低，`irq_line` 在它该拉起之前的高电平 `clk` 数为 **0**（所以 `m_irq_high` 不可能先动），然后线在**被接受边沿 496** 上拉起——恰好是使能时记下的边沿序号 **488** 之后的第 **8** 个。之后既有机制把它带走：`irq_line == (mapper_irq|apu_irq)` 逐 `clk` 成立（**0** 错）、`dbg_irq_pending == irq_line`（**0** 错）、**1** 次入口恰好 **7** 个 `bus_fire` 周期（min = max = **7**，非 7 的 **0** 次、状态列表错误的 **0** 次、停顿时 **0** 次、I 标志已置位时响应 **0** 次）、`fffe` 取了 **2** 次、PC 停在 handler `8a30` 上 **24** `clk`、`ram[0013]` 从 `01` 走到 `02`（在**第一次**入口时锁存，不是结束时）。
+- **Phase 2c——禁止 IRQ，并重新证明绑 0。** 在 `irq_pending_r` 仍为 1 的情况下把 `irq_enabled_r` force 成 0——**这个组合只有 RTL 能进入**（它自己的相位 2a 保证了 pending 为 0，这是被 RTL 置起来的 1）——`mapper_irq` 与 `irq_line` 组合地掉下去，证明那是一个 `irq = irq_enabled_r && irq_pending_r` 的**与门**而不是某个寄存器被清零。释放之后，生产网 `chr_mmc3.mapper_ppu_a12` 读回 0、`chr_mmc3.u_mapper.u_mmc3.ppu_a12` 也读回 0，所以**绑 0 在 force 窗口的两侧都被重新证明**。随后 400 `clk` 里 `mmc3_a12_filtered` 一次都没触发。
+- 窗口期间 APU 的 IRQ 线一次都没为高，`mapper_irq` 因此可以**归因**给 MMC3；MMC3 的 CPU 也一次 cart 写都没发（它停在自循环里）。
+
+#### 一个必须记下来的实现细节："恰好 8" 只在**计数器的 reload 点**成立
+
+计数器在相位 2a 里是自由跑的，所以 2b 开始时它停在 8 边沿周期的**任意相位**上，而"8 个边沿之后"这件事只在 reload 点为真。实测：使能时计数器为 6 → delta 6；为 7 → delta 7。**真正的规则是 `delta = c`（c 取 1..7），而 `delta = 8` 只在 c 为 0 时成立**，因为那 8 里含着 reload 那一沿。TB 把使能**钉在 `mmc3_irq_counter === 8'h00`**——也就是 reload 点，它在那里会保持整整一个 1364 `clk` 的边沿周期，所以"看到它"与"force 它"之间没有竞争——并且把免相位的形式 `delta == (c == 0 ? 8 : c)` 作为**第二条独立**断言。两条都过：delta 8、c 0。
+
+#### 一条 Icarus 陷阱，与长 `$display` 有关
+
+Icarus Verilog 12.0 对 `$display` **多出来的实参不忽略，而是按 11 位右对齐字段打印出来**（标准允许这两种行为之一）。这在本文件里**静默**把一个 `0` 追加到 2C 那一行的末尾，并且一度接错了一个值的位置。**教训**：本仓库其它地方那些很长的 `$display` 行不能盲信——参数个数要与格式串逐个对齐，改格式串时数一遍。
+
+#### 声明边界（这一段就是 P1-11 的全部含义）
+
+1. PPU 没有 VRAM 地址总线，所以**没有真实 A12**。`mapper_ppu_a12` 在 RTL 里绑低，**而且这一点保持为真**。
+2. TB 注入的是一个**刺激模型**，实现 NESdev 的 MMC3 标准情形（每个渲染扫描线、PPU dot 260 处一个上升沿）。它**不是**对 `chr_mmc3` 这块板真实硬件的预测：那块板跑 `PPUCTRL = $00`，真实硬件每帧把计数器时钟 **0** 次。
+3. 这个模型**不是**通用的 A12 仿真。依赖精灵的 A12 变化——真实硬件上它可以让每条扫描线的时钟次数多达 4 次——**没有**被建模，而且**不能**被建模，因为精灵 pattern 地址是 OAM 相关的。
+4. **每帧 241 这个数字是引用的文献值**（NESdev 的 MMC3 页，对应背景 `$0000` / 精灵 `$1000` 的标准情形），**不是**对真实硬件的测量。这里没有任何东西验证它，而一般情形也永远无法在这里被验证。
+5. 这个 task **确实**证明的是：当喂进一条**形状标准**的 PPU 定时 A12 流时，MMC3 的计数器 / reload / pending 状态机与 `mapper_irq → irq_line → CPU` 入口链路行为正确，且 `irq_pending_r` 由真实 RTL 产生而不是被 force。它是一个**内部一致性与已发表时序吻合**的结果。
+6. `force` 是刺激手段上的 hack，在这里之所以诚实，**仅仅**因为它被限制在这一个 testbench 里，而且生产绑 0 在窗口**两侧**都被断言过。**它不是真实信号的替代品。**
+7. 关于真实卡带**什么都没有证明**：没有跑过任何 MMC3 游戏，没有跑过 `nes-test-roms/mmc3_irq_tests` 的任何二进制；在 harness 有真实 ROM 装载之前也跑不了。这一条与第 3 条一起，构成 `system-v6` 这一层的证据类型：**TB 驱动的 A/B 与建模刺激，不是卡带，不是 NESdev test ROM，不是硬件**。
+8. **但这个缺口是可以被正确关掉的，而且路径是明确的**：如果将来哪次改动真的给 `nes_ppu2c02` 加上了一条**真实的 VRAM 地址总线**，那么**这个 TB 的 A12 模型就成了该 A/B 的参照对象**——真实 A12 与建模 A12 逐拍对照，模型对不对就变成一个可测量的量而不是一个假设。**那**才是"真实 A12"这个说法开始站得住的时刻。在那之前，它是虚构。
 
 ### 固定期望输出摘要
 
@@ -1549,10 +1599,16 @@ TB 的 CHR 模型是**寄存器输出**（在 `ce_ppu` 上把 `chr_mem[chr_final
 | `W2 BANK-QUALIFIED` | r0 = `$00` + 字节 `a1` @ `$0040` → `$00040`；r0 = `$42` + 同地址 → `$10840`（与上一步相距 **67584** 字节）；字节 `c3` @ `$0840`（bit 11 置位）→ `$10c40`；跨 128 KiB 恰好 **1 / 1 / 1** 个字节改变（其余 `$fatal`）；目标正上方的控制单元仍持 `$5a` 预载 |
 | `P1-2 OAMDMA` | `starts = 1`、`acks = 256`、`$2004 writes = 256`、`mmio hits = 0`；`oam_ram[0..3] = 11 22 33 44` 且 256 字节与源页相同 |
 | `P1-5 MMC3-A12-AND-FORCE` | `$C000` 锁存 `07`、reload 仍为 1、计数器仍为 `00`、a12 滤波器一次没触发、整个程序 `mapper_irq` 恒低 |
-| `P1-5 IRQ-FORCE` | `mapper_irq = 1 → irq_line = 1 → dbg_irq_pending = 1` 全链逐 `clk` 成立；入口恰好 7 个 `bus_fire` 周期（min = max = 7）；`$FFFE` 被取；handler 把 `ram[0013]` 递增；force 到 0 再 `release` 之后线落回 |
+| `P1-5 IRQ-FORCE` | `mapper_irq = 1 → irq_line = 1 → dbg_irq_pending = 1` 全链逐 `clk` 成立；入口恰好 7 个 `bus_fire` 周期（min = max = 7）；`$FFFE` 被取；handler 把 `ram[0013]` 递增；force 到 0 再 `release` 之后线落回。**注意 `irq_pending_r` 在这里是 force 出来的**，不是 RTL 产生的 |
+| `P1-11 A12-PHASE-2A` | 进入时 `reload=1`/`counter=00`；第一个被接受的边沿那一个 `clk` 上计数器变 **7**、reload 落 **0**；跨 **482** 个被接受边沿走 7,6,5,4,3,2,1,0，**0** 序列错；`irq_pending` 高 **0** `clk`、`mapper_irq` 高 **0** `clk`（IRQ 仍被禁止） |
+| `P1-11 A12-RATE` | 每 `frame_done` 整帧：模型上升 **241** 次、`mmc3_a12_filtered` 接受 **241/241**、相邻边沿最小间隔 **1364 clk** 对 `MMC3_A12_COOLDOWN` 的 **3**、高电平窗口在 **241** 条线上都恰好 60 dot = **240 clk**、21 条 vblank 线上模型为高 **0** `clk`；**同一帧里未加门的 `a12_dotonly` 是 262** |
+| `P1-11 A12-PHASE-2B` | 只 force `irq_enabled_r`；使能钉在计数器 reload 点 **0**；`mapper_irq` 在使能后前 **8** 个被接受边沿保持低、该拉起前 `irq_line` 高 **0** `clk`；线在被接受边沿 **496** 拉起 = 使能时记录的边沿序号 **488** + **8**；随后 `irq_line` 恒等式 **0** 错、`dbg_irq_pending` **0** 错、**1** 次入口恰好 **7** 个 `bus_fire` 周期（min = max = 7，四类错全 0）、`fffe` 取 **2** 次、pc 停在 `8a30` **24** `clk`、`ram[0013]` `01 → 02` |
+| `P1-11 A12-PHASE-2C` | `irq_pending_r` 仍 1 时 force `irq_enabled_r` 为 0 → `mapper_irq` 与 `irq_line` 组合落下（是 `&&` 不是寄存器清零）；释放后 `chr_mmc3.mapper_ppu_a12` 读 **0**、`chr_mmc3.u_mapper.u_mmc3.ppu_a12` 读 **0**；随后 400 `clk` 里滤波器 **0** 次触发 |
 | 末行 | `PASS tb_nes_system_v6` |
 
-仿真时间远长于 v5：v6 要跑 3 帧逐 `ce` 的 v6↔v5 A/B，加另外两个 NROM 孪生实例的整帧采样，再加 MMC3 实例与换 bank 后的帧。**墙钟 208.4 s**（回归目标 `system-v6`，`-g2012` 编译 + `vvp`；`$2007` 写通路那一轮的全量是 `Result: PASS (51 of 51)`、1401.6 s，`system-v6` 与 `ppu-ext-chr-tb` 401.5 s 分列第二、第一慢。目标数仍是 51，没有新目标）。
+仿真时间远长于 v5：v6 要跑 3 帧逐 `ce` 的 v6↔v5 A/B，加另外两个 NROM 孪生实例的整帧采样，再加 MMC3 实例与换 bank 后的帧。**墙钟约 256 s**（P1-11 加入前 208.4 s；P1-11 加入后本机一次实测 255.4 s）。**多出来的约 48 s 的原因是可解释的**：断言"每个 `frame_done` 恰好 241 个上升沿"需要一帧被两个 `frame_done` 边沿夹住，而窗口是从帧中间打开的，所以等待长度是（≤1 帧）+ 1 帧 ≈ 2.0 帧；相位 2b / 2c 只额外贡献约 14,500 `clk`。
+
+**关于回归总数**：`$2007` 写通路那一轮的全量记录是 `Result: PASS (51 of 51)`、1401.6 s，`system-v6` 与 `ppu-ext-chr-tb` 401.5 s 分列第二、第一慢。**P1-11 之后全量门也重跑过：`Result: PASS (51 of 51)`、0 FAIL**；但**那一轮没有单独留存逐目标秒数**，所以全量墙钟与 `system-v6` 的占比仍以上面那次记录为准，本节只把 `system-v6` 自己的秒数更新为 P1-11 之后的实测值。目标数仍是 **51**，P1-11 **不是新目标**（它是 `check_p1_5` 内部的一个 task）。
 
 **没有做变异验证。** v5 一节记录了三处定向变异，v6 这一节**没有对应的变异记录**——因此不能声称这些断言的"非空洞"性质已经用变异反证过，只能说它们在真实 RTL 上全部通过。
 
@@ -1604,7 +1660,7 @@ $v6 = @(
 ### v6 testbench 绕过或解释的问题
 
 - **CHR 图像靠 TB 预载**——但**预载的是哨兵而不是成品图像**。见前面那一节。v4 那种"用 `$2007` 写 CHR 造 tile"的做法现在**在 v6 上成立了**，这正是本节新增的 W 组证据；`chr_rom` 那块板预载的仍是成品（CHR-ROM 卡带语义），它的"写被挡住"因此必须与 RAM 半边**成对**读。
-- **`force` 压 mapper 内部寄存器仍然是唯一的"造 IRQ"手段。** `nes_system_v6` 把 `mapper_ppu_a12` 硬绑 0，所以五个 mapper 里没有任何一个能自己把 `irq` 拉起来（NROM/UxROM/CNROM/MMC1 的 `irq` 恒 0，MMC3 只在 `a12_filtered` 时置 pending）。"A12 沿触发 IRQ"本身由 `tb/mapper/tb_nes_mapper_mmc3.v` 覆盖。
+- **`force` 压 mapper 内部寄存器曾经是唯一的"造 IRQ"手段，现在分两级。** `nes_system_v6` 仍把 `mapper_ppu_a12` 硬绑 0，所以五个 mapper 里没有任何一个能**自发**把 `irq` 拉起来（NROM/UxROM/CNROM/MMC1 的 `irq` 恒 0，MMC3 只在 `a12_filtered` 时置 pending）。P1-5 那一级是**直接 force `irq_pending_r`**，P1-11 那一级是**force A12 那一根生产网**、让计数器 / reload / pending 与整条入口链都由真实 RTL 产生。两级都用了 `force`；P1-11 只是把 force 放在了**离最终结果更远**的地方，并且把生产绑 0 在 force 窗口**两侧**都断言了一遍。"A12 沿触发 IRQ"本身仍由 `tb/mapper/tb_nes_mapper_mmc3.v` 覆盖。
 - **`release` 不会恢复寄存器的驱动值。** 与 v5 相同：恢复 MMC3 IRQ 状态时先 `force` 成 0 再 `release`，否则 `mapper_irq` 会永远停在 1。
 - **P0-7 第二步的"无变化"是 RTL 语义而不是 testbench 放水。** 见前面那一节；TB 用"断言 `chr_final_addr[16:10]` 逐位相同"把相等变成测量结果。
 - **A/B 只覆盖背景与地址/时序。** v4 的逐像素 `expected_pixel_index` 模型在这一层被恢复了（v5 曾有**零像素断言**——这是 v5 的一个证据质量缺口，v6 的 A/B 补上了这一层），但精灵像素的等价性仍然没有证据；**精灵等价性只有 `ppu-ext-chr-tb` 一条**。
@@ -1621,7 +1677,7 @@ $v6 = @(
 - **外部 CHR 的 `$2007` 读回仍返回 0**（走 PPU 自己的空间译码，`nes_ppu2c02.v:557` 的 `g_chr_external` 分支对 `address < 14'h2000` 返回 `8'h00`）。**`$2007` 对 CHR 的写已实现**（`5cc36e7` / `576cc74`，见上面 W 组与 [`docs/ppu_chr_external_write.md`](../../docs/ppu_chr_external_write.md)），但**读写是不对称的：写通了，读回没通**。
 - **写与背景取数在共享 CHR 地址总线上的碰撞没有抑制。** `chr_req` 不被写压制（`nes_ppu2c02.v:709` 只是两个取数单元的 mux），`bg_fetch_due`（`:604`）也没有扫描线或 mask 门控，所以两者可以独立地在同一个 `ce` 上为高。实测 **96** 个写拍里 **22** 拍与在飞背景取数相撞；**0** 次落在 `bg_pa_enable` 为高或精灵打开的 scanline 上，所以本轮渲染结果未受影响——**但这不等于已修复**：一个在渲染中期写 CHR 的程序会有**一个 tile 拍取错**。这是硬件形状（2C02 只有一根 CHR 地址总线）而不是接线错误，修法（压制 `chr_req` / 加握手背压 / 把上传限制在关渲染时）**本轮一条都没做**。
 - **片上没有任何 CHR 存储**：那 128 KiB CHR 只存在于 testbench。真实系统需要外部存储，而 **SDRAM 控制器在仓库里还不存在**，TF 也只有命令帧发送器。**BRAM 推断也没有任何综合证据**（同址同拍的写读冲突在本模型里 undefined、TB 建模成 read-first）。
-- **MMC3 的扫描线 IRQ 计数器在系统级无法自时钟**（`mapper_ppu_a12` 硬绑 0）。`chr_final_addr[12]` 是 PPU 的 pattern-table 选择位、不是 bank 位，**不能拿来当 A12**。
+- **MMC3 的扫描线 IRQ 计数器在系统级仍无法自时钟**（`mapper_ppu_a12` 在 RTL 里仍硬绑 0，**这一条没有被修**）。`chr_final_addr[12]` 是 PPU 的 pattern-table 选择位、不是 bank 位，**不能拿来当 A12**。**但**状态机本身现在在 `check_p1_11` 里被一条**建模的** A12 流激励过了，计数器 / reload / pending 与整条 IRQ 入口链都由真实 RTL 产生——见前面"### P1-11"一节的声明边界：那是**建模刺激下的内部一致性**证据，**不是**对 `chr_mmc3` 这块板真实硬件的预测（那块板 `PPUCTRL = $00`，真实硬件每帧时钟计数器 **0** 次），依赖精灵的 A12 变化也**没有**被建模。
 - **`CHR_ADDR_BITS = 17` 截断 MMC3 的 CHR bank bit 7**：`0x80`–`0xFF` 别名到 `0x00`–`0x7F`。已接受，不加宽。
 - **CHR 端口上没有背压**，`chr_req` 是无条件请求；一次窗口重叠会静默丢掉背景请求拍（P0-8 实测 0 次）。**写侧也不参与任何握手**：`chr_we` 是无条件 strobe，接受与否由 `chr_ram_enable_r` 决定。
 - **PPU 侧 mirroring 没接**：`nes_ppu2c02` 只有编译期参数 `MIRROR_VERTICAL`，没有运行期端口，v6 不假装接上；四屏的 4 KiB nametable RAM 同样没有。
