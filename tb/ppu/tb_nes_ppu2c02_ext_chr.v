@@ -227,6 +227,7 @@ module tb_nes_ppu2c02_ext_chr;
         .chr_addr(),
         .chr_we(),
         .chr_wdata(),
+        .chr_rd_arm(1'b0),
         .chr_rdata(8'h00)
     );
 
@@ -261,6 +262,7 @@ module tb_nes_ppu2c02_ext_chr;
         .chr_addr(addr_b),
         .chr_we(we_b),
         .chr_wdata(wdata_b),
+        .chr_rd_arm(1'b0),
         .chr_rdata(chr_rdata_q)
     );
 

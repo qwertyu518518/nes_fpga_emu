@@ -66,7 +66,10 @@ localparam integer TB_NROM_16K_MIRROR = (DUT_NROM_PRG_SIZE_BYTES <= 16384);
 localparam integer TB_WINDOW_BITS = (TB_NROM_16K_MIRROR != 0) ? 14 : 15;
 localparam integer TB_WINDOW_BYTES = (1 << TB_WINDOW_BITS);
 
-localparam [15:0] NMI_HANDLER = 16'h8A10;
+// The nmi handler lives at $8B80, past the $8A80 table, because W3's loop B puts
+// roughly 250 bytes of read-back code in it and the handler has to stay a
+// single contiguous region for the unprogrammed-region tripwire below.
+localparam [15:0] NMI_HANDLER = 16'h8B80;
 localparam [15:0] IRQ_HANDLER = 16'h8A30;
 localparam [15:0] FAIL1 = 16'h8A50;
 localparam [15:0] FAIL2 = 16'h8A60;
@@ -111,6 +114,56 @@ localparam [7:0] CHR_FILL_RUN_A_OFF = 8'h00;
 localparam [7:0] CHR_FILL_RUN_B_ON = 8'h00;
 localparam [7:0] CHR_FILL_RUN_B_OFF = 8'hFF;
 localparam integer CHR_TILE_BYTES = 48;
+
+// ----------------------------------------------------- W3 $2007 CHR read-back
+//
+// chr_rd_arm completes the pair chr_waddr/chr_we/chr_wdata opened by the $2007
+// CHR WRITE: a $2007 CHR READ now has a path out of the external CHR bus.  No
+// instruction anywhere above ever READ $2007, so the whole read half was dead
+// code in this file and a green run proved nothing about it.  Two loops are
+// added, in the same PRG image so all five instances run them:
+//
+//   loop A  build_main, immediately after the upload, with PPUMASK still $00
+//           (nothing is displayed, so a displaced fetch byte is unobservable).
+//           It re-reads the 8 bytes the upload just stored at $0000.
+//   loop B  build_nmi_handler, with PPUMASK=$1E and rendering ON.  NMI fires at
+//           scanline 241, inside the provably invisible set, and the loop is
+//           sized to finish around scanline 250, so it cannot drift onto a
+//           visible line without W3-10 killing the run.  It re-reads two windows
+//           the program wrote and one window it NEVER wrote, then restores t and
+//           v to $0000 -- necessary, because nes_ppu2c02 drives the background
+//           from temp_addr (bg_coarse_x_sum / bg_y_total / bg_nametable all read
+//           temp_addr), so a $2006 write left in place WOULD move the picture.
+//
+// Both loops put their eight bytes into eight RAM cells as well as comparing
+// them, so the testbench holds the value the cpu received somewhere it can read
+// on all five instances independently of what the ppu is doing.  That cell is
+// what the cross-DUT A/B in W3-8 compares.
+//
+// The expected bytes come from their own PRG data cells, not from the two cells
+// the fill loop reads, so chr_ram_b still runs byte-identical CODE with
+// complementary DATA: the main initial below swaps the new cells exactly the way
+// it swaps CHR_FILL_ON_ADDR / CHR_FILL_OFF_ADDR.
+localparam [15:0] CHR_RB_FAIL = 16'h8A40;
+localparam [15:0] CHR_RB_EXP_ON_ADDR = 16'h8A02;
+localparam [15:0] CHR_RB_EXP_OFF_ADDR = 16'h8A03;
+localparam [15:0] CHR_RB_EXP_UNW_ADDR = 16'h8A04;
+// The three windows loop B reads.  The upload's ON/OFF layout is
+// [0:7]=FF [8:15]=00 [16:23]=00 [24:31]=FF [32:39]=FF [40:47]=00 in BOTH halves,
+// so block1+32 ($1020) is ON and block1+40 ($1028) is OFF, and block1+64
+// ($1040) is past the 48 bytes the upload touches and holds the tb's load
+// value.  Naming them from the image is what keeps the expectations honest.
+localparam [15:0] CHR_RB_LOOP_A_ADDR = 16'h0000;
+localparam [15:0] CHR_RB_LOOP_B_ON = 16'h1020;
+localparam [15:0] CHR_RB_LOOP_B_OFF = 16'h1028;
+localparam [15:0] CHR_RB_LOOP_B_UNW = 16'h1040;
+localparam [15:0] CHR_RB_STORE_A = 16'h0030;
+localparam [15:0] CHR_RB_STORE_BON = 16'h0040;
+localparam [15:0] CHR_RB_STORE_BOFF = 16'h0050;
+localparam [15:0] CHR_RB_STORE_BUNW = 16'h0060;
+localparam [7:0] CHR_RB_UNWRITTEN_EXPECT = 8'h00;
+localparam integer CHR_RB_WINDOWS = 4;
+localparam integer CHR_RB_WINDOW_BYTES = 8;
 
 // ------------------------------------------------------- phase 2 MMC3 config
 //
@@ -677,6 +730,58 @@ integer m_wr_low_before;
 integer m_wr_high_before;
 integer m_wr_odd_before;
 
+// ------------------------------------------- W3 $2007 CHR read-back counters
+//
+// rb_arm is u_ppu.g_chr_external.chr_rd_win, the window on which the third
+// CHR-bus master puts the $2007 read address on chr_addr.  rb_read is the ce on
+// which the two-cycle $2007 access COMPLETES and the cpu latches bus_din.  The
+// two are always adjacent ce: nes_system_v6 raises the arm on the single clk
+// whose pre-edge div_phase is 8, and the access completes on the next ce_cpu,
+// which is div_phase 0.  So an arm that is not consumed on the very next ce_ppu
+// was stranded, and that is checked rather than assumed.
+//
+// THE ONE-READ SKEW, MEASURED.  reg_cs (ppu_xfer) is high only on the cycle
+// that COMPLETES the two-cycle $2007 access, and read_buffer_reg is refilled on
+// that same edge, so the value the cpu latches on access N is the byte the port
+// presented for access N-1.  That is the real 2C02 read buffer, not a defect.
+// rb_prev_rdata_q / rb_prev_addr_q carry exactly that one-access pair, so the
+// chain asserted in W3-2 is
+//     bus_din(at read beat N) == chr_rdata(at read beat N-1)
+//                             == chr_mem[address the arm of access N-1 carried]
+// and every term in it is measured at a different point in time.
+integer rb_arm_beats;
+integer rb_arm_data_checks;
+integer rb_arm_data_err;
+integer rb_read_beats;
+integer rb_read_checks;
+integer rb_read_err;
+integer rb_noprev;
+integer rb_armed_missing;
+integer rb_stranded;
+integer rb_addr_err;
+integer rb_arm_addr_err;
+integer rb_ramwe_bad;
+integer rb_we_overlap;
+integer rb_coll_bg;
+integer rb_coll_sp;
+integer rb_race_skip;
+integer rb_vis_bad;
+integer rb_min_sl;
+integer rb_max_sl;
+integer rb_arms_mask0;
+integer rb_arms_mask1;
+integer rb_arms_vblank;
+integer rb_loopa_arms;
+integer rb_loopb_arms;
+reg [CHR_ADDR_BITS-1:0] rb_pend_addr_q;
+reg [7:0] rb_pend_byte_q;
+reg rb_pend_valid_q;
+reg [CHR_ADDR_BITS-1:0] rb_prev_addr_q;
+reg [7:0] rb_prev_rdata_q;
+reg rb_prev_valid_q;
+reg [7:0] chr_rb_snap [0:(CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES)-1];
+integer rb_snap_i;
+
 assign fu_state = ab_v6.u_ppu.g_chr_external.u_chr_fetch.state;
 assign fu_cap_pl = ab_v6.u_ppu.g_chr_external.u_chr_fetch.cap_pl;
 assign fu_bg_lo = ab_v6.u_ppu.g_chr_external.u_chr_fetch.bg_lo;
@@ -848,12 +953,48 @@ integer z;
 // never high on two consecutive ce_ppu, and the two fetch units' chr_req never
 // both high on the same ce.  ab_v5 has no external CHR port at all, so only
 // ab_v6 and chr_mmc3 can be checked.
+//
+// RE-SCOPED FOR THE THIRD CHR MASTER.  chr_rd_win feeds chr_req directly, so a
+// read arm that lands on the ce_ppu edge immediately after a fetch request beat
+// makes chr_req high on two consecutive ce.  "chr_req is never high on two
+// consecutive ce" therefore stopped being an invariant of the design the moment
+// a $2007 CHR read could reach the bus, and it is NOT asserted any more.  What
+// replaced it is strictly more specific, in the same style as the existing
+// P0-2 WRITE-READ-ARBITRATION line:
+//
+//   * ab_consec_noread counts the consecutive pairs on which NEITHER beat was a
+//     read arm.  That is exactly the case the old invariant covered -- the case
+//     a run with chr_rd_arm tied to 1'b0 would have measured -- and it is still
+//     asserted to be 0, so the fetch-vs-fetch property is not given up, only
+//     re-expressed over the beats that can now legitimately collide.
+//   * every consecutive pair is attributed to the master that won its SECOND
+//     beat, by the same expression the ppu uses to drive chr_addr.  A pair whose
+//     second beat is won by the read arm is then split by which fetch unit held
+//     the first beat, so the collision the contract names (one displaced
+//     background tile or one displaced sprite slot plane) is counted rather
+//     than argued about.
+//   * chr_mmc3 runs a program with no $2007 reads at all, so nothing can raise
+//     an arm there and m_req_consec == 0 is still asserted untouched.
+//
+// That a read arm's ADDRESS is never corrupted by the colliding fetch master is
+// a separate assertion, in the W3 monitor: on every arm beat chr_addr must equal
+// the ppu's own v_addr[13:0] and chr_final_addr must equal the tb's own
+// translation of it.  P0-8 counts the collision; W3-3 proves the arbitration.
 reg     ab_req_prev;
 reg     m_req_prev;
 reg     ab_we_prev;
 reg     m_we_prev;
+reg [1:0] ab_prev_win;
 integer ab_req_beats;
 integer ab_req_consec;
+integer ab_consec_arm;
+integer ab_consec_arm_vs_bg;
+integer ab_consec_arm_vs_sp;
+integer ab_consec_bg;
+integer ab_consec_sp;
+integer ab_consec_noread;
+integer ab_consec_rr;
+integer ab_consec_arm_first_bg;
 integer ab_we_consec;
 integer ab_bgsp_beats;
 integer ab_bgsp_clash;
@@ -991,6 +1132,26 @@ wire m_bg_chr_req = chr_mmc3.u_ppu.g_chr_external.u_chr_fetch.chr_req;
 wire m_sp_chr_req = chr_mmc3.u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req;
 wire [6:0] m_cpu_state = chr_mmc3.u_cpu.dbg_state;
 wire m_ppu_bg_enable = chr_mmc3.u_ppu.mask_reg[3];
+
+// ------------------------------------------------------- W3 read predicates
+//
+// The read arm, the held arm register, and the completed $2007 CHR read.  The
+// v_addr term in rb_read is the PRE-increment one, sampled on the same clk the
+// ppu samples reg_cs, so it is the address the access actually asked for.
+wire rb_arm = (ab_v6.u_ppu.g_chr_external.chr_rd_win !== 1'b0);
+wire rb_armed = (ab_v6.u_ppu.g_chr_external.chr_rd_armed_q !== 1'b0);
+wire rb_read = (v6_bus_fire !== 1'b0) && (v6_bus_we === 1'b0) &&
+               (v6_sel_ppu === 1'b1) && (v6_ppu_reg_addr == 3'd7) &&
+               (ab_v6.u_ppu.v_addr < 15'h2000);
+// The provably invisible set, spelled out and not proxied through a mask bit:
+//   * scanlines 240..260, where nothing is rendered and no fetch feeds a pixel
+//   * any scanline on which the ppu's OWN bg_pa_enable is low AND mask_reg[2]
+//     (show sprites) is low, which is loop A's PPUMASK=$00 window
+// Scanline 261 is deliberately NOT in the set.
+wire rb_vis_ok = ((ab_v6.u_ppu.scanline >= 9'd240) &&
+                  (ab_v6.u_ppu.scanline <= 9'd260)) ||
+                 ((ab_v6.u_ppu.bg_pa_enable === 1'b0) &&
+                  (ab_v6.u_ppu.mask_reg[2] === 1'b0));
 
 // A write that steals the mapper port from the fetch unit only damages a RENDERED
 // pixel if something the fetch feeds is actually on screen.  bg_pa_enable is the
@@ -1141,7 +1302,7 @@ task bne_list_patch;
     begin
         for (m = 0; m < bne_count; m = m + 1)
             put(bne_list[m], target - (bne_list[m] + 16'd1));
-        bne_count = 0;
+    bne_count = 0;
     end
 endtask
 
@@ -1183,6 +1344,64 @@ task ppu_fill8_src;
         lda_abs(source);
         top = pc;
         sta_abs(16'h2007);
+        emit(8'hCA);
+        bne_to(top);
+    end
+endtask
+
+task cmp_abs;
+    input [15:0] address;
+    begin
+        emit(8'hCD);
+        emit(address[7:0]);
+        emit(address[15:8]);
+    end
+endtask
+
+// W3 read-back.  Both loops below start with ONE priming read and that is not
+// decoration.  ppu_xfer (reg_cs) is high only on the cycle that COMPLETES the
+// two-cycle $2007 access, and read_buffer_reg is refilled on that same edge, so
+// the byte the cpu latches on access N is the byte the port presented for
+// access N-1 -- the real 2C02 read buffer.  One priming read is therefore
+// exactly what puts the FIRST byte of a freshly addressed window in the cpu's
+// hands, and the eight verified reads after it return base+0 .. base+7.
+//
+// ppu_read8 additionally parks the eight bytes in ram at store_base+1 .. +8.
+// X counts 8..1, so STA abs,X walks the window DOWNWARDS and the first byte read
+// lands in the highest cell: cell store_base+1 holds the byte at the window's
+// base address, cell store_base+8 the last one.
+task ppu_read8;
+    input [15:0] store_base;
+    reg [15:0] top;
+    begin
+        lda_abs(16'h2007);
+        ldx_imm(8'h08);
+        top = pc;
+        lda_abs(16'h2007);
+        sta_abs_x(store_base);
+        emit(8'hCA);
+        bne_to(top);
+    end
+endtask
+
+// The compare loop.  The expected byte is a PRG DATA cell, addressed absolutely
+// with CMP abs, so the instruction bytes are identical in both images and only
+// the cell's CONTENTS differ.  The failure exit is BEQ over a three-byte JMP
+// rather than a two-byte BNE because CHR_RB_FAIL is out of a branch's +-127
+// range from the nmi handler: the shape is still "compare, branch to the fail
+// loop if different, otherwise keep counting down", and the fail loop is
+// reachable from every window.
+task ppu_verify8;
+    input [15:0] source;
+    reg [15:0] top;
+    begin
+        lda_abs(16'h2007);
+        ldx_imm(8'h08);
+        top = pc;
+        lda_abs(16'h2007);
+        cmp_abs(source);
+        beq_to(pc + 16'd5);
+        jmp_abs(CHR_RB_FAIL);
         emit(8'hCA);
         bne_to(top);
     end
@@ -1343,6 +1562,20 @@ task build_main;
         ppu_fill8_src(CHR_FILL_ON_ADDR);
         ppu_set_addr(16'h1028);
         ppu_fill8_src(CHR_FILL_OFF_ADDR);
+
+        // ---- W3 loop A: the $2007 CHR READ half, with PPUMASK still $00 ----
+        //
+        // Nothing is displayed, so a fetch byte the read arm displaces cannot
+        // reach a pixel, which is what makes this the safe place for the first
+        // read loop.  $0000..$0007 are the eight bytes the first fill above
+        // stored, so this reads back the program's own write through the
+        // external CHR bus.  ppu_read8 parks the bytes in ram[$0031..$0038] and
+        // ppu_verify8 compares the same eight against $8A02.
+        ppu_set_addr(CHR_RB_LOOP_A_ADDR);
+        ppu_read8(CHR_RB_STORE_A);
+        ppu_set_addr(CHR_RB_LOOP_A_ADDR);
+        ppu_verify8(CHR_RB_EXP_ON_ADDR);
+
         lda_imm(8'h01);
         sta_abs(CHR_UPLOAD_FLAG_CELL);
 
@@ -1407,6 +1640,42 @@ task build_nmi_handler;
         emit(8'h69);
         emit(8'h01);
         sta_abs(NMI_COUNTER_CELL);
+
+        // ---- W3 loop B: the same read-back with RENDERING ON ----
+        //
+        // NMI fires at scanline 241, dot 0, which is inside the provably
+        // invisible set, and the four windows below are sized to finish around
+        // scanline 250.  If that ever stops being true W3-10 kills the run on
+        // the arm beat rather than letting it corrupt a visible line.
+        //
+        //   $1020  written by the upload with the ON constant   -> $8A02
+        //   $1028  written by the upload with the OFF constant  -> $8A03
+        //   $1040  NEVER written by anything                     -> $8A04
+        //
+        // $1040 is inside the reachable pattern table and past every address
+        // the upload touches (0..47 and 4096..4143), so the only thing that can
+        // ever be there is the tb's own load value.  It is the address that
+        // makes "always returns the last byte written" observable.
+        //
+        // The trailing ppu_set_addr is not optional.  $2006 writes temp_addr as
+        // well as v_addr, and nes_ppu2c02 derives the background pattern address
+        // from temp_addr (bg_coarse_x_sum, bg_y_total, bg_nametable), so leaving
+        // t at $1040 would move the picture on the next frame and break P0-4 and
+        // P0-5 for a reason that has nothing to do with the read path.
+        ppu_set_addr(CHR_RB_LOOP_B_ON);
+        ppu_read8(CHR_RB_STORE_BON);
+        ppu_set_addr(CHR_RB_LOOP_B_ON);
+        ppu_verify8(CHR_RB_EXP_ON_ADDR);
+        ppu_set_addr(CHR_RB_LOOP_B_OFF);
+        ppu_read8(CHR_RB_STORE_BOFF);
+        ppu_set_addr(CHR_RB_LOOP_B_OFF);
+        ppu_verify8(CHR_RB_EXP_OFF_ADDR);
+        ppu_set_addr(CHR_RB_LOOP_B_UNW);
+        ppu_read8(CHR_RB_STORE_BUNW);
+        ppu_set_addr(CHR_RB_LOOP_B_UNW);
+        ppu_verify8(CHR_RB_EXP_UNW_ADDR);
+        ppu_set_addr(16'h0000);
+
         emit(8'h40);
         nmi_end = pc;
     end
@@ -1435,6 +1704,8 @@ task build_fail_blocks;
         jmp_abs(FAIL2);
         pc = FAIL3;
         jmp_abs(FAIL3);
+        pc = CHR_RB_FAIL;
+        jmp_abs(CHR_RB_FAIL);
     end
 endtask
 
@@ -1470,6 +1741,15 @@ task build_tables;
         // between the two program images, so chr_ram_b executes identical code.
         put(CHR_FILL_ON_ADDR, CHR_FILL_RUN_A_ON);
         put(CHR_FILL_OFF_ADDR, CHR_FILL_RUN_A_OFF);
+        // W3's read-back expectations.  Deliberately their OWN cells, holding
+        // the same two values: the fill loop reads $8A00/$8A01 and the verify
+        // loop reads $8A02/$8A03, so a fill that stored the wrong byte is caught
+        // instead of being compared against itself.  $8A04 is the tb's load
+        // value for an address nothing ever writes, and it is the same in both
+        // images because every model holds $00 there.
+        put(CHR_RB_EXP_ON_ADDR, CHR_FILL_RUN_A_ON);
+        put(CHR_RB_EXP_OFF_ADDR, CHR_FILL_RUN_A_OFF);
+        put(CHR_RB_EXP_UNW_ADDR, CHR_RB_UNWRITTEN_EXPECT);
         for (k = 0; k < 8; k = k + 1) begin
             ctrl_rd_exp[k] = BUTTONS1[k];
             ctrl_rd_exp[9 + k] = BUTTONS2[k];
@@ -3175,6 +3455,23 @@ always @(posedge clk) begin
                     rom_final_bytes = rom_final_bytes + 1;
             end
             k = 0;
+            // W3: snapshot the four windows the read-back loops address, here and
+            // now.  Loop A has already run (it sits above the flag store), so
+            // this is the state the nmi-time loop B has to leave untouched.  If a
+            // read ever raised chr_we, or if the model accepted a store the
+            // mapper should have refused, these bytes would move and the end of
+            // run comparison in check_w3_readback fails.
+            for (rb_snap_i = 0; rb_snap_i < CHR_RB_WINDOW_BYTES; rb_snap_i = rb_snap_i + 1) begin
+                chr_rb_snap[0 * CHR_RB_WINDOW_BYTES + rb_snap_i] =
+                    chr_mem[CHR_RB_LOOP_A_ADDR + rb_snap_i[15:0]];
+                chr_rb_snap[1 * CHR_RB_WINDOW_BYTES + rb_snap_i] =
+                    chr_mem[CHR_RB_LOOP_B_ON + rb_snap_i[15:0]];
+                chr_rb_snap[2 * CHR_RB_WINDOW_BYTES + rb_snap_i] =
+                    chr_mem[CHR_RB_LOOP_B_OFF + rb_snap_i[15:0]];
+                chr_rb_snap[3 * CHR_RB_WINDOW_BYTES + rb_snap_i] =
+                    chr_mem[CHR_RB_LOOP_B_UNW + rb_snap_i[15:0]];
+            end
+            rb_snap_i = 0;
         end
     end
 end
@@ -3370,12 +3667,17 @@ always @(posedge clk) begin
             if ((ab_v6.u_cpu.dbg_pc >= FAIL3) && (ab_v6.u_cpu.dbg_pc <= FAIL3 + 16'd2))
                 $fatal(1, "the oam dma readback failed, x=%02x p=%02x",
                        ab_v6.u_cpu.dbg_x, ab_v6.u_cpu.dbg_p);
+            if ((ab_v6.u_cpu.dbg_pc >= CHR_RB_FAIL) && (ab_v6.u_cpu.dbg_pc <= CHR_RB_FAIL + 16'd2))
+                $fatal(1, "W3 a $2007 chr read returned a byte the program did not expect, a=%02x x=%02x p=%02x ppu v=%04h",
+                       ab_v6.u_cpu.dbg_a, ab_v6.u_cpu.dbg_x, ab_v6.u_cpu.dbg_p,
+                       ab_v6.u_ppu.v_addr);
             if (!((ab_v6.u_cpu.dbg_pc >= MAIN_PROG) && (ab_v6.u_cpu.dbg_pc <= main_prog_end)) &&
                 !((ab_v6.u_cpu.dbg_pc >= NMI_HANDLER) && (ab_v6.u_cpu.dbg_pc <= nmi_end)) &&
                 !((ab_v6.u_cpu.dbg_pc >= IRQ_HANDLER) && (ab_v6.u_cpu.dbg_pc <= irq_end)) &&
                 !((ab_v6.u_cpu.dbg_pc >= FAIL1) && (ab_v6.u_cpu.dbg_pc <= FAIL1 + 16'd2)) &&
                 !((ab_v6.u_cpu.dbg_pc >= FAIL2) && (ab_v6.u_cpu.dbg_pc <= FAIL2 + 16'd2)) &&
-                !((ab_v6.u_cpu.dbg_pc >= FAIL3) && (ab_v6.u_cpu.dbg_pc <= FAIL3 + 16'd2)))
+                !((ab_v6.u_cpu.dbg_pc >= FAIL3) && (ab_v6.u_cpu.dbg_pc <= FAIL3 + 16'd2)) &&
+                !((ab_v6.u_cpu.dbg_pc >= CHR_RB_FAIL) && (ab_v6.u_cpu.dbg_pc <= CHR_RB_FAIL + 16'd2)))
                 $fatal(1, "the cpu ran in an unprogrammed region, pc=%04h state=%0d p=%02x sp=%02x",
                        ab_v6.u_cpu.dbg_pc, ab_v6.u_cpu.dbg_state,
                        ab_v6.u_cpu.dbg_p, ab_v6.u_cpu.dbg_sp);
@@ -3810,8 +4112,17 @@ always @(posedge clk) begin
         m_req_prev = 1'b0;
         ab_we_prev = 1'b0;
         m_we_prev = 1'b0;
+        ab_prev_win = 2'd0;
         ab_req_beats = 0;
         ab_req_consec = 0;
+        ab_consec_arm = 0;
+        ab_consec_arm_vs_bg = 0;
+        ab_consec_arm_vs_sp = 0;
+        ab_consec_bg = 0;
+        ab_consec_sp = 0;
+        ab_consec_noread = 0;
+        ab_consec_rr = 0;
+        ab_consec_arm_first_bg = 0;
         ab_we_consec = 0;
         ab_bgsp_beats = 0;
         ab_bgsp_clash = 0;
@@ -3823,9 +4134,37 @@ always @(posedge clk) begin
     end else begin
         if (ab_v6.ce_ppu) begin
             ab_req_beats = ab_req_beats + 1;
-            if ((ab_req_prev !== 1'b0) && (v6_chr_req !== 1'b0))
+            if ((ab_req_prev !== 1'b0) && (v6_chr_req !== 1'b0)) begin
                 ab_req_consec = ab_req_consec + 1;
+                // attribute the pair to the master that drove chr_addr on the
+                // SECOND beat, using the ppu's own selection expression
+                if (rb_arm !== 1'b0) begin
+                    ab_consec_arm = ab_consec_arm + 1;
+                    if (ab_prev_win == 2'd3)
+                        ab_consec_arm_vs_bg = ab_consec_arm_vs_bg + 1;
+                    else if (ab_prev_win == 2'd2)
+                        ab_consec_arm_vs_sp = ab_consec_arm_vs_sp + 1;
+                    else
+                        ab_consec_rr = ab_consec_rr + 1;
+                end else if (ab_prev_win == 2'd2) begin
+                    ab_consec_sp = ab_consec_sp + 1;
+                end else begin
+                    ab_consec_bg = ab_consec_bg + 1;
+                end
+                // the first beat was the arm and the second beat is a fetch
+                // master: the same collision, counted from the other side
+                if ((ab_prev_win == 2'd1) && (rb_arm === 1'b0))
+                    ab_consec_arm_first_bg = ab_consec_arm_first_bg + 1;
+                // NEITHER beat was a read arm.  This is the only case the old
+                // "never two consecutive ce" invariant covered, and it is the
+                // case a run with chr_rd_arm tied to 1'b0 would have measured.
+                if ((ab_prev_win != 2'd1) && (rb_arm === 1'b0))
+                    ab_consec_noread = ab_consec_noread + 1;
+            end
             ab_req_prev = v6_chr_req;
+            ab_prev_win = (rb_arm !== 1'b0) ? 2'd1 :
+                          ((ab_v6.u_ppu.g_chr_external.sp_bus_sel !== 1'b0) ? 2'd2 :
+                           ((ab_bg_chr_req !== 1'b0) ? 2'd3 : 2'd0));
         end
         if (chr_mmc3.ce_ppu) begin
             m_req_beats = m_req_beats + 1;
@@ -3878,6 +4217,191 @@ always @(posedge clk) begin
                 $fatal(1, "P0-8 chr_mmc3 chr_we was high on two consecutive ce");
             end
             m_we_prev = m_chr_we;
+        end
+    end
+end
+
+// ----------------------------------------------------- W3 $2007 CHR read-back
+//
+// One monitor for the whole read path, driven by the two net events it needs:
+//   rb_arm   the ce on which the read address rides chr_addr
+//   rb_read  the ce on which the two-cycle $2007 access completes and the cpu
+//            latches bus_din
+// They are adjacent ce by construction, so the block below runs in this order:
+// consume a pending arm, handle the read beat, then raise a new arm.
+//
+// Nothing here compares against chr_rdata itself.  Every expectation is built
+// from the TB's OWN bank model and the PPU's OWN v_addr, and the byte side is
+// compared against the TB's OWN chr_mem, which the program can only have changed
+// through chr_we && mapper_chr_ram_we.  Asserting
+// returned == chr_mem[u_ppu.v_addr & 0x1fff] would be circular: the address the
+// ppu asked for is the address the check would look up.
+always @(posedge clk) begin
+    if (reset) begin
+        rb_arm_beats = 0;
+        rb_arm_data_checks = 0;
+        rb_arm_data_err = 0;
+        rb_read_beats = 0;
+        rb_read_checks = 0;
+        rb_read_err = 0;
+        rb_noprev = 0;
+        rb_armed_missing = 0;
+        rb_stranded = 0;
+        rb_addr_err = 0;
+        rb_arm_addr_err = 0;
+        rb_ramwe_bad = 0;
+        rb_we_overlap = 0;
+        rb_coll_bg = 0;
+        rb_coll_sp = 0;
+        rb_race_skip = 0;
+        rb_vis_bad = 0;
+        rb_min_sl = 999;
+        rb_max_sl = 9'd0;
+        rb_arms_mask0 = 0;
+        rb_arms_mask1 = 0;
+        rb_arms_vblank = 0;
+        rb_loopa_arms = 0;
+        rb_loopb_arms = 0;
+        rb_pend_addr_q <= 17'd0;
+        rb_pend_byte_q <= 8'h00;
+        rb_pend_valid_q <= 1'b0;
+        rb_prev_addr_q <= 17'd0;
+        rb_prev_rdata_q <= 8'h00;
+        rb_prev_valid_q <= 1'b0;
+    end else if (ab_v6.ce_ppu) begin
+
+        // ---- an arm raised on the previous ce has to land HERE ----
+        if (rb_pend_valid_q !== 1'b0) begin
+            if (rb_read !== 1'b1) begin
+                rb_stranded = rb_stranded + 1;
+                $fatal(1, "W3-1 an armed $2007 chr read was not followed by a read beat on the next ce_ppu (bus_fire=%b we=%b sel_ppu=%b reg=%0d v=%04h armed=%b)",
+                       v6_bus_fire, v6_bus_we, v6_sel_ppu, v6_ppu_reg_addr,
+                       ab_v6.u_ppu.v_addr, rb_armed);
+            end
+            // The external memory captured chr_mem[the arm's address] on the
+            // arm edge, so chr_rdata must ALREADY hold it one ce later, which is
+            // this edge.  That is the whole zero-slack lead the rtl comment
+            // talks about, measured from the outside.
+            if (((chr_wq0_v !== 1'b0) && (chr_wq0 === rb_pend_addr_q)) ||
+                ((chr_wq1_v !== 1'b0) && (chr_wq1 === rb_pend_addr_q))) begin
+                rb_race_skip = rb_race_skip + 1;
+            end else begin
+                rb_arm_data_checks = rb_arm_data_checks + 1;
+                if (chr_rdata !== rb_pend_byte_q) begin
+                    rb_arm_data_err = rb_arm_data_err + 1;
+                    if (rb_arm_data_err < 5)
+                        $fatal(1, "W3-2 chr_rdata is %02h one ce after the arm, tb chr_mem[%05h] is %02h",
+                               chr_rdata, rb_pend_addr_q, rb_pend_byte_q);
+                end
+            end
+            rb_pend_valid_q <= 1'b0;
+        end
+
+        // ---- the completed $2007 CHR read ----
+        if (rb_read !== 1'b0) begin
+            rb_read_beats = rb_read_beats + 1;
+            if (rb_armed !== 1'b1) begin
+                rb_armed_missing = rb_armed_missing + 1;
+                $fatal(1, "W3-1 a $2007 chr read beat at v=%04h saw chr_rd_armed_q=0, the arm never fired (%0d read arms so far in this run).  DIAGNOSIS IF THIS IS THE FIRST FAILURE: the arm did not fire at all, not that it fired late, because in nes_system_v6 ppu_chr_rd_arm = sel_ppu && !cpu_we && (ppu_addr==3'd7) && cpu_bus_ready && (div_phase==4'd8), and this arm beat is 4 clk ahead of the $2007 read beat the cpu latches, so chr_rd_armed_q must already be 1 by the time that read beat retires.  A zero here therefore means one of those five terms changed: the sel_ppu decode, the !cpu_we read direction, the ppu_addr==3'd7 register select, cpu_bus_ready, or the div_phase==4'd8 phase.  This arm must NOT be rebuilt out of ppu_req/ppu_we: only bus_req is cleared by !cpu_active (nes_cpu6502.v:755), while bus_addr and bus_we are not, and ppu_req derives from cpu_req (nes_cpu_bus.v:189), so a ppu_req based arm is structurally zero at div_phase==4'd8 because ppu_req is high on the div_phase==0 clk ONLY.  Every $2007 chr read on this board would then return the fail-safe 8'h00, which is what the program's own compare loop below reports next.  This is an rtl fix in nes_system_v6 and is outside this file's write scope",
+                       ab_v6.u_ppu.v_addr, rb_arm_beats);
+            end
+            if (rb_prev_valid_q !== 1'b1) begin
+                // the very first $2007 chr read of the run: there is no previous
+                // byte for the read buffer to be holding yet
+                rb_noprev = rb_noprev + 1;
+            end else begin
+                rb_read_checks = rb_read_checks + 1;
+                // the byte the cpu latched is the byte chr_rdata held at the
+                // previous $2007 beat (the 2C02 read-buffer skew, measured)
+                if (v6_bus_din !== rb_prev_rdata_q) begin
+                    rb_read_err = rb_read_err + 1;
+                    if (rb_read_err < 5)
+                        $fatal(1, "W3-2 the cpu latched %02h, chr_rdata held %02h at the previous $2007 beat",
+                               v6_bus_din, rb_prev_rdata_q);
+                end
+                // and that byte is the model's byte at the address the previous
+                // arm carried, so the whole chain is external
+                if (rb_prev_rdata_q !== chr_mem[rb_prev_addr_q]) begin
+                    rb_read_err = rb_read_err + 1;
+                    if (rb_read_err < 5)
+                        $fatal(1, "W3-2 the cpu's byte %02h is not tb chr_mem[%05h] = %02h",
+                               rb_prev_rdata_q, rb_prev_addr_q,
+                               chr_mem[rb_prev_addr_q]);
+                end
+            end
+            rb_prev_rdata_q <= chr_rdata;
+            rb_prev_addr_q <= rb_pend_addr_q;
+            rb_prev_valid_q <= 1'b1;
+        end else if (rb_armed !== 1'b0) begin
+            // chr_rd_armed_q is set and the next completed $2007 access was not
+            // a read, so the arm was consumed by something it was not meant for
+            rb_stranded = rb_stranded + 1;
+            $fatal(1, "W3-1 an armed $2007 chr read was cleared by a non-read $2007 access (reg=%0d we=%b v=%04h)",
+                   v6_ppu_reg_addr, v6_bus_we, ab_v6.u_ppu.v_addr);
+        end
+
+        // ---- a new read arm ----
+        if (rb_arm !== 1'b0) begin
+            rb_arm_beats = rb_arm_beats + 1;
+            // the read address has to be on the PPU's own chr_addr port, and the
+            // port has to come out of the mapper as the tb's own translation of
+            // the PPU's own v_addr.  chr_final_addr is one net downstream of
+            // mapper_ppu_addr, so neither comparison is circular.
+            if (ab_v6.u_ppu.chr_addr !== ab_v6.u_ppu.v_addr[13:0]) begin
+                rb_arm_addr_err = rb_arm_addr_err + 1;
+                if (rb_arm_addr_err < 5)
+                    $fatal(1, "W3-3 on a read arm chr_addr is %04h, not the ppu's own v_addr %04h",
+                           ab_v6.u_ppu.chr_addr, ab_v6.u_ppu.v_addr[13:0]);
+            end
+            if (v6_chr_final_addr !==
+                (({13'b0, tb_chr_bank_model} << 13) |
+                 (ab_v6.u_ppu.v_addr[13:0] & 14'h1FFF))) begin
+                rb_addr_err = rb_addr_err + 1;
+                if (rb_addr_err < 5)
+                    $fatal(1, "W3-3 on a read arm chr_final_addr is %05h, tb model is %05h (local chr_addr %04h, ppu v_addr %04h)",
+                           v6_chr_final_addr,
+                           (({13'b0, tb_chr_bank_model} << 13) |
+                            (ab_v6.u_ppu.v_addr[13:0] & 14'h1FFF)),
+                           ab_v6.u_ppu.chr_addr, ab_v6.u_ppu.v_addr);
+            end
+            // a read arm is raised only for a cpu READ, so it can never ride the
+            // same ce as the $2007 write strobe and can never raise the store
+            if (v6_chr_we !== 1'b0)
+                rb_we_overlap = rb_we_overlap + 1;
+            if (v6_mapper_chr_ram_we !== 1'b0)
+                rb_ramwe_bad = rb_ramwe_bad + 1;
+            // the collision the contract names, counted not argued
+            if (ab_bg_chr_req !== 1'b0)
+                rb_coll_bg = rb_coll_bg + 1;
+            if (ab_sp_chr_req !== 1'b0)
+                rb_coll_sp = rb_coll_sp + 1;
+            // loop B runs with rendering on inside vblank, loop A with PPUMASK=$00
+            if ((ab_v6.u_ppu.scanline >= 9'd240) &&
+                (ab_v6.u_ppu.scanline <= 9'd260)) begin
+                rb_arms_vblank = rb_arms_vblank + 1;
+                rb_loopb_arms = rb_loopb_arms + 1;
+            end else begin
+                rb_loopa_arms = rb_loopa_arms + 1;
+            end
+            if (ab_v6.u_ppu.mask_reg[2] === 1'b0)
+                rb_arms_mask0 = rb_arms_mask0 + 1;
+            else
+                rb_arms_mask1 = rb_arms_mask1 + 1;
+            if (ab_v6.u_ppu.scanline < rb_min_sl)
+                rb_min_sl = ab_v6.u_ppu.scanline;
+            if (ab_v6.u_ppu.scanline > rb_max_sl)
+                rb_max_sl = ab_v6.u_ppu.scanline;
+            if (rb_vis_ok !== 1'b1) begin
+                rb_vis_bad = rb_vis_bad + 1;
+                $fatal(1, "W3-10 a $2007 chr read arm landed on scanline %0d dot %0d, outside the provably invisible set (240-260, or bg_pa_enable low with sprites off); mask=%02h bg_pa_enable=%b",
+                       ab_v6.u_ppu.scanline, ab_v6.u_ppu.dot,
+                       ab_v6.u_ppu.mask_reg, ab_v6.u_ppu.bg_pa_enable);
+            end
+            rb_pend_addr_q <= (({13'b0, tb_chr_bank_model} << 13) |
+                              (ab_v6.u_ppu.v_addr[13:0] & 14'h1FFF));
+            rb_pend_byte_q <= chr_mem[({13'b0, tb_chr_bank_model} << 13) |
+                                     (ab_v6.u_ppu.v_addr[13:0] & 14'h1FFF)];
+            rb_pend_valid_q <= 1'b1;
         end
     end
 end
@@ -4491,12 +5015,15 @@ endtask
 
 task check_p0_8;
     begin
-        if (ab_req_consec != 0)
-            $fatal(1, "P0-8 ab_v6 chr_req was high on two consecutive ce %0d times",
-                   ab_req_consec);
+        if (ab_consec_noread != 0)
+            $fatal(1, "P0-8 ab_v6 chr_req was high on two consecutive ce %0d times with NO read arm on either beat, so a fetch master still beats another one",
+                   ab_consec_noread);
         if (m_req_consec != 0)
             $fatal(1, "P0-8 chr_mmc3 chr_req was high on two consecutive ce %0d times",
                    m_req_consec);
+        if (ab_consec_rr != 0)
+            $fatal(1, "P0-8 two read arms landed back to back on consecutive ce %0d times, one $2007 read cannot arm twice",
+                   ab_consec_rr);
         if (ab_bgsp_clash != 0)
             $fatal(1, "P0-8 ab_v6 background and sprite chr_req collided %0d times",
                    ab_bgsp_clash);
@@ -4518,8 +5045,14 @@ task check_p0_8;
         if (m_bgsp_beats < 100000)
             $fatal(1, "P0-8 chr_mmc3 only produced %0d fetch-unit chr_req beats, the units were barely sampled",
                    m_bgsp_beats);
-        $display("P0-8 NO-BUS-COLLISION chr_req was never high on two consecutive ce on ab_v6 (%0d of %0d ce, %0d violations) or on chr_mmc3 (%0d of %0d ce, %0d violations), and the background fetch unit chr_req (u_ppu.g_chr_external.u_chr_fetch.chr_req) and the sprite fetch unit chr_req (u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req) were never both high on the same ce: %0d and %0d sampled beats, %0d and %0d collisions.  The port has no backpressure, so a collision would be a silently dropped background beat.  ab_v5 is not in this check because nes_system_v5 has no external CHR port at all PASS",
-                 ab_req_consec, ab_req_beats, ab_req_consec,
+        $display("P0-8 NO-BUS-COLLISION RE-SCOPED, NOT WEAKENED.  WHAT CHANGED AND WHY: the old line asserted that chr_req is NEVER high on two consecutive ce on ab_v6.  chr_rd_win now feeds chr_req directly, so a $2007 CHR read that lands on the ce_ppu edge right after a fetch request beat makes that assertion false by construction, and qualifying it on mask_reg[3] is not available because the fetch units are free-running regardless of the mask.  So the invariant is restated over the beats that can legitimately collide, and it is still asserted.  On all %0d ce_ppu of ab_v6 there were %0d consecutive chr_req pairs.  Of those, %0d had NO read arm on EITHER beat -- exactly the case the old assertion covered, exactly what a run with chr_rd_arm tied to 1'b0 would have measured -- and that count is %0d.  Every one of the remaining pairs touches a read arm, and each is attributed by the same expression the ppu uses to drive chr_addr: %0d had the READ ARM winning the second beat (%0d against a background beat on the first, %0d against a sprite beat, %0d arm after arm) and %0d had a fetch unit winning the second beat, of which %0d followed a background read arm and %0d followed a sprite read arm.  chr_mmc3 runs a program with no $2007 reads at all, so nothing can raise an arm there and chr_req was never high on two consecutive ce there either (%0d of %0d ce, %0d violations).  The background fetch unit chr_req (u_ppu.g_chr_external.u_chr_fetch.chr_req) and the sprite fetch unit chr_req (u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req) were never both high on the same ce: %0d and %0d sampled beats, %0d and %0d collisions.  The port has no backpressure, so a fetch-vs-fetch collision would be a silently dropped background beat.  That a read arm's ADDRESS survives the collision is asserted separately in W3-3, on every arm beat.  ab_v5 is not in this check because nes_system_v5 has no external CHR port at all PASS",
+                 ab_req_beats, ab_req_consec,
+                 ab_req_consec - ab_consec_arm - ab_consec_arm_first_bg,
+                 ab_consec_noread,
+                 ab_consec_arm, ab_consec_arm_vs_bg, ab_consec_arm_vs_sp,
+                 ab_consec_rr,
+                 ab_consec_bg + ab_consec_sp, ab_consec_arm_first_bg,
+                 ab_consec_sp,
                  m_req_consec, m_req_beats, m_req_consec,
                  ab_bgsp_beats, m_bgsp_beats, ab_bgsp_clash, m_bgsp_clash);
         $display("P0-8 WRITE-STROBE the new write path takes the same mapper port the fetch arbiter uses, so it was re-checked for contention: chr_we was never high on two consecutive ce_ppu on ab_v6 (%0d violations) or on chr_mmc3 (%0d violations), and the arbitration between the two was counted rather than assumed -- %0d and %0d of the %0d and %0d write beats coincided with a chr_req beat (write wins in mapper_ppu_addr), with %0d and %0d of those while bg or sprites were enabled PASS",
@@ -4653,6 +5186,245 @@ task check_chr_ram_rom_pair;
                  pic_rom_cmp, pic_rom_idx_diff, pic_rom_geom_diff);
         $display("PAIR NON-VACUITY the chr-ram half of this line is a live control, not a formality: on the SAME program and the SAME addresses the chr-ram board changed %0d bytes of its array (every one of the %0d uploaded bytes verified against the program's own constant, none left at the sentinel), while the chr-rom board changed 0.  Same strobe, same address, same data, opposite outcomes decided by one parameter PASS",
                  chr_wr_accepted, 2 * CHR_TILE_BYTES);
+    end
+endtask
+
+// =====================================================================
+// W3  NROM + CHR RAM: $2007 external-CHR read-back
+// =====================================================================
+//
+// Ten checks, each aimed at one named failure mode.  Four of them (2, 4, 6, 8)
+// exist to kill "the byte came from somewhere inside the ppu", and they are
+// built so that the byte side of every comparison is the TB's OWN memory array,
+// never chr_rdata, never read_buffer_reg, never a value derived from the dut's
+// own answer.
+
+task check_w3_readback;
+    integer d;
+    integer w;
+    integer rb_v6_err;
+    integer rb_v5_err;
+    integer rb_rom_err;
+    integer rb_rb_err;
+    integer rb_rb_diff;
+    integer rb_rom_same;
+    integer rb_snap_err;
+    integer rb_unw_err;
+    integer rb_unw_ne_win;
+    integer rb_unw_ne_win_v5;
+    integer rb_unw_ne_win_rom;
+    integer rb_unw_ne_win_b;
+    integer rb_v6_diff_v5;
+    integer rb_cells;
+    reg [15:0] w_addr [0:(CHR_RB_WINDOWS-1)];
+    reg [15:0] w_store [0:(CHR_RB_WINDOWS-1)];
+    begin
+        w_addr[0] = CHR_RB_LOOP_A_ADDR;
+        w_addr[1] = CHR_RB_LOOP_B_ON;
+        w_addr[2] = CHR_RB_LOOP_B_OFF;
+        w_addr[3] = CHR_RB_LOOP_B_UNW;
+        w_store[0] = CHR_RB_STORE_A;
+        w_store[1] = CHR_RB_STORE_BON;
+        w_store[2] = CHR_RB_STORE_BOFF;
+        w_store[3] = CHR_RB_STORE_BUNW;
+
+        // ---- 1. armed, always ----
+        if (rb_armed_missing != 0)
+            $fatal(1, "W3-1 %0d $2007 chr read beats saw chr_rd_armed_q low", rb_armed_missing);
+        if (rb_stranded != 0)
+            $fatal(1, "W3-1 %0d read arms were never consumed by a read beat", rb_stranded);
+        if (rb_arm_beats != rb_read_beats)
+            $fatal(1, "W3-1 %0d read arms and %0d $2007 chr read beats, they must pair one for one",
+                   rb_arm_beats, rb_read_beats);
+        if (rb_arm_beats < 100)
+            $fatal(1, "W3-1 only %0d read arms fired, the path is barely exercised", rb_arm_beats);
+
+        // ---- 2. round trip observed, not re-derived ----
+        if (rb_arm_data_err != 0)
+            $fatal(1, "W3-2 chr_rdata held the wrong byte on %0d arm captures", rb_arm_data_err);
+        if (rb_read_err != 0)
+            $fatal(1, "W3-2 the cpu latched or the model held the wrong byte on %0d read beats", rb_read_err);
+        if (rb_arm_data_checks < 100)
+            $fatal(1, "W3-2 only %0d arm captures were checked", rb_arm_data_checks);
+        if (rb_read_checks < 100)
+            $fatal(1, "W3-2 only %0d read beats were checked", rb_read_checks);
+
+        // ---- 3. crosses the mapper ----
+        if (rb_arm_addr_err != 0)
+            $fatal(1, "W3-3 chr_addr was not the ppu's own v_addr on %0d arm beats", rb_arm_addr_err);
+        if (rb_addr_err != 0)
+            $fatal(1, "W3-3 chr_final_addr was not the tb's own translation on %0d arm beats", rb_addr_err);
+        if (rb_ramwe_bad != 0)
+            $fatal(1, "W3-3 mapper_chr_ram_we was HIGH on %0d read arm beats, a read raised the store enable", rb_ramwe_bad);
+        if (rb_we_overlap != 0)
+            $fatal(1, "W3-3 chr_we was HIGH on %0d read arm beats, a read rode the write strobe", rb_we_overlap);
+
+        // ---- 4/5/6/8: the per-instance value work, all byte for byte ----
+        rb_v6_err = 0;
+        rb_v5_err = 0;
+        rb_rom_err = 0;
+        rb_rb_err = 0;
+        rb_rb_diff = 0;
+        rb_rom_same = 0;
+        rb_v6_diff_v5 = 0;
+        rb_snap_err = 0;
+        rb_unw_err = 0;
+        rb_unw_ne_win = 0;
+        rb_unw_ne_win_v5 = 0;
+        rb_unw_ne_win_rom = 0;
+        rb_unw_ne_win_b = 0;
+        for (w = 0; w < CHR_RB_WINDOWS; w = w + 1)
+            for (d = 0; d < CHR_RB_WINDOW_BYTES; d = d + 1) begin
+                // every instance's read-back must equal THAT instance's own chr
+                // memory at the address the loop asked for
+                if (ab_v6.u_bus.ram_array[w_store[w][10:0] + 1 + d] !== chr_mem[w_addr[w] + d[15:0]])
+                    rb_v6_err = rb_v6_err + 1;
+                if (ab_v5.u_bus.ram_array[w_store[w][10:0] + 1 + d] !== ab_v5.u_ppu.chr_ram[w_addr[w][13:0]])
+                    rb_v5_err = rb_v5_err + 1;
+                if (chr_rom.u_bus.ram_array[w_store[w][10:0] + 1 + d] !== rom_chr_pre[w_addr[w][13:0]])
+                    rb_rom_err = rb_rom_err + 1;
+                if (chr_ram_b.u_bus.ram_array[w_store[w][10:0] + 1 + d] !== ramb_chr_mem[w_addr[w] + d[15:0]])
+                    rb_rb_err = rb_rb_err + 1;
+                // the cross-DUT A/B: ab_v5 answers $2007 out of its own INTERNAL
+                // chr_ram, ab_v6 out of a top-level registered memory through the
+                // mapper.  Two unrelated datapaths, one program, one answer.
+                if (ab_v5.u_bus.ram_array[w_store[w][10:0] + 1 + d] !==
+                    ab_v6.u_bus.ram_array[w_store[w][10:0] + 1 + d])
+                    rb_v6_diff_v5 = rb_v6_diff_v5 + 1;
+                if (chr_ram_b.u_bus.ram_array[w_store[w][10:0] + 1 + d] !==
+                    ab_v6.u_bus.ram_array[w_store[w][10:0] + 1 + d])
+                    rb_rb_diff = rb_rb_diff + 1;
+                if (chr_rom.u_bus.ram_array[w_store[w][10:0] + 1 + d] ===
+                    ab_v6.u_bus.ram_array[w_store[w][10:0] + 1 + d])
+                    rb_rom_same = rb_rom_same + 1;
+                // 5: the unwritten window must not answer with the written byte
+                if (w == 3) begin
+                    if (ab_v6.u_bus.ram_array[w_store[w][10:0] + 1 + d] !== CHR_RB_UNWRITTEN_EXPECT)
+                        rb_unw_err = rb_unw_err + 1;
+                    if (ab_v6.u_bus.ram_array[w_store[w][10:0] + 1 + d] !==
+                        ab_v6.u_bus.ram_array[w_store[1][10:0] + 1 + d])
+                        rb_unw_ne_win = rb_unw_ne_win + 1;
+                    if (ab_v5.u_bus.ram_array[w_store[w][10:0] + 1 + d] !==
+                        ab_v5.u_bus.ram_array[w_store[1][10:0] + 1 + d])
+                        rb_unw_ne_win_v5 = rb_unw_ne_win_v5 + 1;
+                    if (chr_rom.u_bus.ram_array[w_store[w][10:0] + 1 + d] !==
+                        chr_rom.u_bus.ram_array[w_store[1][10:0] + 1 + d])
+                        rb_unw_ne_win_rom = rb_unw_ne_win_rom + 1;
+                    if (chr_ram_b.u_bus.ram_array[w_store[w][10:0] + 1 + d] !==
+                        chr_ram_b.u_bus.ram_array[w_store[1][10:0] + 1 + d])
+                        rb_unw_ne_win_b = rb_unw_ne_win_b + 1;
+                end
+                // 6: the sentinel survives.  These are the four windows the
+                // read-back loops address, snapshotted when the program raised
+                // the upload flag (loop A had already run) and re-read now.
+                if (chr_mem[w_addr[w] + d[15:0]] !==
+                    chr_rb_snap[w * CHR_RB_WINDOW_BYTES + d])
+                    rb_snap_err = rb_snap_err + 1;
+            end
+        d = 0;
+        w = 0;
+
+        if (rb_v6_err != 0)
+            $fatal(1, "W3-4 %0d of %0d read-back bytes on ab_v6 are not ab_v6's own chr_mem byte",
+                   rb_v6_err, CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES);
+        if (rb_v5_err != 0)
+            $fatal(1, "W3-4 %0d of %0d read-back bytes on ab_v5 are not ab_v5's own internal chr_ram byte",
+                   rb_v5_err, CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES);
+        if (rb_rom_err != 0)
+            $fatal(1, "W3-4 %0d of %0d read-back bytes on chr_rom are not its own PRE-LOAD byte",
+                   rb_rom_err, CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES);
+        if (rb_rb_err != 0)
+            $fatal(1, "W3-4 %0d of %0d read-back bytes on chr_ram_b are not chr_ram_b's own chr_mem byte",
+                   rb_rb_err, CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES);
+        if (rb_rb_diff < 1)
+            $fatal(1, "W3-4 VACUOUS: chr_ram_b's read-back is byte identical to ab_v6's, the two programs did not return different bytes");
+        if (rb_v6_diff_v5 != 0)
+            $fatal(1, "W3-8 %0d of %0d ram cells differ between the internal-chr board and the external-chr board",
+                   rb_v6_diff_v5, CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES);
+        if (rb_rom_same != (CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES))
+            $fatal(1, "W3-4 the chr-rom board's read-back does not agree with the chr-ram board's on every byte, the two boards are not in lockstep");
+        if (rb_unw_err != 0)
+            $fatal(1, "W3-5 %0d of %0d unwritten-window bytes did not read back as the tb's load value",
+                   rb_unw_err, CHR_RB_WINDOW_BYTES);
+        if (rb_unw_ne_win < CHR_RB_WINDOW_BYTES)
+            $fatal(1, "W3-5 only %0d of the %0d unwritten bytes differ from the just-written byte on ab_v6, the comparison is degenerate",
+                   rb_unw_ne_win, CHR_RB_WINDOW_BYTES);
+        if (rb_unw_ne_win_v5 < CHR_RB_WINDOW_BYTES ||
+            rb_unw_ne_win_rom < CHR_RB_WINDOW_BYTES)
+            $fatal(1, "W3-5 the unwritten-vs-written comparison is degenerate on ab_v5 (%0d) or chr_rom (%0d)",
+                   rb_unw_ne_win_v5, rb_unw_ne_win_rom);
+        if (rb_snap_err != 0)
+            $fatal(1, "W3-6 %0d of the %0d read-back window bytes changed after the program raised the upload flag, a read wrote something",
+                   rb_snap_err, CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES);
+        if (chr_up_addr_err != 0)
+            $fatal(1, "W3-6 chr_mem[$2000+d] moved, the $2000 control is broken");
+        if (rom_pre_err != 0 || rom_final_bytes != 0)
+            $fatal(1, "W3-6 the chr-rom board's memory changed (%0d bytes differ from the pre-run snapshot, %0d changed overall)",
+                   rom_pre_err, rom_final_bytes);
+
+        // ---- 9. the collision count has to be real ----
+        if ((rb_coll_bg + rb_coll_sp) < 1)
+            $fatal(1, "W3-9 no read arm ever coincided with a fetch request, the contention this design admits was never actually produced");
+        if (ab_consec_arm < 1)
+            $fatal(1, "W3-9 no consecutive chr_req pair was ever won by a read arm, the bus-steal case was never produced");
+
+        // ---- 10. invisibility proven, not assumed ----
+        if (rb_vis_bad != 0)
+            $fatal(1, "W3-10 %0d read arms landed outside the provably invisible set", rb_vis_bad);
+        if (ab_visible_div != 0)
+            $fatal(1, "W3-10 the per-ce v5/v6 A/B diverged on %0d visible pixels, a read arm reached a pixel", ab_visible_div);
+        if (ab_all_ce_div != 0)
+            $fatal(1, "W3-10 the per-ce v5/v6 A/B diverged on %0d of %0d ce", ab_all_ce_div, ab_all_ce_count);
+        rb_cells = CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES;
+
+        $display("W3-1 ARMED-ALWAYS %0d $2007 CHR read beats and %0d read arms, one for one.  Every read beat saw u_ppu.g_chr_external.chr_rd_armed_q=1 (violations=%0d) and every arm was consumed by a read beat on the immediately following ce_ppu (stranded=%0d, two arms back to back=%0d).  KILLS the dead path: an arm that never fires leaves no read beat behind, and a read beat without an arm cannot pass, so this cannot go green on a path that is structurally disconnected PASS",
+                 rb_read_beats, rb_arm_beats, rb_armed_missing, rb_stranded,
+                 ab_consec_rr);
+        $display("W3-2 ROUND-TRIP read beats checked=%0d, errors=%0d (one of them, the very first $2007 read of the run, has no predecessor and is excluded: %0d).  Arm captures checked=%0d, errors=%0d, and %0d were skipped for a write race in the same two ce.  NOTHING HERE COMPARES AGAINST chr_rdata ITSELF.  The expectation is built from the TB's OWN bank model and the PPU's OWN v_addr, expected_final_addr=(tb_chr_bank_model<<13)|(u_ppu.v_addr[13:0]&0x1fff), and the byte side is the TB's OWN chr_mem.  Chain, each term sampled at a different time: at the arm's ce edge the address went on the bus, one ce later chr_rdata ALREADY held chr_mem[that address], and the byte the cpu latched on the FOLLOWING $2007 beat equalled that same chr_rdata AND equalled chr_mem[the address the previous arm carried].  THE ONE-READ SKEW IS MEASURED, NOT ASSUMED: reg_cs is high only on the cycle that COMPLETES the two-cycle $2007 access and read_buffer_reg is refilled on that same edge, so the cpu receives access N-1's byte on access N, which is the real 2C02 read buffer.  Loop A primes once, loop B primes once per window, so each window's base+0..base+7 is what the verify loops actually compare PASS",
+                 rb_read_checks, rb_read_err, rb_noprev, rb_arm_data_checks,
+                 rb_arm_data_err, rb_race_skip);
+        $display("W3-3 CROSSES-THE-MAPPER on all %0d read arm beats, chr_addr == u_ppu.v_addr[13:0] (err=%0d) and chr_final_addr == (tb_chr_bank_model<<13)|(v_addr[13:0]&0x1fff) (err=%0d).  chr_final_addr is mapper_chr_bank_offset, one net downstream of mapper_ppu_addr, so the read address provably left the ppu on the same port the fetch arbiter uses and came back translated, not on a private side channel.  mapper_chr_ram_we was HIGH on %0d arm beats and chr_we on %0d, so a read arm can neither raise the store enable nor coincide with the write strobe's capture edge: ppu_chr_rd_arm is qualified by !cpu_we, not by !ppu_we: ppu_we is ppu_req && cpu_we and ppu_req is structurally 0 at div_phase 8, so !ppu_we is trivially true and qualifies nothing; and a read and a write are different cpu cycles PASS",
+                 rb_arm_beats, rb_arm_addr_err, rb_addr_err, rb_ramwe_bad,
+                 rb_we_overlap);
+        $display("W3-4 VALUE-TRACKS-CHR-CONTENT every one of the %0d read-back bytes was compared against THAT instance's own CHR memory at the address the loop asked for: ab_v6 external chr_mem err=%0d, ab_v5 INTERNAL chr_ram err=%0d, chr_ram_b external chr_mem err=%0d, chr_rom against its own PRE-LOAD err=%0d.  Window $0000 (written with the ON constant) reads back %02h on ab_v6 / %02h on ab_v5 / %02h on chr_rom / %02h on chr_ram_b, so the two boards running BYTE-IDENTICAL CODE with complementary DATA returned different bytes on %0d of the %0d cells.  That is what kills a constant and what kills a shadow of the writes: chr_ram_b's shadow would have to have tracked run B's upload, and chr_rom's board refused EVERY $2007 write at mapper_chr_ram_we (%0d of %0d write beats with the enable high) and still read back its ROM contents, so a value that could only come from a store the mapper refused would be visible.  HONEST LIMITATION: chr_rom's read-back is NOT different from ab_v6's byte for byte -- it cannot be, because chr_rom's CHR is preloaded with exactly the image the program uploads.  What differs is the PROVENANCE, and that is what is measured: chr_mem[$0000] was %02h before the run (the sentinel) and is %02h now, while rom_chr_mem[$0000] was %02h before the run and is %02h now, on a board whose writes were all refused (%0d of %0d bytes of its 128 KiB changed) PASS",
+                 rb_cells, rb_v6_err, rb_v5_err, rb_rb_err, rb_rom_err,
+                 ab_v6.u_bus.ram_array[CHR_RB_STORE_A[10:0] + 1],
+                 ab_v5.u_bus.ram_array[CHR_RB_STORE_A[10:0] + 1],
+                 chr_rom.u_bus.ram_array[CHR_RB_STORE_A[10:0] + 1],
+                 chr_ram_b.u_bus.ram_array[CHR_RB_STORE_A[10:0] + 1],
+                 rb_rb_diff, rb_cells,
+                 rom_wr_ramwe_bad, rom_wr_beats,
+                 chr_tile_image_b[0], chr_tile_image[0],
+                 rom_chr_pre[0], rom_chr_mem[0],
+                 rom_final_bytes, rom_pre_bytes);
+        $display("W3-5 UNWRITTEN-ADDRESS $1040 is inside the reachable pattern table and past every address the upload touches (0..47 and 4096..4143), so the only thing that can be there is the tb's own load value.  All %0d of the unwritten bytes read back as $%02h on ab_v6 (err=%0d), and on the three run-A boards every one of them is provably DIFFERENT from the just-written byte at $1020 (ab_v6 %0d of %0d, ab_v5 %0d of %0d, chr_rom %0d of %0d), so a read that always answered with the last byte written could not have produced them.  HONEST LIMITATION: chr_ram_b is degenerate HERE, %0d of %0d, because run B's ON constant is $00 and the tb's load value is $00 too, so on that board the two bytes coincide and this particular pair proves nothing.  Its two boards are held apart by window $0000 above, where run A reads $FF and run B reads $00, and by the per-instance model comparison.  chr_mmc3 has no $2007 read at all: its program never issues one PASS",
+                 CHR_RB_WINDOW_BYTES, CHR_RB_UNWRITTEN_EXPECT, rb_unw_err,
+                 rb_unw_ne_win, CHR_RB_WINDOW_BYTES,
+                 rb_unw_ne_win_v5, CHR_RB_WINDOW_BYTES,
+                 rb_unw_ne_win_rom, CHR_RB_WINDOW_BYTES,
+                 rb_unw_ne_win_b, CHR_RB_WINDOW_BYTES);
+        $display("W3-6 SENTINEL-SURVIVES this EXTENDS the W1 SENTINEL check rather than restating it.  W1 proves the $2000 control region was never written; here the four windows the read-back loops address are snapshotted at the moment the program raised ram[%04h] (loop A has already run at that point) and re-read at the end of the run: %0d of the %0d bytes moved, so neither loop A nor the %0d read arms loop B issued per nmi wrote anything.  chr_mem[$2000+d] still holds the sentinel on all %0d bytes (err=%0d), and the chr-rom board's whole 128 KiB is still byte identical to its pre-run snapshot (%0d of %0d bytes differ).  A read path that raised chr_we, or a model that accepted a store the mapper refused, would move one of these PASS",
+                 CHR_UPLOAD_FLAG_CELL, rb_snap_err, rb_cells, rb_loopb_arms,
+                 CHR_TILE_BYTES, chr_up_addr_err, rom_pre_err, rom_pre_bytes);
+        $display("W3-7 MODEL-CREDIBILITY no new shadow model is introduced here on purpose: W3-2 reuses P0-6's existing per-ce shadow of the registered chr_rdata against chr_mem[chr_final_addr delayed 1 ce] and of the fetch unit's bg_lo/bg_hi against chr_mem[chr_final_addr delayed 2 ce], which is what already makes the memory model itself auditable.  Over the whole run that shadow ran on %0d request beats (err=%0d) and %0d fetch-unit latches (err=%0d), with %0d and %0d beats skipped for a write race.  A read arm is a request beat like any other, so it is inside those numbers: the model is asked for the byte at whatever address was on the bus, whoever put it there PASS",
+                 chr_model_pred_checks, chr_model_pred_err, chr_latch_checks,
+                 chr_latch_err, chr_pred_race_skip, chr_latch_race_skip);
+        $display("W3-8 CROSS-DUT-VALUE-AB the strongest single check in the group.  ab_v5 runs the SAME program on the INTERNAL chr path: g_chr_internal answers $2007 out of nes_ppu2c02's own chr_ram with no external port, no mapper and no bus at all.  ab_v6 answers the same $2007 reads out of a top-level registered 128 KiB array addressed through mapper_ppu_addr.  All %0d ram cells holding a read-back byte are byte identical between the two (differing cells=%0d).  Two completely different storage mechanisms, one program, one answer, so the byte cannot have come from a ppu-side cache of the writes: ab_v5 never performed the external write that put run A's image into chr_mem, and it still returns it.  The same cells on chr_ram_b differ from ab_v6 on %0d of %0d, which is the non-vacuity half: identical code, different data, different answer PASS",
+                 rb_cells, rb_v6_diff_v5, rb_rb_diff, rb_cells);
+        $display("W3-9 COLLISION-IS-REAL %0d read arms were raised and %0d of them coincided with a fetch request on the very same ce: %0d against a background fetch beat and %0d against a sprite fetch beat.  That is the displacement the contract names -- one background tile or one sprite slot plane, confined to the scanline the $2007 read was issued on -- produced for real rather than argued about.  P0-8's independent account agrees from the other side: of the %0d consecutive chr_req pairs, %0d had a read arm winning the second beat, %0d of those against a background beat and %0d against a sprite beat.  Arms by where they landed: %0d inside vblank scanlines 240-260 (loop B, rendering ON) and %0d outside it (loop A, PPUMASK=$00), scanlines %0d..%0d.  Without this assertion a design that never actually contended would pass silently PASS",
+                 rb_arm_beats, rb_coll_bg + rb_coll_sp, rb_coll_bg, rb_coll_sp,
+                 ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
+                 ab_consec_arm_vs_sp,
+                 rb_arms_vblank, rb_loopa_arms, rb_min_sl, rb_max_sl);
+        $display("W3-9b P0-8'S INDEPENDENT ACCOUNT agrees from the other side: of the %0d consecutive chr_req pairs on ab_v6, %0d had a read arm winning the second beat (%0d against a background beat, %0d against a sprite beat) and %0d had a read arm on the first beat with a fetch unit winning the second (%0d against a background beat, %0d against a sprite beat).  A pair with no read arm on either beat, the case the removed invariant covered, is %0d PASS",
+                 ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
+                 ab_consec_arm_vs_sp,
+                 ab_consec_arm_first_bg + ab_consec_sp, ab_consec_arm_first_bg,
+                 ab_consec_sp, ab_consec_noread);
+        $display("W3-10 INVISIBILITY-PROVEN every one of the %0d read arms was checked, on the arm beat itself, against the provably invisible set spelled out and not proxied: scanlines 240..260, or any scanline on which the ppu's OWN bg_pa_enable is low AND mask_reg[2] is low.  Violations=%0d, and any violation $fataled on the beat instead of being counted after the fact, so loop B drifting past scanline 260 fails the run loudly rather than quietly corrupting a line.  Scanline 261 is deliberately not in the set.  %0d arms landed with sprites shown and %0d with the mask off, and the consequence of a displaced fetch byte is then measured, not assumed: P0-4's per-ce v5/v6 comparison is still %0d visible comparisons with %0d divergences and %0d all-ce comparisons with %0d divergences.  loop A runs with PPUMASK=$00, where bg_shown and sprite_opaque are both low and mixed_pixel_value is 0 whatever the pattern byte latches, so the displacement there cannot reach a pixel PASS",
+                 rb_arm_beats, rb_vis_bad, rb_arms_mask1, rb_arms_mask0,
+                 ab_visible_count, ab_visible_div, ab_all_ce_count,
+                 ab_all_ce_div);
     end
 endtask
 
@@ -5652,6 +6424,13 @@ initial begin
         tb_prg_b[k] = tb_prg[k];
     tb_prg_b[CHR_FILL_ON_ADDR[TB_WINDOW_BITS-1:0]] = CHR_FILL_RUN_B_ON;
     tb_prg_b[CHR_FILL_OFF_ADDR[TB_WINDOW_BITS-1:0]] = CHR_FILL_RUN_B_OFF;
+    // W3's read-back expectations get the same treatment, so chr_ram_b still
+    // executes byte-identical CODE while expecting the COMPLEMENT of everything
+    // ab_v6 expects.  $8A04 is deliberately NOT swapped: an address nothing
+    // writes holds the tb's load value in every model, so the unwritten read
+    // expects the same byte in both images.
+    tb_prg_b[CHR_RB_EXP_ON_ADDR[TB_WINDOW_BITS-1:0]] = CHR_FILL_RUN_B_ON;
+    tb_prg_b[CHR_RB_EXP_OFF_ADDR[TB_WINDOW_BITS-1:0]] = CHR_FILL_RUN_B_OFF;
     k = 0;
 
     load_chr_rom;
@@ -5797,6 +6576,7 @@ initial begin
 
     check_p0_7;
     check_p0_8;
+    check_w3_readback;
     check_w2_mmc3_chr_write;
     check_p1_5;
 

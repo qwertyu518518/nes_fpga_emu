@@ -66,6 +66,7 @@ nes_ppu2c02 #(
     .chr_addr(chr_addr),
     .chr_we(chr_we),
     .chr_wdata(chr_wdata),
+    .chr_rd_arm(1'b0),
     .chr_rdata(chr_rdata)
 );
 
