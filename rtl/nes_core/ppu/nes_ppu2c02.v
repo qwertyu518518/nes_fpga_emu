@@ -567,7 +567,6 @@ always @* begin
 end
 
 wire [2047:0] sprite_oam_bus;
-wire [65535:0] sprite_chr_bus;
 wire [103:0] sprite_pat_addr_bus;
 wire [3:0] sprite_pixel;
 wire [3:0] sprite_priority;
@@ -578,6 +577,8 @@ wire       bg_opaque;
 wire [3:0] sprite_bg_input;
 wire       sprite_opaque;
 wire [7:0] sprite_palette_value;
+wire        chr_rb_cs;
+wire [7:0]  chr_rb_data;
 reg  [7:0] mixed_pixel_value;
 
 genvar flat_i;
@@ -592,34 +593,30 @@ endgenerate
 
 generate
     if (!EXTERNAL_CHR) begin : g_chr_internal
-        function [7:0] ppu_space_read;
-            input [13:0] address;
-            begin
-                if (address < 14'h2000)
-                    ppu_space_read = chr_ram[address[12:0]];
-                else if (address < 14'h3F00)
-                    ppu_space_read = nametable_ram[mirror_nametable(address[11:0])];
-                else
-                    ppu_space_read = palette_ram[palette_index_map(address[4:0])];
-            end
-        endfunction
-
         assign bg_pattern_low = chr_ram[bg_pattern_addr];
         assign bg_pattern_high = chr_ram[bg_pattern_addr + 13'd8];
 
-        for (flat_i = 0; flat_i < 8192; flat_i = flat_i + 1) begin : g_chr_flatten
-            assign sprite_chr_bus[flat_i * 8 +: 8] = chr_ram[flat_i];
+        wire [103:0] sprite_pat_cur_bus;
+        wire [127:0] sprite_chr_slots;
+
+        for (flat_i = 0; flat_i < 8; flat_i = flat_i + 1) begin : g_sprite_chr_slots
+            assign sprite_chr_slots[flat_i * 16 + 0 +: 8]
+                = chr_ram[sprite_pat_cur_bus[flat_i * 13 +: 13]];
+            assign sprite_chr_slots[flat_i * 16 + 8 +: 8]
+                = chr_ram[sprite_pat_cur_bus[flat_i * 13 +: 13] + 13'd8];
         end
 
         nes_ppu_sprite #(
-            .EXTERNAL_CHR(1'b0)
+            .EXTERNAL_CHR(1'b0),
+            .PER_SLOT_CHR(1'b1)
         ) u_sprite (
             .clk(clk),
             .reset(reset),
             .ce(ce),
             .oam(sprite_oam_bus),
-            .chr(sprite_chr_bus),
+            .chr(65536'd0),
             .chr_sh(16'h0000),
+            .chr_slots(sprite_chr_slots),
             .ctrl(control_reg),
             .mask(mask_reg),
             .scanline(scanline),
@@ -630,10 +627,11 @@ generate
             .sprite_priority(sprite_priority),
             .sprite0_hit(sprite0_hit_raw),
             .sprite_overflow(sprite_overflow_raw),
-            .pat_addr_o(sprite_pat_addr_bus)
+            .pat_addr_o(sprite_pat_addr_bus),
+            .pat_addr_cur_o(sprite_pat_cur_bus)
         );
 
-        always @(posedge clk or posedge reset) begin
+        always @(posedge clk) begin
             if (!reset) begin
                 if (reg_cs && reg_we && (reg_addr == 3'd7) && (v_addr < 15'h2000))
                     chr_ram[v_addr[12:0]] <= reg_din;
@@ -642,17 +640,13 @@ generate
 
         assign chr_waddr = 14'h0000;
 
-        always @(posedge clk or posedge reset) begin
-            if (!reset) begin
-                if (reg_cs && !reg_we && (reg_addr == 3'd7)) begin
-                    if (v_addr < 15'h3F00)
-                        read_buffer_reg <= ppu_space_read(v_addr[13:0]);
-                    else
-                        read_buffer_reg <= ppu_space_read(palette_underlay_address(v_addr));
-                    v_addr <= increment_v(v_addr);
-                end
-            end
-        end
+        wire [13:0] chr_rb_eff;
+        assign chr_rb_eff  = (v_addr < 15'h3F00) ? v_addr[13:0]
+                                                 : palette_underlay_address(v_addr);
+        assign chr_rb_cs   = !reset && reg_cs && !reg_we && (reg_addr == 3'd7);
+        assign chr_rb_data = (chr_rb_eff < 14'h2000) ? chr_ram[chr_rb_eff[12:0]]
+                            : (chr_rb_eff < 14'h3F00) ? nametable_ram[mirror_nametable(chr_rb_eff[11:0])]
+                                                      : palette_ram[palette_index_map(chr_rb_eff[4:0])];
     end else begin : g_chr_external
         function [7:0] ppu_space_read;
             input [13:0] address;
@@ -842,19 +836,10 @@ generate
                 chr_rd_armed_q <= 1'b1;
         end
 
-        always @(posedge clk or posedge reset) begin
-            if (!reset) begin
-                if (reg_cs && !reg_we && (reg_addr == 3'd7)) begin
-                    if (v_addr < 15'h2000)
-                        read_buffer_reg <= chr_rd_armed_q ? chr_rdata : 8'h00;
-                    else if (v_addr < 15'h3F00)
-                        read_buffer_reg <= ppu_space_read(v_addr[13:0]);
-                    else
-                        read_buffer_reg <= ppu_space_read(palette_underlay_address(v_addr));
-                    v_addr <= increment_v(v_addr);
-                end
-            end
-        end
+        assign chr_rb_cs   = !reset && reg_cs && !reg_we && (reg_addr == 3'd7);
+        assign chr_rb_data = (v_addr < 15'h2000) ? (chr_rd_armed_q ? chr_rdata : 8'h00)
+                            : (v_addr < 15'h3F00) ? ppu_space_read(v_addr[13:0])
+                                                  : ppu_space_read(palette_underlay_address(v_addr));
     end
 endgenerate
 
@@ -981,6 +966,11 @@ always @(posedge clk or posedge reset) begin
                 default: begin
                 end
             endcase
+        end
+
+        if (chr_rb_cs) begin
+            read_buffer_reg <= chr_rb_data;
+            v_addr <= increment_v(v_addr);
         end
 
         if (reg_cs && !reg_we && (reg_addr == 3'd3)) begin

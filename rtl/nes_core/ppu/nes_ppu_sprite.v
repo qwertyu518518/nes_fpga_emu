@@ -141,7 +141,8 @@
 //
 
 module nes_ppu_sprite #(
-    parameter EXTERNAL_CHR = 1'b0
+    parameter EXTERNAL_CHR = 1'b0,
+    parameter PER_SLOT_CHR = 1'b0
 )(
     input  wire           clk,
     input  wire           reset,
@@ -149,6 +150,7 @@ module nes_ppu_sprite #(
     input  wire [2047:0]  oam,
     input  wire [65535:0] chr,
     input  wire [15:0]    chr_sh,
+    input  wire [127:0]   chr_slots,
     input  wire [7:0]     ctrl,
     input  wire [7:0]     mask,
     input  wire [8:0]     scanline,
@@ -160,6 +162,7 @@ module nes_ppu_sprite #(
     output reg            sprite0_hit,
     output reg            sprite_overflow,
     output wire [103:0]   pat_addr_o,
+    output wire [103:0]   pat_addr_cur_o,
     output wire [3:0]     cur_slot_o
 );
 
@@ -305,9 +308,15 @@ module nes_ppu_sprite #(
             assign nl_fine = nl_attr[7] ? ({1'b0, sprite_height} - 10'd1 - nl_row) : nl_row;
             assign nl_pat_addr = {nl_table, nl_tile, 1'b0, nl_fine[2:0]};
             assign pat_addr_o[g*13 +: 13] = nl_pat_addr;
+            assign pat_addr_cur_o[g*13 +: 13] = s_pat_addr;
             if (!EXTERNAL_CHR) begin : g_chr_internal
-                assign s_plane_lo = chr[{s_pat_addr, 3'b000} +: 8];
-                assign s_plane_hi = chr[({s_pat_addr, 3'b000} + 13'd64) +: 8];
+                if (PER_SLOT_CHR) begin : g_chr_per_slot
+                    assign s_plane_lo = chr_slots[{SLOT_U8, 4'b0000} +: 8];
+                    assign s_plane_hi = chr_slots[{SLOT_U8, 4'b1000} +: 8];
+                end else begin : g_chr_flat
+                    assign s_plane_lo = chr[{s_pat_addr, 3'b000} +: 8];
+                    assign s_plane_hi = chr[({s_pat_addr, 3'b000} + 13'd64) +: 8];
+                end
             end else begin : g_chr_external
                 assign s_plane_lo = chr_sh[7:0];
                 assign s_plane_hi = chr_sh[15:8];
