@@ -252,6 +252,49 @@ wire [13:0] ppu_chr_addr;
 wire [13:0] ppu_chr_waddr;
 wire        ppu_chr_we;
 wire [7:0]  ppu_chr_wdata;
+wire        ppu_chr_rd_arm;
+
+// One $2007 CHR read is armed on the single clk whose pre-edge div_phase is
+// 8: the external CHR memory registers chr_rdata on every ce_ppu edge, so a
+// request presented on that clk is captured at edge 8 and is valid across
+// div_phase 0 -- which is exactly when the CPU latches bus_din.  cpu_bus_ready
+// is the "this access fires on the next ce_cpu beat" predicate, so exactly one
+// arm is raised per $2007 read: the PPU access costs two CPU cycles and is low
+// on its first, and READ_WAIT_CYCLES is 8'd1 here, so nes_cpu_bus.v:278 leaves
+// active high with wait_cnt at 0 on that first beat and ready_c high for the
+// whole div_phase 1..11 window that contains the arm.
+//
+// BUG BEING FIXED HERE, do not reintroduce it: this condition used to require
+// ppu_req, and ppu_req is structurally zero at div_phase 8.  ppu_req needs
+// cpu_req (nes_cpu_bus.v:238), cpu_req is u_cpu.bus_req, and nes_cpu6502.v:755
+// forces bus_req to 0 whenever cpu_active is 0, with cpu_active = ce && !bus_hold
+// (nes_cpu6502.v:215) and ce = ce_cpu = (div_phase == 4'd0).  ppu_req is
+// therefore high on the div_phase 0 clk ONLY, so ppu_req && (div_phase == 4'd8)
+// was a self-contradiction: the arm never fired and every $2007 CHR read
+// returned the fail-safe 8'h00.  Every term of this predicate must HOLD across
+// the eleven clk of the wait, and only these kinds do:
+//   sel_ppu and ppu_addr are pure functions of cpu_addr (nes_cpu_bus.v:124 is an
+//     ungated always @* and :189 is a bare slice of the same wire), and
+//     nes_cpu6502.v:755 clears only bus_req, never bus_addr or bus_we, so the
+//     cpu's address and its direction are unchanged from the first beat
+//     through the completing one.  sel_ppu is load bearing rather than
+//     decorative: ppu_addr is cpu_addr[2:0] on its own, so without it an APU-IO
+//     read of $4007 would decode as $2007 and put v_addr on the CHR bus.
+//   cpu_bus_ready is the ready described above, the "will fire" predicate.
+//   div_phase == 4'd8 is the one clk inside that window, so one access, one arm.
+// The read direction is !cpu_we, NOT !ppu_we: ppu_we is ppu_req && cpu_we
+// (nes_cpu_bus.v:239), so at div_phase 8 it is 0 for a read AND for a write and
+// would qualify nothing.  The write strobe chr_we needs reg_cs, which is
+// ppu_xfer and therefore ce-gated (nes_cpu_bus.v:240, nes_ppu2c02.v:814), so a
+// read arm is a div_phase 8 level and can neither ride the write strobe's
+// capture edge nor raise mapper_chr_ram_we.  mapper_ppu_addr needs no change --
+// the read address rides chr_addr.  v_addr is PPU state, so the CHR-half test
+// stays in the PPU: nes_ppu2c02.v:807 gates it on v_addr < $2000, so a nametable
+// or palette read does raise this arm but never takes the CHR address bus and
+// is answered from internal RAM.  Reset holds div_phase at 0 asynchronously,
+// so the arm is low throughout reset.
+assign ppu_chr_rd_arm = sel_ppu && !cpu_we && (ppu_addr == 3'd7) &&
+                         cpu_bus_ready && (div_phase == 4'd8);
 
 wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;
 wire mapper_ppu_we = ppu_chr_we;
@@ -491,6 +534,7 @@ nes_ppu2c02 #(
     .chr_addr(ppu_chr_addr),
     .chr_we(ppu_chr_we),
     .chr_wdata(ppu_chr_wdata),
+    .chr_rd_arm(ppu_chr_rd_arm),
     .chr_rdata(chr_rdata)
 );
 

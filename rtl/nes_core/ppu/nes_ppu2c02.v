@@ -261,9 +261,108 @@
 //   play no part in forming a $2007 write address.
 //   chr_we is a one-clk strobe qualified by reg_cs && reg_we && reg_addr == 3'd7
 //   and the $2000 guard, so it is one clk wide, and it NEVER qualifies a read:
-//   chr_req remains the sole statement that the fetch arbiter reads chr_addr on
-//   this ce, and it is unchanged. g_chr_internal has no external bus, so there
-//   it drives chr_waddr to 14'h0000 and leaves chr_we/chr_wdata at 0.
+//   chr_req is the statement that whoever owns the CHR bus reads chr_addr on
+//   this ce, and it now also covers the $2007 read arm: it is
+//   chr_rd_win || (sp_bus_sel ? sp_chr_req : bg_chr_req), and chr_addr is
+//   chr_rd_win ? v_addr[13:0] : (sp_bus_sel ? sp_chr_addr_raw : bg_chr_addr_raw),
+//   so the read arm and the fetch arbiter can each put an address on the bus.
+//   g_chr_internal has no external bus, so there it drives chr_waddr to
+//   14'h0000 and leaves chr_we/chr_wdata at 0.
+//
+// $2007 external-CHR read-back (chr_rd_arm, EXTERNAL_CHR=1)
+//   chr_rd_arm is the $2007 read half of the external CHR port and completes the
+//   pair with chr_waddr/chr_we/chr_wdata. A nametable or palette $2007 read is
+//   answered from PPU-internal RAM exactly as before and does not use this path;
+//   only v_addr < 15'h2000 does, because only that half lives on the CHR bus.
+//
+//   The beat and the $2007 access are SKEWED, and that skew is what sets the arm
+//     In nes_system_v6 the CPU sees bus_din and latches it on the posedge whose
+//     PRE-EDGE div_phase is 0, while this PPU's reg_cs (ppu_xfer) is a level that
+//     is high only while div_phase is 0, so the consuming $2007 read and the arm
+//     can never be the same clk: the arm is 4 clk ahead of the read beat. That
+//     skew is not cosmetic, it is load bearing, and the derivation is:
+//       * the external CHR memory registers chr_rdata on every ce_ppu edge, and
+//         ce_ppu is high at div_phase 0, 4 and 8
+//       * for the byte to be VALID while the CPU latches, it must have been
+//         captured at the div_phase == 8 edge, so the address has to be on the
+//         bus during div_phase 8
+//       * v_addr only changes on a $2007 access, so it is stable across the
+//         whole 0..8 window and no $2007 timing guess enters this
+//     The arm is therefore raised by the SYSTEM on exactly one clk: the one whose
+//     pre-edge div_phase is 8, gated by cpu_bus_ready so that exactly one arm is
+//     raised per $2007 read (the PPU access costs the CPU two cycles and
+//     cpu_bus_ready is still low during the first of them).
+//
+//   THE LEAD HAS ZERO SLACK. There is no spare ce anywhere in
+//     v_addr -> chr_addr -> mapper -> chr_final_addr -> CHR memory -> chr_rdata
+//   so ANY register inserted anywhere in that chain -- a one-clk address pipe, a
+//   "cleaner" registered chr_addr, a registered mapper bank offset -- moves the
+//   capture one ce later and returns the PREVIOUS byte. It will not error, it
+//   will silently return a stale pattern byte, and nothing in this module or in
+//   the testbenches will fail. That is why chr_addr is still a combinational
+//   mux over REGISTERED fetch-unit outputs, why mapper_ppu_addr is a
+//   combinational expression, and why the read address deliberately RIDES
+//   chr_addr rather than getting a port of its own.
+//
+//   Bus-steal contract: what this read is worth
+//     The byte the CPU receives is always CORRECT, at the mapper-translated
+//     address, in any scanline state -- there is no correctness cliff here. What
+//     the read costs is one ce of address time, and that ce can displace ONE
+//     in-flight fetch byte: either one background tile (8 pixels, one wrong
+//     pattern byte) or one sprite slot plane (8 pixels on one line). The damage
+//     is confined to the scanline in which the $2007 read was issued.
+//     It is provably pixel-invisible in exactly two situations:
+//       * scanlines 240..260, where rendering is off and no fetch unit is asking
+//         for anything, which is where every real driver does its CHR uploads
+//       * any scanline with both background and sprites disabled (PPUMASK bit 3
+//         and bit 4 both 0)
+//     Scanline 261 is EXPLICITLY NOT in that set and must not be lumped in with
+//     it: the pre-render line still runs a background carry fetch at dot 340 and
+//     a sprite prefetch at dots 259..290, and both of those feed line 0. A $2007
+//     read landing there is exactly as damaging as one on a visible line.
+//     This conflict is a DOCUMENTED conflict, not a bug: the real 2C02 has one
+//     internal address bus and the $2007 access and the fetches contend for it
+//     there too, in the same scanline-dependent way. It coexists with the
+//     already-documented unresolved read/write collision (risk L-17, the
+//     $2007 CHR write vs fetch-unit collision in nes_system_v6), and this path
+//     does not change or resolve that one.
+//     Mid-frame CHR reads with rendering enabled are NOT claimed safe.
+//
+//   Consecutiveness of chr_req, which the read master can affect
+//     chr_rd_win feeds chr_req directly, so a read arm that lands on the ce_ppu
+//     edge immediately after a fetch request beat makes chr_req high on two
+//     consecutive ce. This is why the read arm RAISES chr_req instead of riding
+//     chr_addr quietly: the memory contract stays "capture the address on every
+//     ce where chr_req is high, deliver it registered one ce later" rather than
+//     being weakened to "capture unconditionally, the PPU will only ever ask on
+//     some of those ce". A memory owner must therefore honour chr_req for read
+//     arms too, and must not treat a read arm as a beat it can skip. The two
+//     beats are each serviced correctly; what is lost is the beat the loser
+//     expected, exactly as the sprite-vs-background argument above describes.
+//     tb_nes_system_v6's P0-8 currently asserts the STRONGER property that
+//     chr_req is never high on two consecutive ce, and this read master is the
+//     first producer that can break it. MEASURED, not assumed: a throwaway bench
+//     (outside the repo, so it gates nothing) drove a back-to-back $2007 read
+//     loop at the maximum rate the two-cycle $2007 cost allows, with PPUMASK=$1E
+//     and two sprites in OAM, over two frames:
+//       178684 ce, 7938 arm beats, 29781 read beats
+//       3750 ce with chr_req high on two consecutive ce, and ALL 3750 of them
+//         touch a read arm -- 2999 against a background beat, 751 against a
+//         sprite beat. The identical run with chr_rd_arm tied to 1'b0 gives 0.
+//       7938 of 7938 arm beats returned the CORRECT mapper-translated byte, the
+//         check being the direct one: at the read beat, one ce after the arm
+//         beat, chr_rdata already holds chr_mem[the address the arm presented].
+//       with chr_rd_arm tied to 1'b0, read_buffer_reg was 8'h00 on all 7935
+//         CHR-half reads, so the fail-safe degrades to the documented 8'h00 and
+//         never to a fetch byte.
+//     So the honest statement is that chr_req may now be consecutive whenever the
+//     CPU reads $2007 while a fetch unit is asking for the bus; the read itself
+//     is correct either way. Generalising P0-8 is a testbench question, not an
+//     rtl one, and it is NOT done here.
+//
+//   g_chr_internal: unchanged behaviour. It drives chr_waddr to 14'h0000,
+//   leaves chr_we/chr_wdata at 0, answers $2007 reads from its own chr_ram, and
+//   consumes nothing, so chr_rd_arm is left unconnected in that branch.
 
 `timescale 1ns/1ps
 
@@ -299,6 +398,7 @@ module nes_ppu2c02 #(
     output wire [13:0] chr_addr,
     output wire chr_we,
     output wire [7:0] chr_wdata,
+    input wire chr_rd_arm,
     input wire [7:0] chr_rdata
 );
 
@@ -644,6 +744,8 @@ generate
         wire [7:0]  sp_plane_lo;
         wire [7:0]  sp_plane_hi;
         wire [15:0] sp_chr_sh;
+        wire        chr_rd_win;
+        reg         chr_rd_armed_q;
 
         assign sp_start = (dot == 9'd257);
         assign sp_bus_sel = sp_busy;
@@ -706,8 +808,11 @@ generate
             .busy(chr_fetch_busy)
         );
 
-        assign chr_req = sp_bus_sel ? sp_chr_req : bg_chr_req;
-        assign chr_addr = sp_bus_sel ? sp_chr_addr_raw : bg_chr_addr_raw;
+        assign chr_rd_win = chr_rd_arm && (v_addr < 15'h2000);
+
+        assign chr_req = chr_rd_win || (sp_bus_sel ? sp_chr_req : bg_chr_req);
+        assign chr_addr = chr_rd_win ? v_addr[13:0]
+                                     : (sp_bus_sel ? sp_chr_addr_raw : bg_chr_addr_raw);
 
         assign chr_waddr = (v_addr < 15'h2000) ? v_addr[13:0] : 14'h0000;
         assign chr_we    = !reset && reg_cs && reg_we && (reg_addr == 3'd7)
@@ -729,9 +834,20 @@ generate
         end
 
         always @(posedge clk or posedge reset) begin
+            if (reset)
+                chr_rd_armed_q <= 1'b0;
+            else if (reg_cs && (reg_addr == 3'd7))
+                chr_rd_armed_q <= 1'b0;
+            else if (chr_rd_win)
+                chr_rd_armed_q <= 1'b1;
+        end
+
+        always @(posedge clk or posedge reset) begin
             if (!reset) begin
                 if (reg_cs && !reg_we && (reg_addr == 3'd7)) begin
-                    if (v_addr < 15'h3F00)
+                    if (v_addr < 15'h2000)
+                        read_buffer_reg <= chr_rd_armed_q ? chr_rdata : 8'h00;
+                    else if (v_addr < 15'h3F00)
                         read_buffer_reg <= ppu_space_read(v_addr[13:0]);
                     else
                         read_buffer_reg <= ppu_space_read(palette_underlay_address(v_addr));

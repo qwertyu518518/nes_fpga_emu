@@ -338,7 +338,8 @@ nes_ppu2c02 #(
     .dbg_x(),
     .dbg_w(),
     .dbg_sprite0_hit(),
-    .dbg_sprite_overflow()
+    .dbg_sprite_overflow(),
+    .chr_rd_arm(1'b0)
 );
 
 nes_apu2a03 u_apu (

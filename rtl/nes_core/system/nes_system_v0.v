@@ -129,7 +129,8 @@ nes_ppu2c02 #(
     .dbg_v(),
     .dbg_t(),
     .dbg_x(),
-    .dbg_w()
+    .dbg_w(),
+    .chr_rd_arm(1'b0)
 );
 
 endmodule
