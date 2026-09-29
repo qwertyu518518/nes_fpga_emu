@@ -887,6 +887,104 @@ integer m_irq_ce_n;
 integer m_irq_seq_n;
 reg [6:0] m_irq_seq [0:7];
 
+// ---------------------------------------------- P1-11 tb-side mmc3 a12
+//
+// WHY THERE IS NO REAL A12.  The production ppu has no vrAM address bus, so
+// there is no a12 to hand the mapper: bg_pattern_addr is 13 bits wide with bit
+// 12 = PPUCTRL[4] and bit 11 a tile index bit, so no address carry ever reaches
+// bit 12, the bg_fetch_* nets only exist inside the g_chr_external branch, and
+// nes_system_v6 ties mapper_ppu_a12 to 1'b0.  That tie-off is CORRECT for this
+// board rather than a gap.  control_reg is $00, so real hardware drives the ppu
+// pattern address bit 12 low on every rendering line and clocks the mmc3
+// scanline counter ZERO times per frame.  A synthesized dot-derived a12 would
+// therefore report 241 where the hardware reports 0: a green test certifying
+// the wrong answer.  So a12 is injected from here, as pure stimulus, using the
+// nesdev canonical mmc3 case (one rising edge per RENDERING scanline, at ppu
+// dot 260).
+//
+// The three terms are the same three the canonical case is written from, plus
+// the rendering-line gate that "rendering" implies: scanlines 0..239 and the
+// pre-render line 261.  241 lines a frame.  Without that gate the dot counter
+// of this ppu free-runs through the 21 vblank lines as well, so the dot-only
+// expression would report 262 rises per frame and clock the counter 21 times
+// per frame that real hardware never clocks it.  a12_dotonly below measures
+// exactly that ungated expression so the difference is a printed number and
+// not an argument.
+//
+// All three inputs are REGISTERED (dot, scanline, mask_reg[3]), so the
+// expression is a pure AND of three clk-domain registers: it is glitch-free,
+// changes only in the delta right after a clk edge, and has no sub-clk pulse
+// for the filter to miss.  dot advances on ce_ppu, a 1-in-4 pulse, so the
+// window is 60 dots = 240 clk and the period is 341 dots = 1364 clk, giving
+// exactly one rise per 1364 clk.  MMC3_A12_COOLDOWN is 2, so accepted edges
+// have to be 3 clk apart; 1364 is 454x that margin, which the window measures
+// as a12_gap_min and the task prints.
+wire a12_model = chr_mmc3.u_ppu.mask_reg[3] &&
+                 ((chr_mmc3.u_ppu.scanline < 9'd240) ||
+                  (chr_mmc3.u_ppu.scanline == 9'd261)) &&
+                 (chr_mmc3.u_ppu.dot >= 9'd260) &&
+                 (chr_mmc3.u_ppu.dot <= 9'd319);
+wire a12_dotonly = chr_mmc3.u_ppu.mask_reg[3] &&
+                   (chr_mmc3.u_ppu.dot >= 9'd260) &&
+                   (chr_mmc3.u_ppu.dot <= 9'd319);
+reg  a12_win;
+reg [1:0] a12_phase;
+reg  a12_model_d;
+reg  a12_dotonly_d;
+reg  a12_filt_d;
+reg  a12_fd_d;
+reg  a12_snap_pend;
+reg  a12_hi_armed;
+reg  a12_irq_seen;
+reg  a12_early_armed;
+reg  a12_c0;
+reg  a12_in_reload;
+reg [7:0] a12_in_counter;
+integer a12_clk_n;
+integer a12_gap_min;
+integer a12_last_filt_clk;
+integer a12_edge_idx;
+integer a12_snap_idx;
+integer a12_snap_counter;
+integer a12_snap_reload;
+integer a12_snap_pending;
+integer a12_snap1_counter;
+reg     a12_snap1_reload;
+integer a12_snap1_pending;
+integer a12_snap2_idx;
+integer a12_seq_err;
+integer a12_rise;
+integer a12_rise_last;
+integer a12_dotonly_rise;
+integer a12_dotonly_rise_last;
+integer a12_filt;
+integer a12_filt_last;
+integer a12_hi_clk;
+integer a12_hi_clk_last;
+integer a12_hi_bad;
+integer a12_hi_lines;
+integer a12_hi_lines_last;
+integer a12_vb_hi;
+integer a12_vb_hi_last;
+integer a12_fd_n;
+integer a12_pending_hi;
+integer a12_mapper_hi;
+integer a12_mapper_base;
+integer a12_apu_hi;
+integer a12_net_hi;
+integer a12_cart_wr;
+integer a12_early_hi_err;
+integer a12_idx_at_irq;
+integer a12_handler_clk;
+integer a12_edge_at_enable;
+integer a12_line_hi_2b;
+integer a12_entry_at_enable;
+integer a12_vec_at_enable;
+integer a12_cell_at_enable;
+integer a12_cell_at_entry;
+integer a12_drain_entry_n;
+integer a12_counter_at_enable;
+
 wire ab_bg_chr_req = ab_v6.u_ppu.g_chr_external.u_chr_fetch.chr_req;
 wire ab_sp_chr_req = ab_v6.u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req;
 wire m_bg_chr_req = chr_mmc3.u_ppu.g_chr_external.u_chr_fetch.chr_req;
@@ -3903,6 +4001,162 @@ always @(posedge clk) begin
     end
 end
 
+// ------------------------------------------------- P1-11 a12 window monitor
+//
+// Every branch that counts or checks anything is inside a12_win, which is 1
+// only for the duration of check_p1_11's force window.  Outside it the block
+// does nothing but keep the four edge detectors in step, so nothing here can
+// fire while the port is not forced and nothing carries stale state into the
+// window.  No $fatal lives in here: this block only accumulates, and the task
+// reads the totals once its own waits are done.
+always @(posedge clk) begin
+    if (a12_win !== 1'b1) begin
+        a12_model_d = a12_model;
+        a12_dotonly_d = a12_dotonly;
+        a12_filt_d = chr_mmc3.u_mapper.mmc3_a12_filtered;
+        a12_fd_d = chr_mmc3.u_ppu.frame_done;
+    end else begin
+        a12_clk_n = a12_clk_n + 1;
+
+        // ---- the register state ONE CLK AFTER an accepted edge ----------
+        // a12_filtered is high for exactly the clk between the sampling of
+        // ppu_a12 and the next one, so the counter has already been written
+        // by the time the next posedge reads it back.
+        if (a12_snap_pend !== 1'b0) begin
+            a12_snap_pend = 1'b0;
+            a12_snap_idx = a12_edge_idx;
+            a12_snap_counter = chr_mmc3.u_mapper.mmc3_irq_counter;
+            a12_snap_reload = chr_mmc3.u_mapper.mmc3_irq_reload;
+            a12_snap_pending = chr_mmc3.u_mapper.mmc3_irq_pending;
+            if (a12_snap_idx == 1) begin
+                a12_snap1_counter = a12_snap_counter;
+                a12_snap1_reload = a12_snap_reload;
+                a12_snap1_pending = a12_snap_pending;
+            end
+            // $C001 reload makes the first value the latch; from there the
+            // counter is 7,6,5,4,3,2,1,0,7,... with latch 7.  A wrong reload or
+            // a wrong decrement shows up here as a sequence error, not as a
+            // single sampled value.
+            if (a12_snap_counter !== (MMC3_IRQ_LATCH_VALUE -
+                                      ((a12_edge_idx - 1) % 8)))
+                a12_seq_err = a12_seq_err + 1;
+        end
+
+        // ---- accepted edges --------------------------------------------
+        // mmc3_a12_filtered is a combinational one-clk pulse, so this change
+        // detect has to live inside a posedge block to see it at all.
+        if (chr_mmc3.u_mapper.mmc3_a12_filtered !== a12_filt_d) begin
+            if (chr_mmc3.u_mapper.mmc3_a12_filtered === 1'b1) begin
+                a12_filt = a12_filt + 1;
+                a12_snap_pend = 1'b1;
+                if (a12_last_filt_clk != 0) begin
+                    if ((a12_gap_min == 0) ||
+                        ((a12_clk_n - a12_last_filt_clk) < a12_gap_min))
+                        a12_gap_min = a12_clk_n - a12_last_filt_clk;
+                end
+                a12_last_filt_clk = a12_clk_n;
+            end
+            a12_filt_d = chr_mmc3.u_mapper.mmc3_a12_filtered;
+        end
+
+        // ---- the testbench's own model ----------------------------------
+        // A rise is the dot 259 -> 260 transition, a fall is dot 319 -> 320.
+        // The high window is credited only for lines whose RISE was observed
+        // inside the window, so a window that opens mid-line cannot invent a
+        // short window.
+        if (a12_model !== a12_model_d) begin
+            if (a12_model === 1'b1) begin
+                a12_rise = a12_rise + 1;
+                a12_edge_idx = a12_edge_idx + 1;
+                a12_hi_clk = 0;
+                a12_hi_armed = 1'b1;
+            end else begin
+                if (a12_hi_armed !== 1'b0) begin
+                    if (a12_hi_clk != 240)
+                        a12_hi_bad = a12_hi_bad + 1;
+                    a12_hi_clk_last = a12_hi_clk;
+                    a12_hi_lines = a12_hi_lines + 1;
+                    a12_hi_armed = 1'b0;
+                end
+                a12_hi_clk = 0;
+            end
+            a12_model_d = a12_model;
+        end
+        if ((a12_model === 1'b1) && (a12_hi_armed !== 1'b0))
+            a12_hi_clk = a12_hi_clk + 1;
+        if ((a12_model === 1'b1) &&
+            (chr_mmc3.u_ppu.scanline >= 9'd240) &&
+            (chr_mmc3.u_ppu.scanline <= 9'd260))
+            a12_vb_hi = a12_vb_hi + 1;
+
+        if (a12_dotonly !== a12_dotonly_d) begin
+            if (a12_dotonly === 1'b1)
+                a12_dotonly_rise = a12_dotonly_rise + 1;
+            a12_dotonly_d = a12_dotonly;
+        end
+
+        // ---- per-frame rate, measured between two frame_done edges ------
+        // The window opens mid-frame, so the FIRST frame_done closes a partial
+        // frame and the task reads the second one.
+        if (chr_mmc3.u_ppu.frame_done !== a12_fd_d) begin
+            if (chr_mmc3.u_ppu.frame_done === 1'b1) begin
+                a12_fd_n = a12_fd_n + 1;
+                a12_rise_last = a12_rise;
+                a12_dotonly_rise_last = a12_dotonly_rise;
+                a12_filt_last = a12_filt;
+                a12_hi_lines_last = a12_hi_lines;
+                a12_vb_hi_last = a12_vb_hi;
+                a12_rise = 0;
+                a12_dotonly_rise = 0;
+                a12_filt = 0;
+                a12_hi_lines = 0;
+                a12_vb_hi = 0;
+            end
+            a12_fd_d = chr_mmc3.u_ppu.frame_done;
+        end
+
+        // ---- phase 2b line attribution ----------------------------------
+        // irq_pending_r is a rtl register here, so mapper_irq rises in the
+        // delta right after the edge that set it, and a12_edge_idx still holds
+        // that edge's index.  The index and the line-high count are LATCHED at
+        // the transition: a12_edge_idx keeps running, so a continuously
+        // updated copy would report the edge index of whenever the task next
+        // looked, not the edge that raised the line.
+        if (a12_irq_seen !== 1'b1) begin
+            if (m_mapper_irq === 1'b1) begin
+                a12_irq_seen = 1'b1;
+                a12_idx_at_irq = a12_edge_idx;
+            end
+        end
+        if (a12_early_armed !== 1'b0) begin
+            if ((a12_irq_seen !== 1'b1) && (m_irq_line !== 1'b0))
+                a12_early_hi_err = a12_early_hi_err + 1;
+            if (m_irq_line !== 1'b0)
+                a12_line_hi_2b = a12_line_hi_2b + 1;
+        end
+        // The counter is at its reload point, 0, for one whole edge period out
+        // of every eight.  Arming the enable there is what makes "exactly 8
+        // accepted edges later" a true statement instead of an arbitrary one:
+        // from 0 the walk is reload-to-7 on the first edge and then 6,5,4,3,
+        // 2,1,0, so irq_counter_next == 0 lands on the eighth.  From any other
+        // value the rtl needs exactly that many edges, which is why the
+        // second assertion below is the phase-free form of the same claim.
+        if (chr_mmc3.u_mapper.mmc3_irq_counter === 8'h00)
+            a12_c0 = 1'b1;
+        if ((a12_phase == 2'd2) &&
+            (chr_mmc3.u_cpu.dbg_pc == IRQ_HANDLER))
+            a12_handler_clk = a12_handler_clk + 1;
+        if (m_apu_irq_o === 1'b1)
+            a12_apu_hi = a12_apu_hi + 1;
+        if (m_mapper_irq === 1'b1)
+            a12_mapper_hi = a12_mapper_hi + 1;
+        if (chr_mmc3.mapper_ppu_a12 === 1'b1)
+            a12_net_hi = a12_net_hi + 1;
+        if (m_mapper_write_pulse !== 1'b0)
+            a12_cart_wr = a12_cart_wr + 1;
+    end
+end
+
 // ------------------------------------------------------------ check tasks
 
 task check_p0_1;
@@ -4489,6 +4743,372 @@ task check_w2_mmc3_chr_write;
     end
 endtask
 
+// =====================================================================
+// P1-11 MMC3 SCANLINE IRQ OFF A REAL, SELF-CLOCKING A12
+//
+// P1-5 proves the counter does NOT move, by forcing irq_pending_r.  That
+// leaves the interesting half of the mmc3 untested: nothing had ever driven
+// ppu_a12, so no edge had ever been filtered, no edge had ever reloaded the
+// counter from the latch, and irq_pending_r had never been PRODUCED by the rtl.
+// This task supplies the missing stimulus instead of the missing result.
+//
+// It is called as the last statement of check_p1_5, so the latch is already
+// programmed, the handler, the $FFFE vector, the idle self loop and the whole
+// cpu entry accounting are already in place.  It is not a gate target: it
+// lives inside the existing system-v6 run.
+//
+// A12 IS FORCED AT ONE PLACE ONLY, on the production net itself:
+// chr_mmc3.mapper_ppu_a12, the very object nes_system_v6 hardwires low.  A
+// smoke test on iverilog 12.0 confirmed that force on that net does arrive at
+// the object the rtl samples, chr_mmc3.u_mapper.u_mmc3.ppu_a12, and that both
+// read 0 again after the release, so the two assertions below are the
+// net and the port the rtl actually sees.  irq_pending_r IS NEVER FORCED HERE.
+// Only irq_enabled_r is, in 2b, and it is the enable bit alone.  irq_pending_r
+// is left to the rtl to set out of irq_counter_next == 0.
+// =====================================================================
+
+task check_p1_11;
+    integer guard;
+    integer entries_now;
+    integer cell_now;
+    begin
+        // ---------------------------------------------------------- entry
+        // $C001 wrote reload and nothing has clocked it away yet.
+        if (chr_mmc3.u_mapper.mmc3_irq_reload !== 1'b1)
+            $fatal(1, "P1-11 on entry the mmc3 reload flag is %b, $C001 is supposed to still be armed",
+                   chr_mmc3.u_mapper.mmc3_irq_reload);
+        if (chr_mmc3.u_mapper.mmc3_irq_counter !== 8'h00)
+            $fatal(1, "P1-11 on entry the mmc3 counter is %02h, no a12 edge has been driven yet",
+                   chr_mmc3.u_mapper.mmc3_irq_counter);
+        if (chr_mmc3.u_mapper.mmc3_irq_enabled !== 1'b0)
+            $fatal(1, "P1-11 on entry the mmc3 irq is enabled, 2a has to start with it off");
+        if (chr_mmc3.u_ppu.mask_reg[3] !== 1'b1)
+            $fatal(1, "P1-11 the ppu bg enable (PPUMASK bit 3) is %b, the a12 model would be dead",
+                   chr_mmc3.u_ppu.mask_reg[3]);
+        a12_in_reload = chr_mmc3.u_mapper.mmc3_irq_reload;
+        a12_in_counter = chr_mmc3.u_mapper.mmc3_irq_counter;
+
+        a12_win = 1'b0;
+        a12_phase = 2'd1;
+        a12_model_d = a12_model;
+        a12_dotonly_d = a12_dotonly;
+        a12_filt_d = chr_mmc3.u_mapper.mmc3_a12_filtered;
+        a12_fd_d = chr_mmc3.u_ppu.frame_done;
+        a12_snap_pend = 1'b0;
+        a12_hi_armed = 1'b0;
+        a12_irq_seen = 1'b0;
+        a12_early_armed = 1'b0;
+        a12_clk_n = 0;
+        a12_gap_min = 0;
+        a12_last_filt_clk = 0;
+        a12_edge_idx = 0;
+        a12_snap_idx = 0;
+        a12_snap_counter = -1;
+        a12_snap_reload = -1;
+        a12_snap_pending = -1;
+        a12_snap1_counter = -1;
+        a12_snap1_reload = -1;
+        a12_snap1_pending = -1;
+        a12_snap2_idx = 0;
+        a12_seq_err = 0;
+        a12_rise = 0;
+        a12_rise_last = -1;
+        a12_dotonly_rise = 0;
+        a12_dotonly_rise_last = -1;
+        a12_filt = 0;
+        a12_filt_last = -1;
+        a12_hi_clk = 0;
+        a12_hi_clk_last = -1;
+        a12_hi_bad = 0;
+        a12_hi_lines = 0;
+        a12_hi_lines_last = -1;
+        a12_vb_hi = 0;
+        a12_vb_hi_last = -1;
+        a12_fd_n = 0;
+        a12_pending_hi = 0;
+        a12_mapper_hi = 0;
+        a12_mapper_base = 0;
+        a12_apu_hi = 0;
+        a12_net_hi = 0;
+        a12_cart_wr = 0;
+        a12_early_hi_err = 0;
+        a12_idx_at_irq = 0;
+        a12_handler_clk = 0;
+        a12_edge_at_enable = 0;
+        a12_line_hi_2b = 0;
+        a12_entry_at_enable = 0;
+        a12_vec_at_enable = 0;
+        a12_cell_at_enable = 0;
+        a12_cell_at_entry = 0;
+        a12_drain_entry_n = 0;
+
+        // ------------------------------------------- PHASE 2a + RATE CHECK
+        // The force is the only stimulus.  Nothing else in the run changes.
+        #1;
+        force chr_mmc3.mapper_ppu_a12 = a12_model;
+        #1;
+        if (chr_mmc3.mapper_ppu_a12 !== a12_model)
+            $fatal(1, "P1-11 the force did not land on chr_mmc3.mapper_ppu_a12");
+        if (chr_mmc3.u_mapper.u_mmc3.ppu_a12 !== a12_model)
+            $fatal(1, "P1-11 the forced a12 did not arrive at the mmc3 ppu_a12 port the rtl samples");
+        a12_win = 1'b1;
+        #1;
+
+        // two frame_done edges: the first closes the partial frame the window
+        // opened into, the second closes one whole frame of 241 rises.  A frame
+        // is 341*262*4 = 357368 clk, so the worst case is just over two of
+        // them from an arbitrary open.
+        guard = 0;
+        while ((a12_fd_n < 2) && (guard < 800000)) begin
+            @(posedge clk);
+            guard = guard + 1;
+        end
+        #1;
+        if (a12_fd_n < 2)
+            $fatal(1, "P1-11 only %0d frame_done edges arrived in the %0d clk of the a12 window",
+                   a12_fd_n, guard);
+
+        if (a12_rise_last != 241)
+            $fatal(1, "P1-11 the tb a12 model rose %0d times in one whole frame, the nesdev canonical mmc3 case is 241 (scanlines 0..239 plus the pre-render line 261)",
+                   a12_rise_last);
+        if (a12_filt_last != a12_rise_last)
+            $fatal(1, "P1-11 the mmc3 filter accepted %0d edges for %0d model rises in one whole frame",
+                   a12_filt_last, a12_rise_last);
+        if (a12_gap_min < 3)
+            $fatal(1, "P1-11 the closest two accepted edges were %0d clk apart, MMC3_A12_COOLDOWN is 2 so the filter needs 3", a12_gap_min);
+        if (a12_hi_lines_last != 241)
+            $fatal(1, "P1-11 the a12 model held a full 60-dot window on %0d lines in one whole frame, expected 241",
+                   a12_hi_lines_last);
+        if (a12_vb_hi_last != 0)
+            $fatal(1, "P1-11 the a12 model was high on %0d clk inside scanlines 240..260, ppuctrl is $00 so the counter must not clock in vblank",
+                   a12_vb_hi_last);
+        if (a12_hi_bad != 0)
+            $fatal(1, "P1-11 %0d a12 model high windows were not exactly 240 clk (60 dots at 4 clk per dot) long",
+                   a12_hi_bad);
+        if (a12_hi_clk_last != 240)
+            $fatal(1, "P1-11 the last a12 model high window was %0d clk, expected 240",
+                   a12_hi_clk_last);
+        if (a12_edge_idx < 241)
+            $fatal(1, "P1-11 only %0d model rises were seen in the window", a12_edge_idx);
+        if (a12_snap1_counter != MMC3_IRQ_LATCH_VALUE)
+            $fatal(1, "P1-11 one clk after the FIRST accepted edge the counter is %0d, the $C001 reload has to load the %02h latch on that same clk",
+                   a12_snap1_counter, MMC3_IRQ_LATCH_VALUE);
+        if (a12_snap1_reload !== 1'b0)
+            $fatal(1, "P1-11 reload is still %b one clk after the first accepted edge, it is only cleared inside the a12_filtered block",
+                   a12_snap1_reload);
+        if (a12_snap1_pending !== 1'b0)
+            $fatal(1, "P1-11 irq_pending is %b one clk after the first accepted edge with the irq disabled",
+                   a12_snap1_pending);
+        if (a12_seq_err != 0)
+            $fatal(1, "P1-11 the counter did not walk 7,6,5,4,3,2,1,0 across the accepted edges on %0d of them",
+                   a12_seq_err);
+        if (a12_pending_hi != 0)
+            $fatal(1, "P1-11 irq_pending was high on %0d clk of phase 2a with the irq DISABLED, the rtl must not set it there",
+                   a12_pending_hi);
+        if (a12_mapper_hi != 0)
+            $fatal(1, "P1-11 mapper_irq was high on %0d clk of phase 2a with the counter running and the irq DISABLED",
+                   a12_mapper_hi);
+        if (a12_apu_hi != 0)
+            $fatal(1, "P1-11 the apu irq line was high on %0d clk inside the window, irq_line would not be attributable to the mapper",
+                   a12_apu_hi);
+        if (a12_cart_wr != 0)
+            $fatal(1, "P1-11 the mmc3 cpu issued %0d cart writes inside the a12 window, it is supposed to stay in its idle self loop",
+                   a12_cart_wr);
+        $display("P1-11 A12-PHASE-2A the tb ppu-dot a12 model was forced onto chr_mmc3.mapper_ppu_a12, the very net nes_system_v6 hardwires low, and it arrived at chr_mmc3.u_mapper.u_mmc3.ppu_a12, the port nes_mapper_mmc3 samples on posedge clk.  The mmc3 then self-clocked OFF REAL RTL with the irq still DISABLED: on entry reload=%b and counter=%02h, so $C001's reload was still armed when the first edge arrived, and on that same clk the counter became %0d and reload fell to %b.  Over %0d accepted edges the counter walked 7,6,5,4,3,2,1,0 with %0d sequence errors, irq_pending stayed 0 on all of it (%0d clk high) and mapper_irq stayed 0 on all of it (%0d clk high) PASS",
+                 a12_in_reload, a12_in_counter, a12_snap1_counter,
+                 a12_snap1_reload, a12_edge_idx, a12_seq_err, a12_pending_hi,
+                 a12_mapper_hi);
+        $display("P1-11 A12-RATE counted per chr_mmc3.u_ppu.frame_done: the model rose %0d times in one whole frame (241 = scanlines 0..239 plus the pre-render line 261, one rise each at the dot 259->260 transition), mmc3_a12_filtered accepted %0d of them so nothing was lost and nothing was invented, the smallest gap between two accepted edges was %0d clk against the %0d clk MMC3_A12_COOLDOWN needs so the filter never rejected anything, the high window was exactly 60 dots = %0d clk on all %0d lines, and the model was high on %0d clk across the 21 vblank lines.  FOR THE RECORD the ungated dot-only expression (mask_reg[3] && dot 260..319, no rendering-line term) rose %0d times in the same frame on this ppu, whose dot counter free-runs through vblank: that is the 262-versus-241 gap the rendering-line gate closes, and the real hardware clocks the counter 0 times a frame here because PPUCTRL is $00 PASS",
+                 a12_rise_last, a12_filt_last, a12_gap_min, 3, a12_hi_clk_last,
+                 a12_hi_lines_last, a12_vb_hi_last, a12_dotonly_rise_last);
+
+        // -------------------------------------------------------- PHASE 2b
+        a12_phase = 2'd2;
+        a12_irq_seen = 1'b0;
+        a12_early_armed = 1'b0;
+        a12_c0 = 1'b0;
+        a12_early_hi_err = 0;
+        a12_idx_at_irq = 0;
+        a12_handler_clk = 0;
+        a12_line_hi_2b = 0;
+        a12_mapper_base = a12_mapper_hi;
+        a12_entry_at_enable = m_irq_entries;
+        a12_vec_at_enable = m_irq_vec_fetch;
+        a12_cell_at_enable = chr_mmc3.u_bus.ram_array[11'h013];
+        a12_cell_at_entry = 0;
+        a12_counter_at_enable = 0;
+
+        // The counter has been free-running through phase 2a, so it sits at an
+        // arbitrary point of its 8-edge cycle when 2b starts and "8 edges
+        // later" is only true from the reload point.  Arming the enable there
+        // makes the claim exact and measures the whole reload-then-decrement
+        // walk in one shot.  The counter sits there for a full 1364 clk edge
+        // period, so there is no race between seeing it and forcing.
+        guard = 0;
+        while ((a12_c0 !== 1'b1) && (guard < 20000)) begin
+            @(posedge clk);
+            guard = guard + 1;
+        end
+        #1;
+        if (a12_c0 !== 1'b1)
+            $fatal(1, "P1-11 the mmc3 counter never came back to its reload point 00 in %0d clk, it is supposed to reload every 8 accepted edges",
+                   guard);
+        a12_counter_at_enable = chr_mmc3.u_mapper.mmc3_irq_counter;
+        a12_edge_at_enable = a12_edge_idx;
+        if (a12_counter_at_enable != 0)
+            $fatal(1, "P1-11 the counter is %0d at the enable, phase 2b arms the enable on the reload point 00",
+                   a12_counter_at_enable);
+
+        // THE ONLY BIT FORCED IN 2b.  irq_pending_r is deliberately left alone
+        // so the rtl has to produce it out of irq_counter_next == 0.
+        force chr_mmc3.u_mapper.u_mmc3.irq_enabled_r = 1'b1;
+        a12_early_armed = 1'b1;
+        #1;
+        if (chr_mmc3.u_mapper.mmc3_irq_pending !== 1'b0)
+            $fatal(1, "P1-11 irq_pending was already 1 when the irq got enabled, phase 2a was supposed to leave it at 0");
+        if (m_mapper_irq !== 1'b0)
+            $fatal(1, "P1-11 mapper_irq rose the instant the enable was forced, irq is irq_enabled_r && irq_pending_r so it has to wait for the counter to reach 0");
+
+        guard = 0;
+        while ((a12_irq_seen !== 1'b1) && (guard < 40000)) begin
+            @(posedge clk);
+            guard = guard + 1;
+        end
+        #1;
+        if (a12_irq_seen !== 1'b1)
+            $fatal(1, "P1-11 mapper_irq never went high within %0d clk of enabling the irq", guard);
+        if (a12_idx_at_irq != (a12_edge_at_enable + 8))
+            $fatal(1, "P1-11 mapper_irq first went high on accepted edge %0d, latch %02h armed on the counter's reload point 00 has to take exactly 8 (reload to 7, then 6,5,4,3,2,1,0) after the edge index %0d recorded at the enable",
+                   a12_idx_at_irq, MMC3_IRQ_LATCH_VALUE, a12_edge_at_enable);
+        // the same measurement stated without the phase pin: from a counter of
+        // c the rtl needs exactly c accepted edges to reach 0, and 8 when c is
+        // the reload point, so the two claims agree and neither alone would
+        // catch a single-edge slip.
+        if ((a12_idx_at_irq - a12_edge_at_enable) !=
+            ((a12_counter_at_enable == 0) ? 8 : a12_counter_at_enable))
+            $fatal(1, "P1-11 mapper_irq took %0d accepted edges from a counter of %0d, the next-value walk needs exactly that many",
+                   a12_idx_at_irq - a12_edge_at_enable, a12_counter_at_enable);
+        if (a12_early_hi_err != 0)
+            $fatal(1, "P1-11 irq_line was already high on %0d clk before the 8th accepted edge after the enable, so m_irq_high moved before the line did",
+                   a12_early_hi_err);
+
+        // ram[0013] is latched at the FIRST entry, not at the end: with the
+        // line high the cpu re-enters continuously and the cell wraps through
+        // zero, so an end-of-task != 0 read would prove nothing.
+        a12_cell_at_entry = chr_mmc3.u_bus.ram_array[11'h013];
+        if (a12_cell_at_entry !== a12_cell_at_enable)
+            $fatal(1, "P1-11 ram[0013] was %02x at the first irq entry but %02x at the enable, something ran the handler before the first entry",
+                   a12_cell_at_entry, a12_cell_at_enable);
+
+        repeat (600) @(posedge clk);
+        #1;
+        entries_now = m_irq_entries - a12_entry_at_enable;
+        cell_now = chr_mmc3.u_bus.ram_array[11'h013];
+        if (entries_now < 1)
+            $fatal(1, "P1-11 the cpu took no irq entry at all in the %0d clk after the enable", 600);
+        if (m_irq_vec_fetch <= a12_vec_at_enable)
+            $fatal(1, "P1-11 the cpu never fetched the irq vector from fffe after the enable");
+        if (a12_handler_clk < 1)
+            $fatal(1, "P1-11 the cpu pc never sat at the irq handler %04h after the enable", IRQ_HANDLER);
+        if (m_irq_line_err != 0)
+            $fatal(1, "P1-11 irq_line != (mapper_irq|apu_irq) on %0d clk", m_irq_line_err);
+        if (m_irq_pending_err != 0)
+            $fatal(1, "P1-11 dbg_irq_pending != irq_line on %0d clk", m_irq_pending_err);
+        if (m_irq_entry_bad != 0)
+            $fatal(1, "P1-11 %0d irq entries were not 7 bus-fire cycles long, offending entry was %0d ce with the state list %0d %0d %0d %0d %0d %0d %0d %0d",
+                   m_irq_entry_bad, m_bad_ce_n,
+                   m_bad_seq[0], m_bad_seq[1], m_bad_seq[2], m_bad_seq[3],
+                   m_bad_seq[4], m_bad_seq[5], m_bad_seq[6], m_bad_seq[7]);
+        if (m_irq_entry_stall != 0)
+            $fatal(1, "P1-11 %0d irq sequences stalled instead of completing", m_irq_entry_stall);
+        if (m_irq_seq_bad != 0)
+            $fatal(1, "P1-11 %0d irq entries ran a state list other than fetch,dummy,push-hi,push-lo,push-p,vec-lo,vec-hi",
+                   m_irq_seq_bad);
+        if (m_irq_masked != 0)
+            $fatal(1, "P1-11 the cpu took %0d irq entries with the i flag set", m_irq_masked);
+        if (cell_now === a12_cell_at_entry)
+            $fatal(1, "P1-11 ram[0013] is still %02x after %0d irq entries, the handler at %04h never ran",
+                   cell_now, entries_now, IRQ_HANDLER);
+        if (a12_apu_hi != 0)
+            $fatal(1, "P1-11 the apu irq line was high on %0d clk of phase 2b, irq_line would not be attributable to the mapper",
+                   a12_apu_hi);
+        $display("P1-11 A12-PHASE-2B ONLY irq_enabled_r was forced to 1; irq_pending_r was never forced and had to be produced by the rtl out of irq_counter_next == 0.  The enable was armed while the counter sat on its reload point %0d, so the whole canonical 8-edge walk (reload to %02h, then 6,5,4,3,2,1,0) sits between the enable and the assertion.  mapper_irq stayed low for the first %0d accepted edges after the enable and irq_line was high on %0d clk before the line out of the %0d clk it was high in for phase 2b, so m_irq_high could not have moved first, then the line went high on accepted edge %0d, which is exactly 8 after the edge index %0d recorded at the enable and exactly what the counter's own next-value walk owes.  The whole existing machinery then carried it: irq_line == (mapper_irq|apu_irq) on every clk (%0d err), dbg_irq_pending == irq_line (%0d err), %0d entries of exactly 7 bus-fire cycles (min=%0d max=%0d, %0d not-7, %0d wrong state lists, %0d stalled, %0d taken with the i flag set), fffe fetched %0d times, the pc sat at the handler %04h on %0d clk, and ram[0013] moved %02x -> %02x over %0d entries (latched at the FIRST entry, not at the end) PASS",
+                 a12_counter_at_enable, MMC3_IRQ_LATCH_VALUE,
+                 a12_idx_at_irq - a12_edge_at_enable, a12_early_hi_err,
+                 a12_line_hi_2b,
+                 a12_idx_at_irq, a12_edge_at_enable,
+                 m_irq_line_err,
+                 m_irq_pending_err, entries_now, m_irq_entry_min,
+                 m_irq_entry_max, m_irq_entry_bad, m_irq_seq_bad,
+                 m_irq_entry_stall, m_irq_masked,
+                 m_irq_vec_fetch - a12_vec_at_enable, IRQ_HANDLER,
+                 a12_handler_clk, a12_cell_at_entry[7:0],
+                 chr_mmc3.u_bus.ram_array[11'h013], entries_now);
+
+        // -------------------------------------------------------- PHASE 2c
+        a12_phase = 2'd3;
+        a12_early_armed = 1'b0;
+        // force-to-0 BEFORE release, the v5 idiom, so the fall is caused by the
+        // AND at irq = irq_enabled_r && irq_pending_r and not by the rtl
+        // re-deciding the value.
+        force chr_mmc3.u_mapper.u_mmc3.irq_enabled_r = 1'b0;
+        #1;
+        if (chr_mmc3.u_mapper.mmc3_irq_pending !== 1'b1)
+            $fatal(1, "P1-11 irq_pending is %b with the counter at 0 and the irq just disabled, the rtl is supposed to be holding it set",
+                   chr_mmc3.u_mapper.mmc3_irq_pending);
+        if (m_mapper_irq !== 1'b0)
+            $fatal(1, "P1-11 mapper_irq stayed high with irq_pending=1 and irq_enabled_r forced to 0, so irq is not enabled && pending");
+        if (m_irq_line !== 1'b0)
+            $fatal(1, "P1-11 irq_line stayed high with the mapper irq driven low and the apu irq low");
+        release chr_mmc3.u_mapper.u_mmc3.irq_enabled_r;
+        release chr_mmc3.mapper_ppu_a12;
+
+        // BOTH sides of the tie-off, re-proved on the far side of the window.
+        #1;
+        if (chr_mmc3.mapper_ppu_a12 !== 1'b0)
+            $fatal(1, "P1-11 mapper_ppu_a12 is %b after the release, nes_system_v6 is supposed to tie it low",
+                   chr_mmc3.mapper_ppu_a12);
+        if (chr_mmc3.u_mapper.u_mmc3.ppu_a12 !== 1'b0)
+            $fatal(1, "P1-11 the mmc3 a12 input is %b after the release, it is supposed to be tied low",
+                   chr_mmc3.u_mapper.u_mmc3.ppu_a12);
+
+        // the monitor keeps running (a12_win is still 1, a12_phase is 0 so it
+        // only tracks edges) so the "no edge, no filter" claim is measured.
+        a12_phase = 2'd0;
+        a12_snap2_idx = a12_snap_idx;
+        a12_drain_entry_n = m_irq_entries;
+        a12_mapper_base = a12_mapper_hi;
+        repeat (400) @(posedge clk);
+        #1;
+        if (a12_snap_idx != a12_snap2_idx)
+            $fatal(1, "P1-11 the mmc3 a12 filter fired %0d more times in the 400 clk after the release, with ppu_a12 back at its production tie-off",
+                   a12_snap_idx - a12_snap2_idx);
+        if (a12_edge_idx != a12_snap2_idx)
+            $fatal(1, "P1-11 the model rose %0d more times after the release without reaching the port",
+                   a12_edge_idx - a12_snap2_idx);
+        if (m_mapper_irq !== 1'b0)
+            $fatal(1, "P1-11 mapper_irq is high again after the release");
+        if (m_irq_line !== 1'b0)
+            $fatal(1, "P1-11 irq_line is high again after the release");
+        if (a12_mapper_hi != a12_mapper_base)
+            $fatal(1, "P1-11 mapper_irq was high on %0d more clk in the 400 clk after the mapper irq was disabled",
+                   a12_mapper_hi - a12_mapper_base);
+        if (m_irq_entries != a12_drain_entry_n)
+            $fatal(1, "P1-11 the cpu took %0d more irq entries in the 400 clk after the mapper irq fell",
+                   m_irq_entries - a12_drain_entry_n);
+        if (m_irq_line_err != 0)
+            $fatal(1, "P1-11 irq_line != (mapper_irq|apu_irq) on %0d clk", m_irq_line_err);
+        if (m_irq_pending_err != 0)
+            $fatal(1, "P1-11 dbg_irq_pending != irq_line on %0d clk", m_irq_pending_err);
+        a12_win = 1'b0;
+        $display("P1-11 A12-PHASE-2C forcing irq_enabled_r to 0 with irq_pending_r still 1, a state only the rtl can be in here, dropped mapper_irq and irq_line combinationally, which is the AND at nes_mapper_mmc3 irq = irq_enabled_r && irq_pending_r and not a register clearing.  Both forces were then released and the window left: the tb had driven the production net chr_mmc3.mapper_ppu_a12 high on %0d clk of the window, and after the release that net reads %b and chr_mmc3.u_mapper.u_mmc3.ppu_a12 reads %b again, so the production tie-off is re-proved on BOTH sides of the force window.  mmc3_a12_filtered did not fire once in the following 400 clk (%0d accepted edges, %0d model rises), mapper_irq stayed low on all of them, and the cpu took %0d new irq entries PASS",
+                 a12_net_hi, chr_mmc3.mapper_ppu_a12,
+                 chr_mmc3.u_mapper.u_mmc3.ppu_a12,
+                 a12_snap_idx - a12_snap2_idx, a12_edge_idx - a12_snap2_idx,
+                 m_irq_entries - a12_drain_entry_n);
+    end
+endtask
+
 task check_p1_5;
     begin
         if (chr_mmc3.u_mapper.mmc3_irq_latch !== MMC3_IRQ_LATCH_VALUE)
@@ -4514,7 +5134,7 @@ task check_p1_5;
         if (m_mapper_irq !== 1'b0)
             $fatal(1, "P1-5 the mmc3 mapper irq is high with the a12 input tied low");
         m_irq_high_at_force = m_irq_high;
-        $display("P1-5 MMC3-A12-AND-FORCE on chr_mmc3 only: $C000 latched %02h, $C001 set reload and it is still set, the counter is still %02h and the a12 filter never fired because mapper_ppu_a12 is hardwired 0 inside nes_system_v6, $E001 then $E000 left irq_enabled=0, and mapper_irq stayed low on every one of the %0d clk of the whole program before the force PASS",
+        $display("P1-5 MMC3-A12-AND-FORCE on chr_mmc3 only: $C000 latched %02h, $C001 set reload and it is still set, the counter is still %02h and the a12 filter never fired because mapper_ppu_a12 is hardwired 0 inside nes_system_v6, $E001 then $E000 left irq_enabled=0, and mapper_irq stayed low on every one of the %0d clk of the whole program before the force.  The two tie-off assertions above are therefore measured with no force anywhere on this instance; the force block below only overrides the two irq registers for 600 clk, and check_p1_11 then runs immediately afterwards on the same instance, driving the mmc3 a12 from a testbench-side ppu-dot model so the counter, irq_pending_r and the whole irq entry chain come out of real rtl instead of a forced value, and re-proves both tie-offs on the far side of its own force window PASS",
                  MMC3_IRQ_LATCH_VALUE, chr_mmc3.u_mapper.mmc3_irq_counter, m_irq_high_at_force);
 
         force chr_mmc3.u_mapper.u_mmc3.irq_enabled_r = 1'b1;
@@ -4566,6 +5186,14 @@ task check_p1_5;
                  m_irq_entry_min, m_irq_entry_max, m_irq_entry_bad,
                  m_irq_seq_bad, m_irq_entry_stall, m_irq_masked, m_irq_vec_fetch,
                  IRQ_HANDLER, chr_mmc3.u_bus.ram_array[11'h013]);
+
+        // The counter, irq_pending_r and the cpu entry chain have just been
+        // driven by a force instead of by an a12 edge.  check_p1_11 is what
+        // turns that around: it supplies the missing a12 and re-derives all
+        // three from the rtl, so the assertions above are not left resting on
+        // a forced value.  It runs last, after both forces are released, and
+        // it cleans up after itself.
+        check_p1_11;
     end
 endtask
 
