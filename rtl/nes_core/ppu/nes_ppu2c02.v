@@ -184,7 +184,7 @@
 //                  (nes_sprite_chr_fetch.v:85-86) over a 13-bit pat whose bit 3
 //                  is the hard 1'b0, so pat <= 0x1FF7 and 0x1FF7 + 8 = 0x1FFF.
 //                  The mask therefore never fires and bit 13 stays clear.
-//   A run of tb_nes_system_v6.v counted 62720 CHR requests in total, 20960 of
+//   A run of tb_nes_system_v6.v counted 62678 CHR requests in total, 20960 of
 //   them in its last frame, and found local chr_addr[13] set on none of them
 //   while local chr_addr[12] was set on 16768 of that frame's 20960 -- so the
 //   table select really does cross the port and the bit above it really does
