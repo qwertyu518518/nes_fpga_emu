@@ -1,10 +1,12 @@
-# Quartus 工程骨架（未验证）
+# Quartus 工程骨架（骨架仍未编译；PPU 已单独综合过，见第 0.3 节）
 
 本目录是 `op_fpga_emu` 的 **Quartus 工程骨架**：`op_fpga_emu.qpf`（工程身份）、`op_fpga_emu.qsf`（器件 `EP4CE10F17C8` + 顶层 `nes_ep4ce10_top` + 38 条 Verilog 源）、`op_fpga_emu.sdc`（3 条 `create_clock` + 2 条 `set_false_path`）三个文件都已存在，让 Quartus Prime 能打开一个完整的工程。
 
-**先说最重要的一句：本仓库没有安装 Quartus，这三个文件从未在 Quartus 中打开或编译过，这里没有跑过一次综合、一次 Fit、一次 TimeQuest、一次上板测量。** 下面所有 `.qsf` / `.sdc` / `.qpf` 里的内容都是按仓库文档与厂商例程观察写出来的骨架，**没有一条被 Quartus 解析过或校验过**。打开工程后请以 Quartus 自己的报告为准，不要把这里的数字当作结果引用。
+**先说最重要的一句：这三个文件从未在 Quartus 中打开或编译过，这里没有跑过一次属于本工程的综合、一次 Fit、一次 TimeQuest、一次上板测量。下面所有 `.qsf` / `.sdc` / `.qpf` 里的内容都是按仓库文档与厂商例程观察写出来的骨架，**没有一条被 Quartus 解析过或校验过**。打开工程后请以 Quartus 自己的报告为准，不要把这里的数字当作结果引用。**
 
-标记沿用 `docs/hardware/00-index.md` 的约定：**【厂商例程观察】** = 来自厂商例程的观察，不是本工程的验证结果；**【未验证】** = 必须由工具报告或上板测量回答。
+**（2026-09-30 登记）本机现已安装 Quartus Prime Lite 23.1，并在仓库之外做过一次 PPU 单独综合。** 那次跑**没有**用到本目录的 `.qpf` / `.qsf` / `.sdc`——它的顶层是 `D:\quartusProject\` 下的激励包装，**不是 `nes_ep4ce10_top`**。实测数字与工具链注意事项见第 0.3 节；完整登记在 [`docs/00-overview/risk-register.md`](../docs/00-overview/risk-register.md) 第 10 节。**本目录的三个文件仍然一次都没有被编译过**，这一条没有被那次跑改变。
+
+标记沿用 `docs/hardware/00-index.md` 的约定：**【厂商例程观察】** = 来自厂商例程的观察，不是本工程的验证结果；**【未验证】** = 必须由工具报告或上板测量回答；**【实测】** = 本机 Quartus 报告文件里的数字（报告在 `D:\quartusProject\` 下、不在仓库内，引用前请自己打开核对）。
 
 PLL 相关的交叉引用：SDC 第 6 节的 `TODO(PLL)`（状态 A → B 的改写清单）在 [`docs/hardware/12-ntsc-clock-and-pll.md`](../docs/hardware/12-ntsc-clock-and-pll.md) **第 6 节**有对应的验证步骤与通过判据，改 SDC 前后请对照那 6.2 / 6.3 节。
 
@@ -52,7 +54,33 @@ PLL 相关的交叉引用：SDC 第 6 节的 `TODO(PLL)`（状态 A → B 的改
 | `.sdc` 生效的 `set_clock_groups` | **1 条**（`-asynchronous`，3 个 group） | 第 117–120 行，仅在"altpll 未生成"的过渡状态成立 |
 | `.sdc` 生效的 `set_input_delay` / `set_output_delay` / `set_max_delay` / `set_clock_uncertainty` | 生效的**各 0 条** | 四个关键字合计 4 次命中，全部是注释：第 151 行（`set_max_delay` 同步器第一级预算的注释示例）、第 160 行（`set_input_delay` TODO）、第 164 行（`set_output_delay` TODO）、第 53 行（`set_clock_uncertainty` TODO）。实际生效的是第 72 行的 `derive_clock_uncertainty`（自动推导，不含晶振 ppm 偏差） |
 
-**从上表能得出的唯一结论：工程骨架在位，但证据为零。** 三个文件从未在 Quartus 中打开或编译过（本机没有安装 Quartus），所以**综合、Fitter、STA、引脚分配、时序收敛依然没有任何证据**。已就位的是"能被工具读的文件"，不是"被工具读过的结果"。
+**从上表能得出的唯一结论：工程骨架在位，但本工程的证据为零。** 三个文件从未在 Quartus 中打开或编译过，所以**针对本工程的综合、Fitter、STA、引脚分配、时序收敛依然没有任何证据**。已就位的是"能被工具读的文件"，不是"被工具读过的结果"。
+
+### 0.3 本机工具链（2026-09-30 实测登记）
+
+**这一节是给下一个要在这台机器上跑 Quartus 的人看的，四条都是踩过才知道的。**
+
+| 项 | 实测结果 |
+|---|---|
+| 版本与授权 | Quartus Prime **Lite Edition `23.1std.0 Build 991 11/28/2023 SC Lite Edition`**，安装目录 `D:\intelfpga_lite\23.1std\`，可执行文件 `D:\intelfpga_lite\23.1std\quartus\bin64\quartus_map.exe` / `quartus_fit.exe` / `quartus_sh.exe`。**不需要 license 文件。** Lite Edition **只支持 Cyclone IV E 器件族**；本项目目标 `EP4CE10F17C8` 属于该族，所以 Lite 够用 |
+| `quartus_sh --flow syn` | **失败。** `Error (18169): The Quartus Prime Pro Edition Design Software must be installed to use quartus_syn.  Either install the Quartus Prime Pro Edition Design Software or use quartus_map.`（原文见 `D:\quartusProject\ppu_synth2\quartus_syn_pro_only.log`）。**改用 `quartus_map`、`quartus_fit`，或 `quartus_sh --flow compile`** |
+| 报告文件编码 | **cp1252，不是 UTF-8。** 用严格 UTF-8 解码器读 `.rpt` 会抛异常（报告里含一个 `0xB0` 字节）。正确读法：`[Text.Encoding]::GetEncoding(1252)` |
+| 旧版回退 | `quartus` 13.1 在 `D:\altera\13.1\quartus\bin64\`（`D:\altera\` 下另有 `license.dat`）。**本目录 0.3 节与风险登记册第 10 节的所有数字都来自 23.1**，13.1 只是需要时的一次回退 |
+
+**仓库之外已经跑过的那次 PPU 单独综合，结论一句话：面积测出来了而且装不下，时序完全没测。**
+
+| 项 | 【实测】数值 | 报告 |
+|---|---|---|
+| PPU（`EXTERNAL_CHR = 1`，`575e191`） | **63,127 LE / 10,320（612 %）**、19,260 寄存器、**0 / 423,936 memory bits**、**0 / 46 M9K**；Fitter **Failed**：`Error (170011): Design contains 44323 blocks of type combinational node.  However, the device contains only 10320 blocks.` + `Error (171000): Can't fit design in device` | `D:\quartusProject\ppu_synth2\final_ext.map.rpt` / `final_ext.fit.rpt` |
+| PPU（`EXTERNAL_CHR = 0`） | **568,724 LE / 10,320（5,511 %）**、84,415 寄存器、0 / 46 M9K；Fitter **Failed** | `D:\quartusProject\ppu_synth2\final_int.map.rpt` / `final_int.fit.rpt` |
+| **BRAM 推断** | **完全没有发生。** 网表里只有 `boundary_port` / `cycloneiii_ff` / `cycloneiii_lcell_comb`，没有 `altsyncram`、没有 MLAB。**所以 BRAM 不是绑定约束**：按 1,024 byte/M9K 算，PPU 那些数组（外部 CHR 2,336 byte / 内部 CHR 10,528 byte）只需要 4 到 12 块 M9K，46 块里会剩 34 到 42 块；绑定约束是逻辑单元 | `final_ext.map.rpt` 的 Post-Synthesis Netlist Statistics；算术见风险登记册 R-04 |
+| **fmax / slack / 未约束路径** | **全部没有测，而且报告里根本没有时序数据。** 每次跑都是 `Critical Warning (332012): Synopsys Design Constraints File file not found` + `Info (332130): Timing requirements not specified`，加上 `Critical Warning (169085): No exact pin location assignment(s) for 159 pins of 159 total pins.`。对 `final_ext.fit.rpt` 全文逐词计数：`fmax` = 0 次、`slack` = 0 次、`Fitter Timing Summary` = 0 次 | `final_ext.fit.rpt` |
+
+两条**必须一起读**的注意事项（推导过程与全部数字见风险登记册第 10.3 / 10.5 节）：
+
+- **那份报告的 per-entity 表把 10,989 LE 记在 `nes_chr_fetch_unit` 名下，而该模块单独综合只有 106 Logic Cells（模块自身，Fitter per-entity）或 185 LE（含激励包装，Fitter 顶层）——高出 59 到 104 倍。** 约 10,800 个 LE 是虚的。**不要把 10,989 当成这个模块的成本，也不要在这张表上建任何计划。**
+- **不要用"把 DUT 输入全接常量"的方式估面积。** 那样同一个 PPU 只报 187 LE、单独测 `nes_chr_fetch_unit` 报 0 LE，会让人错误地认为装得下；计数器驱动激励下这两个数字是 63,127 与 185。
+- **Fitter 跑失败时它的 per-entity 表不可用。** `final_ext.fit.rpt` / `final_int.fit.rpt` 的 "Compilation Hierarchy Node" 表里每一行 `Logic Cells` 都是 0，因为 Fitter 在布局阶段就中止了，没有任何逻辑被放置。只有 Fitter 状态为 `Successful` 的报告，那张表才有意义。
 
 ### 0.2 清单完整性与自检方法
 
@@ -291,9 +319,9 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 
 | 未验证项 | 说明 |
 |---|---|
-| 能不能被 Quartus 打开 | `.qpf` / `.qsf` 是按格式手写的，**从没被 Quartus 解析过、更没编译过**（本机没有安装 Quartus）。`QUARTUS_VERSION = "20.1.0"` 与 `ORIGINAL_QUARTUS_VERSION 20.1.0` 都是占位 |
+| 能不能被 Quartus 打开 | `.qpf` / `.qsf` 是按格式手写的，**从没被 Quartus 解析过、更没编译过**（**这与"本机有没有装 Quartus"无关**：本机已装 Lite 23.1，见第 0.3 节，但打开的是仓库外的 PPU 工程）。`QUARTUS_VERSION = "20.1.0"` 与 `ORIGINAL_QUARTUS_VERSION 20.1.0` 都是占位 |
 | QSF 的 assignment 名字 | `SDC_FILE` 在不同版本可能显示为 `SOURCE_TSDC_FILE_NAME`；`STRATIX_DEVICE_IO_STANDARD` 的合法取值与器件是否匹配也没验证 |
-| `VERILOG_FILE` 清单与磁盘是否一致 | 清单曾漏 4 个 `peripheral/` 下的模块（`wm8978_i2c.v`、`nes_cdc_fifo.v`、`nes_i2s_shifter.v`、`nes_audio_i2s.v`），其后又漏了新增的 2 个模块（`ppu/nes_chr_fetch_unit.v`、`peripheral/sd_spi_cmd.v`），本轮再漏了新增的 `ppu/nes_sprite_chr_fetch.v`；**三次都已补入**，38 条与磁盘 38 个 `.v` 逐条一致（missing = 0、ghost = 0，见第 0.2 节的自检脚本）。**仍未验证的是 Quartus 是否接受这份清单**——本机没有安装 Quartus，从没被工具解析过，更没有因为补了这些条就综合过 |
+| `VERILOG_FILE` 清单与磁盘是否一致 | 清单曾漏 4 个 `peripheral/` 下的模块（`wm8978_i2c.v`、`nes_cdc_fifo.v`、`nes_i2s_shifter.v`、`nes_audio_i2s.v`），其后又漏了新增的 2 个模块（`ppu/nes_chr_fetch_unit.v`、`peripheral/sd_spi_cmd.v`），本轮再漏了新增的 `ppu/nes_sprite_chr_fetch.v`；**三次都已补入**，38 条与磁盘 38 个 `.v` 逐条一致（missing = 0、ghost = 0，见第 0.2 节的自检脚本）。**仍未验证的是 Quartus 是否接受这份清单**——本工程的 `.qpf`/`.qsf` 从没被工具解析过，更没有因为补了这些条就综合过（第 0.3 节那次 PPU 单独综合用的是仓库外的工程与顶层，不经过这份清单） |
 | 工程级 IO 电压 `2.5 V` | 只是【厂商例程观察】的起点。每个 bank 的 VCCIO、是否需要 3.3-V LVTTL、是否经电平转换，全部未确认 |
 | 层次闭包与多顶层实体 | 第 4.3 节的 22 个模块会不会变成额外顶层、Fitter 会不会因此资源不够，未验证 |
 | 新增封装层 `nes_ep4ce10_qsf_if.v` | **已用 Icarus Verilog `-g2001` 单独 elaborate 通过**（`iverilog -g2001 -Wall -s nes_ep4ce10_qsf_if`，18 个源文件，退出码 0，只有 `nes_core` 里原有的 `@*` 数组敏感性警告）。**这只是语法与层次自洽，不是综合结果**：它在 Quartus 里的资源、引脚、时序都没有测过 |
@@ -313,7 +341,7 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 | IO / 输出时序 | `key` / `sys_rst_n` 的板级走线延迟、VGA/LED/beep 的输出延迟全部没有约束，也没有"明确决定不约束"的书面记录 |
 | `ce_cpu` / `ce_ppu` 多周期路径 | **故意没写**，见 SDC 第 5 节。写了假的多周期约束比不写更糟 |
 | 亚稳态 MTBF | `set_false_path` 只让 STA 不再报告，**不解决亚稳态**。同步器第一级的 `set_max_delay` 是注释状态，取值方法待定（`docs/hardware/12-ntsc-clock-and-pll.md` 第 6.3 节） |
-| 一切数字 | **没有综合报告、没有 Fitter 数字（LE / M9K / PLL 数）、没有 TimeQuest 的 fmax 与 slack、没有板级观测。** `docs/00-overview/risk-register.md` 里的 R-03 / R-05 / R-07 **仍然未关闭** |
+| 一切数字 | **属于本工程的综合报告没有、没有 Fitter 数字（LE / M9K / PLL 数）、没有 TimeQuest 的 fmax 与 slack、没有板级观测。** 第 0.3 节那份 PPU-only 报告是**仓库外**的、顶层是 `ppu_synth_ext_top` 而不是 `nes_ep4ce10_top`，**不能**当成本工程的结论。`docs/00-overview/risk-register.md` 里的 R-03 / R-05 / R-07 **仍然未关闭** |
 
 ### 6.3 引脚级
 
@@ -351,12 +379,13 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 
 ## 8. 本次刻意没有做的事
 
-- 没有安装或运行 Quartus，没有综合 / Fit / TimeQuest / 上板——`.qpf`/`.qsf`/`.sdc` 三个文件**从未在 Quartus 中打开或编译过**。
+- **本目录的这三个文件仍然没有综合 / Fit / TimeQuest / 上板**——`.qpf`/`.qsf`/`.sdc` **从未在 Quartus 中打开或编译过**。本机确实装了 Quartus Prime Lite 23.1（第 0.3 节），但那次 PPU 单独综合在 `D:\quartusProject\` 下、用的是仓库外的激励顶层，没有经过本目录任何一个文件。
+- `op_fpga_emu.qpf` / `.qsf` / `.sdc` 三个文件头部注释里"本机没有安装 Quartus"这句话**现在已经过期**（工具已装，见第 0.3 节）。**本次刻意没有改这三个文件**：它们是工程输入而不是文档，改它们的风险高于收益，事实以本文第 0.3 节为准。
 - 没有写任何 `PIN_LOCATION`：`set_location_assignment` / `set_io_assignment` 生效条数实测为 0。
 - 没有生成 altpll，没有 PLL 参数：`.sdc` 生效的 `create_generated_clock` 实测为 0。
 - 没有写 `ce_cpu` / `ce_ppu` 多周期约束、输入输出延迟、同步器 `set_max_delay`（SDC 里都有 TODO 与理由，这四项的生效条数实测也都是 0）。
 - 没有改动 `rtl/nes_core/`、`tb/`、`tools/` 和任何既有文档（`docs/hardware/01-ep4ce10-board.md` 第 3.2 节的引脚不一致只在本文件里记录，未改原文）。
 - `wm8978_i2c.v` 等 4 个 `peripheral/` 模块曾被漏在 `.qsf` 的 `VERILOG_FILE` 清单之外；其后新增的 `ppu/nes_chr_fetch_unit.v` 与 `peripheral/sd_spi_cmd.v` 也没同步进清单；本轮新增的 `ppu/nes_sprite_chr_fetch.v` 同样漏了一次。**三次都已补齐**：38 条与磁盘 38 个 `.v` 逐条一致（见第 0.2 节）。补清单只保证文件清单自洽，**不表示这些模块被综合过**。
 - 除新增这 1 条 `VERILOG_FILE` 之外，没有改动 `.qsf` 里的任何 `set_global_assignment`（器件、顶层、既有 `VERILOG_FILE` 顺序、SDC 指向全部保持原样），其余改动只在注释文字。
-- 没有综合过，因此"38 条清单被 Quartus 接受"这件事仍然未验证；`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` **都已被 `nes_ppu2c02` 的 `g_chr_external` 例化**（`u_chr_fetch` / `u_sprite_chr_fetch`）——CHR 外部**读**通路（含精灵）已接通，但两者都**没有**进 `nes_ep4ce10_top` 的层次闭包，`.qsf` 清单里它们仍按第 4.3 节的多顶层处理。
+- 本工程的 38 条清单仍然没有被 Quartus 接受过，因此这一点仍然未验证；`nes_chr_fetch_unit` 与 `nes_sprite_chr_fetch` **都已被 `nes_ppu2c02` 的 `g_chr_external` 例化**（`u_chr_fetch` / `u_sprite_chr_fetch`）——CHR 外部**读**通路（含精灵）已接通，但两者都**没有**进 `nes_ep4ce10_top` 的层次闭包，`.qsf` 清单里它们仍按第 4.3 节的多顶层处理。（第 0.3 节那次 PPU 单独综合把 `nes_chr_fetch_unit` 拉进了层次闭包并给出 185 LE，但那是在仓库外的激励工程里，见第 10.3 节关于这个数字的限定词。）
 - 没有给新增的 Verilog 加行内注释：说明性文字全部放在本文与 SDC/QSF 的注释块里。

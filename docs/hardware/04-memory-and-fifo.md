@@ -5,6 +5,8 @@
 ### 1.1 已确认事实
 
 - **【已确认事实】** 例程 Fitter 报告给出 423,936 memory bits，约 52,992 byte，即约 51.75 KiB。
+- **【推断（2026-09-30 登记）】52,992 byte 是"bit 数除以 8"的换算值，不是可实现的字节容量。** 一个 M9K 是 9,216 bit；在 8 bit 负载下它只能配置成 9 bit 模式，即 **1,024×9 = 9,216 bit，每块提供 1,024 byte**。因此 46 块的实际可用负载是 **47,104 byte（46.0 KiB）**，比 52,992 byte 少 5,888 byte。**`9,216 / 8 = 1,152` 不是器件支持的 M9K 模式**：第 1.2 节列出的位宽是 1 / 2 / 4 / 9 / 18 / 36 bit，8 bit 不在其中。**做容量判断时用 47,104 byte，不要用 52,992。** 逐数组的 M9K 估算表与更正后的数字见 [`docs/00-overview/risk-register.md`](../00-overview/risk-register.md) 的 R-04。
+- **【实测】片上 PPU 到现在一次都没有用掉 BRAM。** 2026-09-30 的 PPU 单独综合（`D:\quartusProject\ppu_synth2\final_ext.fit.rpt` 与 `final_int.fit.rpt`）报 `Total memory bits ; 0 / 423,936 ( 0 % )`、`Embedded Multiplier 9-bit elements ; 0 / 46 ( 0 % )`，网表里没有任何 `altsyncram` / MLAB。**因此"BRAM 够不够"目前不是本项目的绑定约束**（逻辑单元才是），但这**不代表**现有数组可以被重构成 BRAM——那种改法一次都没被测过。完整登记见风险登记册第 10 节。
 - **【已确认事实】** `8_ip_ram` 生成的 RAM IP 是 Cyclone IV E 单端口、32×8 bit、输出寄存器旁路的 `altsyncram` 配置。
 - **【已确认事实】** `9_ip_fifo` 的生成 FIFO 为 8 bit、256 深度，读写时钟在例程顶层相同；生成文件标记为双时钟 `dcfifo`，同步延迟参数为 4。
 - **【厂商例程观察】** SDRAM 工程的两个 FIFO 是 16 bit、1024 深度，分别作为用户写侧到 SDRAM 控制域、SDRAM 控制域到用户读侧的缓冲。

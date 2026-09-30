@@ -175,7 +175,7 @@ PLL 的 `locked` 表示 VCO 已锁定。厂商例程普遍用 `sys_rst_n & locke
 这个方案的优点：
 
 - **3:1 比例由构造保证**，与 PLL 的绝对误差无关。
-- **NES 域的时钟周期是 46.55 ns 而不是 20 ns**，关键路径的时间预算宽松 2.33 倍。对 R-03 记录的那条 PPU 组合链（`/30`、`%30`、两级 RAM 读、palette 读）来说，这直接降低了 M9K/逻辑的 fmax 风险。
+- **NES 域的时钟周期是 46.55 ns 而不是 20 ns**，关键路径的时间预算宽松 2.33 倍。对 R-03 记录的那条 PPU 组合链（`/30`、`%30`、两级 RAM 读、palette 读）来说，这直接降低了 M9K/逻辑的 fmax 风险。**（2026-09-30 登记）这条至今只是纸面推导**：唯一一次 PPU 单独综合没有 SDC，没有任何 slack 数字（第 10 节），所以"46.55 ns 够不够"在本仓库**没有被测量回答过**。
 - 比例是"构造事实"，可以像现在这样写进 testbench 断言，不依赖任何测量。
 
 这个方案的代价，必须写清楚：
@@ -302,7 +302,7 @@ NTSC 域和 VGA 域是真正的异步域。下面的清单给出每个跨域信�
 |---|---|---|---|
 | **PLL VCO 范围** | VCO 有上下限，且乘数/分频有上限（0..63 / 1..64 一类）。21.477272 MHz 不可精确得到 | 目标频率必须接受近似值；某些组合直接生成失败 | 枚举可达组合，选误差最小的一个；把实际频率写进文档而不是写理想值 |
 | **M9K 的时钟频率限制** | M9K 有最大工作频率。把 BRAM 放在 21.48 MHz 域比放在 50 MHz 域宽松，但放在 25 MHz 的 VGA 域与 100 MHz 的 SDRAM 域各有各的约束 | 存储推断失败，或 fmax 不足导致时序失败 | 【待 TimeQuest 确认】各域的 M9K 约束；把行缓冲、音频 FIFO、SDRAM FIFO 的所属时钟域在布局规划时就固定下来 |
-| **时序裕量** | R-03 记录的 PPU 关键路径（`/30`、`%30`、两级 RAM 读、palette 读）尚未测量 | 在 46.55 ns 下可能够、在 20 ns 下不够——**时钟方案直接决定这条路径是否需要重构** | 先只综合 PPU 拿到真实 fmax（R-03 的缓解路线第 5 条），再定时钟 |
+| **时序裕量** | R-03 记录的 PPU 关键路径（`/30`、`%30`、两级 RAM 读、palette 读）**面积已测、时序仍未测**（2026-09-30 登记，见 `docs/00-overview/risk-register.md` 第 10 节） | 在 46.55 ns 下可能够、在 20 ns 下不够——**时钟方案直接决定这条路径是否需要重构**。面积侧已经确定装不下，但**装不下是因为 63,127 / 10,320 LE，与时钟频率无关**；时钟方案会不会再改变结论仍然未知 | 先只综合 PPU 拿到真实 fmax（R-03 的缓解路线第 5 条），再定时钟 |
 | **跨域亚稳态** | `as_false_path` / `set_false_path` 只让 STA 不再报告，**不消除**亚稳态 | 偶发的错误数据或锁死的状态机，且难以复现 | 两级同步器 + 握手（本文第 5 节）；同步器寄存器加 `set_max_delay -datapath_only`；对亚稳态导致的错误做上电自检 |
 | **频率漂移** | 晶振与 PLL 都有温度漂移 | 帧率与音高缓慢偏移；若音频挂在独立 50 MHz 域，会产生音画相对漂移 | 音频重采样时钟来自 NES 域（第 2 节）；漂移量记录在文档里 |
 | **`locked` 丢失** | 输入抖动或温度导致失锁 | NES 域停钟，画面冻结；复位组合方式不当可能出现窄脉冲或死锁 | `locked` 参与复位；`locked` 丢失是否需要故障上报，属于板级验证阶段决定 |
@@ -328,7 +328,8 @@ NTSC 域和 VGA 域是真正的异步域。下面的清单给出每个跨域信�
 - [ ] testbench 的时钟周期已参数化，同一套断言在两个不同时间基下逐拍相同。
 - [ ] 存在"任意 12 拍窗口内恰好 1 个 `ce_cpu`、3 个 `ce_ppu`"的断言。
 - [ ] 存在连续多帧的 `ce_cpu` 计数断言，且体现 29,780 / 29,781 / 29,781 的 3 帧循环。
-- [ ] 存在 PPU 单独综合的 Fitter + TimeQuest 报告，含 M9K 数量与最差 slack（R-03 的门槛）。
+- [ ] 存在 PPU 单独综合的 **TimeQuest** 报告，含最差 slack 与未约束端点（R-03 的门槛里时序那一半）。
+      **（2026-09-30 登记）面积那一半已满足**：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt` 给出 63,127 / 10,320 LE、19,260 寄存器、0 / 46 M9K，结论是**装不下**，且没有任何 `altsyncram` 进网表。**时序那一半仍未满足**：那次跑没有 SDC，出的是 `Critical Warning (332012): Synopsys Design Constraints File file not found` 与 `Info (332130): Timing requirements not specified`，**因此本节第 2 节那张时钟表至今没有一条被 TimeQuest 核对过**。全部数字与其限定词见 [`docs/00-overview/risk-register.md`](../docs/00-overview/risk-register.md) 第 10 节与 [`quartus/README.md`](../../quartus/README.md) 第 0.3 节。
 - [ ] altpll IP 已生成，IP 文件里的 VCO 频率、每路分频、占空比、相移已被抄进文档。
 - [ ] SDC 已声明 50 MHz 输入与全部 PLL 派生时钟，异步时钟分组已显式声明。
 - [ ] `ce_cpu` / `ce_ppu` 的多周期路径约束已存在，且每条 `false_path` 都有书面理由。
@@ -342,4 +343,4 @@ NTSC 域和 VGA 域是真正的异步域。下面的清单给出每个跨域信�
 - 板级事实：`docs/hardware/01-ep4ce10-board.md`（50 MHz `PIN_E1`、`sys_rst_n`、器件资源与 2 个 PLL）、`03-clock-reset-cdc.md`（时钟域地图、PLL 检查表、CE 与门控时钟、CDC 四种模式、SDC 顺序）。
 - 相邻外设：`05-vga-lcd.md`（800×525 与 25 MHz、显示器输出 CDC）、`08-wm8978-audio.md`（MCLK/BCLK/LRC 层次与 12 MHz 的采样率后果）、`04-memory-and-fifo.md`（FIFO 带宽与 `CLOCKS_ARE_SYNCHRONIZED`）。
 - 本项目 RTL 与文档：`rtl/nes_core/system/nes_system_v0.v`（`div_phase` 12 拍使能分配）、`rtl/nes_core/ppu/nes_ppu2c02.v`（`pixel_valid` / `pixel_x` / `pixel_index` 的产生方式）、`rtl/nes_core/video/nes_line_buffer_vga.v`（`line_ready_toggle` 两级同步器与 ping-pong）、`docs/modules/line-buffer-vga.md`（写读速率 4 倍约束与无背压限制）。
-- 未关闭风险：`docs/00-overview/risk-register.md` 的 R-07（50 MHz 到 NTSC 时钟未实现/未验证）、R-02（CPU/PPU 同相）、R-03（时序未测量）、R-05（无 Quartus 证据）。
+- 未关闭风险：`docs/00-overview/risk-register.md` 的 R-07（50 MHz 到 NTSC 时钟未实现/未验证）、R-02（CPU/PPU 同相）、R-03（**面积已实测、时序未测量**，见该文件第 10 节）、R-05（无属于本仓库顶层的综合证据与上板证据）。
