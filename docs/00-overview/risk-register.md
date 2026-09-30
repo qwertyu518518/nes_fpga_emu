@@ -68,7 +68,7 @@
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:65-73`：`always @*` 组合读 `cpu_ram[ram_index]`（`:67`）与 `prg_rom[prg_index]`（`:71`），同一拍直接产出 `cpu_din`。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:86`：`.bus_ready(!reset)` —— 顶层把 ready 恒定接高，CPU 从不进入等待态。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:474-484`：`ppu_space_read` 组合读 CHR/nametable/palette；背景像素通路 `:427-428`、`:486-487`、`:445` 同样是组合读。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:643-649`：`g_chr_internal` 的 `$2007` 读回 mux（`chr_rb_eff` / `chr_rb_cs` / `chr_rb_data`）组合读 CHR（`:647`）、nametable（`:648`）、palette（`:649`）——`575e191` 之前这个位置是内部 `ppu_space_read` 函数，**该函数已被删除**；`g_chr_external` 里的同名函数**仍然存在**（`:651-661`），它组合读 nametable（`:657`）与 palette（`:659`），而 `address < 14'h2000` 的 CHR 半边**直接返回 `8'h00`、不读任何 CHR 阵列**（`:654-655`），由 `:839-842` 的外部 `chr_rb_data` 用 `chr_rd_armed_q ? chr_rdata : 8'h00` 回答。背景像素通路同样是组合读：nametable `:548-549`、CHR `:596-597`（**仅内部 CHR 分支**；外部 CHR 分支的 `bg_pattern_low` / `bg_pattern_high` 读的是 `bg_lo_q` / `bg_hi_q` 锁存器，`:723-724`）、palette `:566`。
 - 【事实】`rtl/nes_core/cpu/nes_cpu6502.v` 的状态推进只发生在 `bus_fire` 边界，等待语义在 CPU 侧已经具备，缺口在顶层接线。
 - 【审查】`docs/00-overview/decision-log.md` D005 的“边界”已写明：CPU 与外部存储的集成 RTL 尚未存在，该决策目前只是接口和目录约束。
 - 【事实】`docs/hardware/04-memory-and-fifo.md` 第 2 节给出同步 RAM 延迟模型和 6 项必须回答的问题；第 2.3 节明确提示“用组合地址加法器直接读 BRAM，工具可能无法按预期推断存储器”。
@@ -113,8 +113,8 @@
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:26-27`：`ce_ppu = (div_phase[1:0]==2'b00)`，`ce_cpu = (div_phase==4'd0)` —— 后者恒为前者的一个子集，因此 CPU 与 PPU 永远同相。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:62`：`ppu_reg_cs = cpu_bus_fire && sel_ppu`，PPU 寄存器片选直接来自 CPU 事务完成。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:869`：滚动更新条件为 `mask_reg[3] && !reg_cs && ((scanline < 9'd240) || (scanline == 9'd261))`；`:872-873`（dot 8–248 每 8 dot 一次 `inc_x`）、`:870-871`（dot 256 的 `inc_x+inc_y`）、`:875-878`（dot 257 水平重载）、`:880-884`（pre-render dot 280–304 垂直重载）全部落在这个条件内。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:747-761`：`pixel_valid` / `pixel_index` 是纯组合输出，背景取数通路不含任何 dot 级流水或预取状态。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:1000`：滚动更新条件为 `mask_reg[3] && !reg_cs && ((scanline < 9'd240) || (scanline == 9'd261))`；`:1003-1004`（dot 8–248 每 8 dot 一次 `inc_x`）、`:1001-1002`（dot 256 的 `inc_x+inc_y`）、`:1006-1009`（dot 257 水平重载）、`:1011-1015`（pre-render dot 280–304 垂直重载）全部落在这个条件内。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:873-887`：`pixel_valid` / `pixel_index` 是纯组合输出。**背景取数通路在内部 CHR 分支不含任何 dot 级流水或预取状态**；`g_chr_external` 分支则有一条逐 tile 的 dot 级取数流水（`nes_chr_fetch_unit` 例化在 `:789-803`，`bg_lo_q` / `bg_hi_q` / `bg_ready` 锁存在 `:816-828`，`bg_pattern_low` / `bg_pattern_high` 读的是锁存器 `:723-724`）——像素输出本身在两个分支里都仍是纯组合。
 - 【审查】`tb/ppu/README.md`“同一时钟沿的冲突合同”已明确记录：同沿 `reg_cs=1` 时该 dot 的滚动更新**被跳过而不是延后补做**，并把它列为 v0 的明确简化。
 - 【审查】`tb/system/README.md`“时钟分配与 CPU/PPU 同相取舍”已把同相断言与“被跳过的 dot 计数”写成通过条件；同文件“集成限制”已记录 TB 只覆盖背景功能级取数，且锁死了 12 拍使能分配。
 - 【事实】`tb/ppu/README.md`“明确未实现”已列出奇数帧跳 dot 未实现。该项与本条同源但独立，不合并计数（见 L-06）。
@@ -145,16 +145,16 @@
 
 **影响**
 
-- 端口需求：**内部 CHR 路径**（`EXTERNAL_CHR = 1'b0`，即 `nes_system_v0`..`v5` 与平台顶层跑的那条）按当前 RTL，`nametable_ram` 需要 3 个组合读口（`:427` 名称、`:428` 属性、`:526` 经 `ppu_space_read` 的 `$2007` 路径）加 1 个写口（`:835`）；`chr_ram` 需要 **19 个组合读口**（`:596`、`:597` 是背景低/高两个平面，`:604` 与 `:606` 是 `g_sprite_chr_slots` 里 8 次迭代 × 2 个平面展开出的 **16** 个生成读口，`:647` 是 `chr_rb_data` 的 `$2007` 读回）加 1 个写口（`:637`）。**这 19 个读口本身就已经远超 M9K 的 1R1W，与第 10 节实测的 `0 / 46` M9K 一致**（10.1）。本条原来记的"3 个组合读口（`:486`、`:487`、`:478`）加 1 个写口（`:518`）"是 `575e191` 之前的行号，**那四个行号现在不对应当前的任何 `chr_ram` 引用**：内部 `g_chr_internal` 的 `ppu_space_read` 函数已在 `575e191` 删除，替换它的是 `:643-647` 的 `chr_rb_eff` / `chr_rb_cs` / `chr_rb_data` mux（10.4 记的就是这批删除与合并）。**历史对照**：`575e191` 之前内部路径用 8,192 次常量索引的 `g_chr_flatten` 展开 `sprite_chr_bus`，那才是本条最早的读口压力来源；它已被删除，替代物是现在的 8 次迭代 / 16 次读，逐条见 10.4，**本条不把 8,192 当作现状**。Cyclone IV E 的 M9K 是 1R1W，因此这些数组**按现状无法映射为 BRAM**，只能复制成多份（加深 R-04 的压力）或退化为分布式 LUT RAM（吃 LE、增延迟）。**外部 CHR 路径**（`nes_system_v6` 的 `EXTERNAL_CHR = 1'b1`）把 `chr_ram` 的多个读口换成**单口**外部总线（`chr_req` + `chr_addr` → `chr_rdata`），所以它**降低**了 BRAM 端口压力，但把压力转移成一个新的外部接口义务（见第 6 节与 R-01/R-04）。**注意两个路径不能同时按现在的写法映射 BRAM**——`nes_system_v6` 的顶层端口是纯 RTL，没有引脚、没有存储实现。
-- 关键路径：背景像素输出 `pixel_index` 的组合链为 `dot`/`fine_x`/`t` → 加法器（`:168-171`）→ `/30` 与 `%30`（`:172`、`:174`）→ nametable 地址（`:177-178`）→ nametable 读（`:179-180`）→ CHR 地址（`:182`）→ CHR 读（`:183-184`）→ 位选择（`:185`）→ palette 索引（`:198`）→ palette 读（`:199`）→ `pixel_index`（`:213`）。其中 `/30` 与 `%30` 在 7 位输入上综合为比较器/LUT 链，位置正处于两级 RAM 地址之间。
+- 端口需求：**内部 CHR 路径**（`EXTERNAL_CHR = 1'b0`，即 `nes_system_v0`..`v5` 与平台顶层跑的那条）按当前 RTL，`nametable_ram` 需要 **3 个组合读口**（`:548` 名称、`:549` 属性、`:648` 经 `chr_rb_data` mux 的 `$2007` 路径）加 1 个写口（`:961`）；**外部 CHR 路径**（`EXTERNAL_CHR = 1'b1`）下是 **4 个组合读口**（`:548`、`:549`、`:657` 经 `g_chr_external` 里**仍然存在**的 `ppu_space_read`、`:719` `bg_name_target` 给取数支路）加同一个写口（`:961`）。**两个分支合计 5 个读点，但它们分属互斥的 `generate` 分支，任何一次 elaboration 只存在其中一个集合**；`chr_ram` 需要 **19 个组合读口**（`:596`、`:597` 是背景低/高两个平面，`:604` 与 `:606` 是 `g_sprite_chr_slots` 里 8 次迭代 × 2 个平面展开出的 **16** 个生成读口，`:647` 是 `chr_rb_data` 的 `$2007` 读回）加 1 个写口（`:637`）。**这 19 个读口本身就已经远超 M9K 的 1R1W，与第 10 节实测的 `0 / 46` M9K 一致**（10.1）。本条原来记的"3 个组合读口（`:486`、`:487`、`:478`）加 1 个写口（`:518`）"是 `575e191` 之前的行号，**那四个行号现在不对应当前的任何 `chr_ram` 引用**：内部 `g_chr_internal` 的 `ppu_space_read` 函数已在 `575e191` 删除，替换它的是 `:643-649` 的 `chr_rb_eff` / `chr_rb_cs` / `chr_rb_data` mux（10.4 记的就是这批删除与合并）。**历史对照**：`575e191` 之前内部路径用 8,192 次常量索引的 `g_chr_flatten` 展开 `sprite_chr_bus`，那才是本条最早的读口压力来源；它已被删除，替代物是现在的 8 次迭代 / 16 次读，逐条见 10.4，**本条不把 8,192 当作现状**。Cyclone IV E 的 M9K 是 1R1W，因此这些数组**按现状无法映射为 BRAM**，只能复制成多份（加深 R-04 的压力）或退化为分布式 LUT RAM（吃 LE、增延迟）。**外部 CHR 路径**（`nes_system_v6` 的 `EXTERNAL_CHR = 1'b1`）把 `chr_ram` 的多个读口换成**单口**外部总线（`chr_req` + `chr_addr` → `chr_rdata`），所以它**降低**了 BRAM 端口压力，但把压力转移成一个新的外部接口义务（见第 6 节与 R-01/R-04）。**注意两个路径不能同时按现在的写法映射 BRAM**——`nes_system_v6` 的顶层端口是纯 RTL，没有引脚、没有存储实现。
+- 关键路径：背景像素输出 `pixel_index` 的组合链为 `dot`/`fine_x`/`t` → 加法器（`:537-540`）→ `/30` 与 `%30`（`:541`、`:543`）→ nametable 地址（`:546-547`）→ nametable 读（`:548-549`）→ CHR 地址（`:551`）→ CHR 读（`:596-597`）→ 位选择（`:550`、`:552`）→ palette 索引（`:562-565`）→ palette 读（`:566`）→ `pixel_index`（`:881`）。其中 `/30` 与 `%30` 在 7 位输入上综合为比较器/LUT 链，位置正处于两级 RAM 地址之间。**这条链是内部 CHR 分支的**；`g_chr_external` 分支的 nametable 读、CHR 地址计算同源，但末端那两级组合读换成了 `bg_lo_q` / `bg_hi_q` 锁存器输出（`:723-724`），所以它的末端少两级组合读、多一级寄存器。
 - 仿真的数组索引没有端口概念，因此**当前三个 TB 全绿不能排除本条风险**。它只能在综合报告中暴露。
 - 若综合后被迫复制数组，BRAM 占用会超出 R-04 的估算，平台阶段的容量结论需要重做。
 
 **证据**
 
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:295-298`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]` 均为 Verilog-2001 数组，没有端口模式、读延迟或旁路参数。
-- 【事实】同文件 `:179-180`（同拍两次 `nametable_ram[...]`）、`:183-184`（同拍两次 `chr_ram[...]`）、`:199`（`palette_ram[...]` 组合读进像素输出）、`:290-294`（同拍写 CHR/nametable/palette）、`:307`（`$2007` 读再走一次 `ppu_space_read`）。
-- 【事实】同文件 `:172` `bg_vertical_sections = bg_coarse_y_sum / 7'd30;` 与 `:174` `bg_coarse_y = bg_coarse_y_sum % 7'd30;`。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:416-419`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]` 均为 Verilog-2001 数组，没有端口模式、读延迟或旁路参数。
+- 【事实】同文件 `:548-549`（同拍两次 `nametable_ram[...]`）、`:596-597`（同拍两次 `chr_ram[...]`，**仅内部 CHR 分支**）、`:566`（`palette_ram[...]` 组合读进像素输出）、`:637` / `:961` / `:963`（同拍分别写 `chr_ram` / `nametable_ram` / `palette_ram`）、`:643-649`（内部 CHR 分支的 `$2007` 读经 `chr_rb_data` mux **再走一次** CHR / nametable / palette 组合读）、`:651-661`（外部 CHR 分支的 `ppu_space_read` **仍在**，由 `:841-842` 调用，CHR 半边返回 `8'h00`）。
+- 【事实】同文件 `:541` `bg_vertical_sections = bg_coarse_y_sum / 7'd30;` 与 `:543` `bg_coarse_y = bg_coarse_y_sum % 7'd30;`。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:26-27`（`nes_system_v1`..`v6` 全部相同，`nes_system_v6.v:176-177`）：`ce_ppu = !reset && (div_phase[1:0] == 2'b00)`，`ce_cpu = !reset && (div_phase == 4'd0)`。`div_phase` 是 4 bit 计数器、循环 0..11，因此 **12 个系统 clk = 1 个 CPU 总线周期 = 3 个 PPU dot**，即**每个 dot 是 4 个系统 clk，其中 3 个 `ce` 为高、1 个为低**。`tb/system/README.md:58-59` 把同一件事写成"12 拍中 1 拍（`ce_cpu`）/ 12 拍中 3 拍（`ce_ppu`），1 dot = 4 clk"，`tb/system/tb_nes_system_v6.v:4840` 的断言文本也写"4 clk per ppu ce"。**任何"每个 dot 有 9 个空闲 clk"的说法与这三处 RTL/文档矛盾，本仓库不采用。**
 - 【事实】`docs/hardware/01-ep4ce10-board.md` 与 `docs/hardware/04-memory-and-fifo.md` 记录 423,936 memory bits，等于 46 × 9,216 bit（46 个 M9K）；`04-memory-and-fifo.md` 第 1.2 节要求容量表必须列出端口模式，并警告不要按理论总量相加。
 - 【实测】**PPU 单独综合已做，面积这一半有报告**：`D:\quartusProject\ppu_synth2\final_ext.map.rpt`（Analysis & Synthesis）与 `final_ext.fit.rpt`（Fitter），器件 `EP4CE10F17C8`，Quartus Prime 23.1std.0 Build 991 SC Lite Edition。全部数字、来源、anti-folding 对照组、四个合法性缺陷、以及**未测量的部分**见第 10 节。本条下面不再重复这些数字。
@@ -205,7 +205,7 @@
   | `prg_rom`（`PRG_SIZE_BYTES = 16384`，当前默认） | 16384×8 | 131,072 | 16,384 | 15 → **16** | 1 组合读 |
   | `prg_rom`（`PRG_SIZE_BYTES = 32768`） | 32768×8 | 262,144 | 32,768 | 29 → **32** | 1 组合读 |
   | `chr_ram` | 8192×8 | 65,536 | 8,192 | 8 → **8**（未变） | **19 组合读 + 1 写**（**仅内部 CHR 路径**；`nes_system_v6` 的外部路径没有片上 `chr_ram`，见上面注意一。逐条行号见 R-03） |
-  | `nametable_ram` | 2048×8 | 16,384 | 2,048 | 2 → **2**（未变） | 3 组合读 + 1 写 |
+  | `nametable_ram` | 2048×8 | 16,384 | 2,048 | 2 → **2**（未变） | **内部 CHR 路径 3 组合读 + 1 写；外部 CHR 路径 4 组合读 + 1 写**（两分支合计 5 个读点、分属互斥的 `generate` 分支，逐条行号见 R-03） |
   | `cpu_ram` | 2048×8 | 16,384 | 2,048 | 2 → **2**（未变） | 1 组合读 + 1 写 |
   | `oam_ram` | 256×8 | 2,048 | 256 | 1 → **1**（未变） | 1 组合读 + 1 写 |
   | `palette_ram` | 32×8 | 256 | 32 | 1 → **1**（未变） | 约 3 组合读 + 1 写 |
@@ -236,7 +236,7 @@
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:3-4`：模块参数 `PRG_SIZE_BYTES`，当前默认 `16384`；`:20` `PRG_INDEX_BITS = $clog2(PRG_SIZE_BYTES)`；`:39` `prg_rom [0:PRG_SIZE_BYTES-1]`；`:53-54`、`:60-61` 用 `cpu_addr[14:0]` 加位掩码形成镜像窗口。
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:38`：`cpu_ram[0:2047]`。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:295-298`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]`。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:416-419`：`nametable_ram[0:2047]`、`chr_ram[0:8191]`、`oam_ram[0:255]`、`palette_ram[0:31]`。
 - 【事实】`docs/hardware/01-ep4ce10-board.md` 记录厂商例程 Fitter 报告：10,320 LE、423,936 memory bits、2 PLL、46 个 9-bit 乘法器；同文件第 11 行说明“约 52 KiB”只是数量级，不表示所有存储模式都能得到同样有效容量。
 - 【事实】`docs/hardware/04-memory-and-fifo.md` 第 1.1 节记录 423,936 bit ≈ 52,992 byte ≈ 51.75 KiB、`8_ip_ram` 是单端口 32×8 的 `altsyncram`，以及 SDRAM 例程的两个 FIFO 为 16 bit × 1024。
 - 【事实】`docs/hardware/05-vga-lcd.md` 第 85 行记录 640×480×2 byte = 614,400 byte/帧、约 36.6 MB/s，以及 NES 读与 VGA 读会竞争资源。
@@ -332,7 +332,7 @@
 **证据**
 
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:87-88`：`.nmi_i(ppu_nmi)`、`.irq_i(1'b0)`。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:858-862`：`nmi_o` 只在 `scanline==241 && dot==0` 这一个判定点采样 `control_reg[7]`；`:864-867` 在 `(261,0)` 自动清零。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:989-993`：`nmi_o` 只在 `scanline==241 && dot==0` 这一个判定点采样 `control_reg[7]`；`:995-998` 在 `(261,0)` 自动清零。
 - 【事实】`rtl/nes_core/cpu/nes_cpu6502.v:216`：`nmi_rise = nmi_i && !nmi_sync_reg`（上升沿识别）；`:788-790` 锁存到 `nmi_pending_reg`；`:820-827` 在取指边界服务。
 - 【审查】`tb/system/README.md`“明确未实现”写明：`irq_i` 恒为 0、测试程序全程 `PPUCTRL[7]=0`，因此 NMI 服务例程和 `$FFFA` 向量没有被覆盖；同文件的“NMI 关闭”断言正依赖这一点。
 - 【审查】`tb/cpu/README.md` 记录 NMI、BRK hijack、IRQ hijack 场景与单点 hijack 采样点近似，但 `nmi_i` 在 `tb/cpu/tb_nes_cpu6502.v` 与 `tb/cpu/tb_nes_cpu6502_bus.v` 中由 testbench 自行产生（`nmi_armed` / `nmi_addr_t` 机制）。
@@ -378,7 +378,7 @@
 | L-16 | **`CHR_ADDR_BITS = 17` 截断 MMC3 的 CHR bank bit 7**：MMC3 的 1 KiB CHR 窗口选择寄存器是 8 bit，bit 7 落在 17 bit 地址之外，因此 bank `0x80`-`0xFF` **别名**到 `0x00`-`0x7F` | MMC3 的 CHR banking（`nes_system_v6`，`CHR_ADDR_BITS` 是 elaboration 期参数） | [`docs/modules/system-v6.md`](../modules/system-v6.md) §3.4、§6 | 外部 CHR 存储方案确定时（地址宽度必须与它一致） |
 | L-18 | **`mapper_ppu_a12` 在 RTL 里仍硬绑 0**（`nes_system_v5.v:215`、`nes_system_v6.v:302`——读臂那一轮之前是 `:259`），所以 MMC3 的扫描线 IRQ 计数器在系统级**仍然无法自时钟**。**根因不是"忘了接线"**：本 PPU **没有 VRAM 地址总线**，`bg_pattern_addr` 只有 13 bit、bit 12 是 `PPUCTRL[4]`，地址进位到不了 bit 12——所以根本不存在一个可以接出来的真实 A12 | MMC3 扫描 IRQ 的**自时钟**（生产 RTL 未改；状态机已在 `system-v6` 的 P1-11 里于**建模刺激**下被真实 RTL 激励过，但那是 TB 侧的模型，不是硬件预测） | [`docs/modules/system-v6.md`](../modules/system-v6.md) §5.3、§6；`tb/system/README.md` 的"### P1-11" | 给 `nes_ppu2c02` 引入真实 VRAM 地址总线时；或接入真实卡带时 |
 | L-19 | **建模的 MMC3 A12 刺激不覆盖依赖精灵的 A12 变化**：真实硬件上 A12 的出现次数依赖精灵 pattern 地址，**每条扫描线可达 4 次**；P1-11 的模型只实现 NESdev 的标准情形（每个渲染扫描线、PPU dot 260 处一个上升沿）。**这不是一个可以被补上的缺口**——精灵 pattern 地址是 OAM 相关的，在**没有**真实 VRAM 地址总线的前提下无法建模 | `system-v6` 的 P1-11 结论范围 | `tb/system/README.md` 的"### P1-11"；[`docs/modules/system-v6.md`](../modules/system-v6.md) §5.4 | 与 L-18 同步（真实 VRAM 地址总线 / 真实卡带） |
-| **L-20** | **`$2007` 外部 CHR 的读臂会占掉 CHR 总线上的一个取数拍**：`chr_rd_win` 现在直接喂 `chr_req` / `chr_addr`（`nes_ppu2c02.v:807`、`:809-811`），与 L-17 的写臂是**同一条隐患的第二个实例**。把地址放上总线要花掉一个 `ce` 的地址时间（外部 CHR 在**每个** `ce_ppu` 沿寄存 `chr_rdata`、CPU 在 `div_phase == 0` 锁存 `bus_din`，所以必须提前一个 `ce`，**提前量零余量**），并**可能顶掉一个**在飞的取数字节——一个背景 tile（8 像素、1 个 pattern 字节）或一个精灵 slot 平面（某一行上的 8 像素），**范围限定在被读的那条扫描线**。**实测 396 个读臂里 107 个真的撞上**（背景 71 / 精灵 36）。**渲染开着时帧中 `$2007` CHR 读不宣称安全**；扫描线 240–260 或关渲染时可证像素不可见，**扫描线 261 明确不安全** | `nes_system_v6` 的 `$2007` CHR 读通路（`EXTERNAL_CHR = 1`）；`g_chr_internal` 一行未改 | [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md) §8.1；[`docs/modules/ppu-external-chr.md`](../modules/ppu-external-chr.md) 11.3.9；[`docs/modules/system-v6.md`](../modules/system-v6.md) §5.1.3、§6 | 与 L-17 同步——三条候选修法（压制 `chr_req` / 加握手背压 / 限制访问窗口）一条都还没做 |
+| **L-20** | **`$2007` 外部 CHR 的读臂会占掉 CHR 总线上的一个取数拍**：`chr_rd_win` 现在直接喂 `chr_req` / `chr_addr`（`nes_ppu2c02.v:807`、`:808-809`），与 L-17 的写臂是**同一条隐患的第二个实例**。把地址放上总线要花掉一个 `ce` 的地址时间（外部 CHR 在**每个** `ce_ppu` 沿寄存 `chr_rdata`、CPU 在 `div_phase == 0` 锁存 `bus_din`，所以必须提前一个 `ce`，**提前量零余量**），并**可能顶掉一个**在飞的取数字节——一个背景 tile（8 像素、1 个 pattern 字节）或一个精灵 slot 平面（某一行上的 8 像素），**范围限定在被读的那条扫描线**。**实测 396 个读臂里 107 个真的撞上**（背景 71 / 精灵 36）。**渲染开着时帧中 `$2007` CHR 读不宣称安全**；扫描线 240–260 或关渲染时可证像素不可见，**扫描线 261 明确不安全** | `nes_system_v6` 的 `$2007` CHR 读通路（`EXTERNAL_CHR = 1`）；`g_chr_internal` 一行未改 | [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md) §8.1；[`docs/modules/ppu-external-chr.md`](../modules/ppu-external-chr.md) 11.3.9；[`docs/modules/system-v6.md`](../modules/system-v6.md) §5.1.3、§6 | 与 L-17 同步——三条候选修法（压制 `chr_req` / 加握手背压 / 限制访问窗口）一条都还没做 |
 | **L-20b** | **读臂带来的两条新义务，都是"合同变宽"而不是"缺陷"**：(a) **地址建立时间**——多出来的仲裁级落在 **`chr_addr`** 上，而 `chr_addr` 是通往 CHR 地址的**唯一**通路，所以 `v_addr → chr_addr → mapper → chr_final_addr → chr_rdata` 的建立时间必须按真实存储器（BRAM / SDRAM）的 `tACC` 预算**重新核对**；(b) **同址同拍的读写竞争第一次对程序可见**——TB 把它建模成 **read-first**，这个**建模选择**现在对"写完一个 CHR 字节立刻读回来"的程序是可观测的，必须由真实存储器回答 | 外部 CHR 存储器的实现方案（今天还没有，只在 testbench 里） | 同上；R-01、R-03 | 外部 CHR 存储方案落地时 |
 
 **关于 L-16**：17 bit **正好覆盖 MMC1**（其 CHR 窗口最大 32 KiB），所以这个宽度不是随手取的。但**加宽它今天没有意义**——`nes_system_v6` 的 `chr_final_addr` 是纯 RTL 输出端口，片上没有 CHR 存储，外部方案（SDRAM）还不存在；加宽只会多产生一批没人读的常量位。**别名是已知的、可预测的、被接受的限制，不是缺陷**；真要修它，正确顺序是"先定外部存储地址宽度，再让 `CHR_ADDR_BITS` 跟着走"，而不是反过来。
@@ -398,11 +398,11 @@
 
 **关于 L-19**：L-18 的诚实版本。它的关键点是"**不能**建模"而不是"忘了建模"：真实硬件上 A12 的出现次数依赖精灵 pattern 地址，而精灵 pattern 地址是 OAM 相关的；在没有真实 VRAM 地址总线的条件下，这个依赖在 RTL 里**不存在可表示的形式**。因此"每条扫描线一次上升沿"是**一种**合法形状，不是**唯一**正确的形状。L-19 与 L-18 同步重估。
 
-**关于 L-17**（登记于 `$2007` 对外部 CHR 的写通路落地那一轮，`5cc36e7` / `576cc74`）：`chr_we` 与 `chr_req` 是同一个 CHR 地址总线上的两个独立驱动源。`nes_system_v6` 给了**写优先**（`mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr`），但**写不压制 `chr_req`**——`chr_req` 由两个自由运行的取数单元经组合 mux 产生（`nes_ppu2c02.v:709`；读臂那一轮之后同一个 mux 变成"取数单元 + 读臂"三项、位置 `:809`，而这一行是**读臂落地之前**的位置），`bg_fetch_due`（`:604`，读臂那一轮之后是 `:700`）也没有扫描线或 mask 门控。`system-v6` 把这件事**测量**出来而不是假定：96 个 `$2007` 写拍里 **22** 拍与在飞的背景取数相撞；那一拍 `chr_final_addr` 上是写地址（因此改用**写模型**核对），代价是取数单元锁到了一个错字节。**本轮那 22 次碰撞 0 次落在 `bg_pa_enable` 为高或精灵打开的 scanline 上**（上传程序跑在 `PPUMASK = $00` 下），所以渲染结果未受影响——**但这不等于已修复**：一个在渲染中期写 CHR 的程序会有**一个 tile 拍**显示错 pattern。
+**关于 L-17**（登记于 `$2007` 对外部 CHR 的写通路落地那一轮，`5cc36e7` / `576cc74`）：`chr_we` 与 `chr_req` 是同一个 CHR 地址总线上的两个独立驱动源。`nes_system_v6` 给了**写优先**（`mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr`），但**写不压制 `chr_req`**——`chr_req` 由两个自由运行的取数单元经组合 mux 产生（`nes_ppu2c02.v:709`；读臂那一轮之后同一个 mux 变成"取数单元 + 读臂"三项、位置 `:807`，而这一行是**读臂落地之前**的位置），`bg_fetch_due`（`:604`，读臂那一轮之后是 `:698`）也没有扫描线或 mask 门控。`system-v6` 把这件事**测量**出来而不是假定：96 个 `$2007` 写拍里 **22** 拍与在飞的背景取数相撞；那一拍 `chr_final_addr` 上是写地址（因此改用**写模型**核对），代价是取数单元锁到了一个错字节。**本轮那 22 次碰撞 0 次落在 `bg_pa_enable` 为高或精灵打开的 scanline 上**（上传程序跑在 `PPUMASK = $00` 下），所以渲染结果未受影响——**但这不等于已修复**：一个在渲染中期写 CHR 的程序会有**一个 tile 拍**显示错 pattern。
 
 **为什么它是硬件形状而不是接线错误**：2C02 只有一根 CHR 地址总线，写优先是它的固有行为。真正要选的是**仲裁策略**，三条各有代价：压制 `chr_req` 会破坏背景取数流水节拍（请求被吞 = tile 窗口错位）；给总线加握手/背压要改 `nes_chr_fetch_unit` / `nes_sprite_chr_fetch` 两个单元的接口（它们现在是"无条件请求、无背压"）；把上传窗口限制在关渲染时则要求软件配合（vblank / `$2001 = 0`），无法在 RTL 内部保证。**本轮一条都没做。** 详见 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md) §4 与 §8.2。
 
-**关于 L-20**（登记于 `$2007` 对外部 CHR 的**读**通路落地那一轮，与 L-17 同批发现、**并列而不是替代**）：读臂把同一个问题搬到了读侧。`chr_rd_win` 现在**直接**喂 `chr_req` 与 `chr_addr`（`nes_ppu2c02.v:807`、`:809-811`），所以 **`P0-8` 那条"`chr_req` 从不在连续两个 `ce` 上为高"按构造就会被违反**——那一轮把 `P0-8` **重新界定**（不是削弱）：每组连续对按**第二拍是哪个 master 赢**归属，并断言**两拍都没有读臂**的连续对为 **0**（那正是旧不变式覆盖的取数对取数性质）。实测 `ab_v6` 上有 **171** 组连续对：89 组第二拍由读臂赢（80 背景 / 9 精灵）、82 组由取数赢（82 背景 / 0 精灵）、**0** 组两拍都没有读臂；`chr_mmc3` 的程序不发 `$2007` 读，所以那里 `m_req_consec == 0` **逐字保留**。
+**关于 L-20**（登记于 `$2007` 对外部 CHR 的**读**通路落地那一轮，与 L-17 同批发现、**并列而不是替代**）：读臂把同一个问题搬到了读侧。`chr_rd_win` 现在**直接**喂 `chr_req` 与 `chr_addr`（`nes_ppu2c02.v:807`、`:808-809`），所以 **`P0-8` 那条"`chr_req` 从不在连续两个 `ce` 上为高"按构造就会被违反**——那一轮把 `P0-8` **重新界定**（不是削弱）：每组连续对按**第二拍是哪个 master 赢**归属，并断言**两拍都没有读臂**的连续对为 **0**（那正是旧不变式覆盖的取数对取数性质）。实测 `ab_v6` 上有 **171** 组连续对：89 组第二拍由读臂赢（80 背景 / 9 精灵）、82 组由取数赢（82 背景 / 0 精灵）、**0** 组两拍都没有读臂；`chr_mmc3` 的程序不发 `$2007` 读，所以那里 `m_req_consec == 0` **逐字保留**。
 
 **撞车是真的，不是一句"未修"的定性话**：396 个读臂里 **107** 个与在飞的取数请求撞在同一个 `ce` 上。**它也是硬件形状**——2C02 只有一根内部 CHR 地址总线，真实硬件上 `$2007` 读的 CHR 访问同样要占地址时间，所以"把地址放上总线要花掉一个 `ce`"是**忠实**而不是走捷径；被顶掉的取数字节是本仓库这条流水线的**代价**。三条候选修法与 L-17 完全相同、同样**一条都没做**。**代价的边界必须一起说**：一个背景 tile（8 像素里 1 个 pattern 字节）或一个精灵 slot 平面（某一行上的 8 像素），**范围限定在被读的那条扫描线**；在扫描线 240–260 或关渲染时可以证明**像素不可见**（W3-10 逐臂核对、396 个臂违例 **0**、任何违例当场 `$fatal`），**扫描线 261 明确不安全**（它的 dot 340 背景取数与 dot 259–290 的精灵预取喂的是第 0 行）。落点分布：378 个臂在 vblank 扫描线 240–260、18 个在外部（`PPUMASK=$00`），跨扫描线 93..255。
 
@@ -482,7 +482,7 @@
 - 【事实】`rtl/nes_core/system/nes_system_v0.v:22-27`：`reg [3:0] div_phase`，`ce_ppu = !reset && (div_phase[1:0] == 2'b00)`，`ce_cpu = !reset && (div_phase == 4'd0)`；`:32-35` 使 `div_phase` 在 0..11 之间循环，即 12 拍。比例 12:4 = 3:1 与真机一致。
 - 【事实】`tb/system/tb_nes_system_v0.v:100` 的时钟是 `always #5 clk = !clk`，即 10 ns 周期 = 100 MHz。`tb/system/README.md` 明确记录“CPU 总线周期 120 ns”“1 dot = 4 clk = 40 ns”，折算出的 CPU 是 8.333 MHz、PPU 是 25 MHz，与真机的 1.789773 / 5.369318 MHz 相差约 4.66 倍。
 - 【事实】`tb/system/tb_nes_system_v0.v:772-773` 断言帧周期恰好 357368 个 `clk`，即 262 × 341 × 4。这钉住的是主时钟**周期数**，不是绝对时间。
-- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:747-761`：`pixel_valid` / `pixel_x` / `pixel_index` 是纯组合输出，`pixel_x` 每个 dot 变一次。
+- 【事实】`rtl/nes_core/ppu/nes_ppu2c02.v:873-887`：`pixel_valid` / `pixel_x` / `pixel_index` 是纯组合输出，`pixel_x` 每个 dot 变一次。
 - 【事实】`rtl/nes_core/video/nes_line_buffer_vga.v` 用 `wr_clk` / `rd_clk` 两个独立时钟，只让 1 bit 的 `line_ready_toggle` 过两级同步器；像素数据不出双口 RAM。
 - 【事实】`docs/modules/line-buffer-vga.md` 第 3.5 节记录读端速率必须 ≥ 写端速率的 4 倍：NTSC 写端 5.369318 MHz 的 4 倍是 21.48 MHz，低于 VGA 的 25 MHz，余量约 16%。第 5.5 节记录该模块没有背压，写端领先 2 行以上会静默丢行。
 - 【事实】`docs/hardware/08-wm8978-audio.md` 第 3 节记录例程 MCLK 为 12 MHz，并记录 12 MHz 在 256× 配置下只能得到 46.875 kHz，不是标准采样率。
