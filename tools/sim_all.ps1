@@ -16,6 +16,7 @@ param(
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6',
         'platform-core', 'platform-tb', 'qsf-if-core',
         'peripheral-core', 'peripheral-i2c', 'sd-spi-cmd-core', 'sd-spi-cmd-tb',
+        'touch-input-tb',
         'cdc-fifo-core', 'cdc-fifo-tb',
         'i2s-shifter-core', 'i2s-shifter-tb',
         'audio-i2s-core', 'audio-i2s-tb'
@@ -122,6 +123,7 @@ $sdSpiCmdRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\sd_spi_cmd.v'
 $cdcFifoRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_cdc_fifo.v'
 $i2sShifterRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_i2s_shifter.v'
 $audioI2sRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_audio_i2s.v'
+$touchInputRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_touch_input.v'
 
 $cpuSources = @($cpuRtl)
 $ppuSources = @($ppuSpriteRtl, $ppuRtl, $chrFetchUnitRtl, $spriteChrFetchRtl)
@@ -151,6 +153,7 @@ $sdSpiCmdSources = @($sdSpiCmdRtl)
 $cdcFifoSources = @($cdcFifoRtl)
 $i2sShifterSources = @($i2sShifterRtl)
 $audioI2sSources = @($cdcFifoRtl, $i2sShifterRtl, $audioI2sRtl)
+$touchInputSources = @($touchInputRtl)
 
 $allTargets = @(
     [pscustomobject]@{
@@ -610,6 +613,15 @@ $allTargets = @(
         Top         = 'tb_nes_audio_i2s'
         Sources     = $audioI2sSources + (Join-Path $repoRoot 'tb\peripheral\tb_nes_audio_i2s.v')
         Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'touch-input-tb'
+        Group       = 'peripheral'
+        Label       = 'Capacitive touch screen NES input tb'
+        Top         = 'tb_nes_touch_input'
+        Sources     = $touchInputSources + (Join-Path $repoRoot 'tb\peripheral\tb_nes_touch_input.v')
+        Standard    = '2001'
         Run         = $true
     }
 )
