@@ -81,14 +81,16 @@ palette 的 `$3F10/$3F14/$3F18/$3F1C` 镜像始终存在。
 
 `nes_ppu2c02.v` 只做三件事，具体寻址、翻转、8-sprite 上限和溢出计数全部由 `nes_ppu_sprite.v` 承担。
 
-### 1. 内部 RAM 展平成模块总线
+### 1. 内部 RAM 摊平成模块总线
 
-`u_sprite` 的 OAM/CHR 是**输入端口**，PPU 用 generate 连续赋值把内部 RAM 摊平：
+`u_sprite` 的 OAM 与 CHR 都是**输入端口**，PPU 侧用 generate 连续赋值把内部 RAM 摊平后送进去：
 
 | 目标 | 布局 |
 | --- | --- |
-| `sprite_oam_bus[2047:0]` | 项 `si` 的 Y/tile/attr/X 在 `[si*32 +: 8]`、`+8`、`+16`、`+24`，即 `oam_ram[si*4 .. si*4+3]`。 |
-| `sprite_chr_bus[65535:0]` | 字节 n 在 `[n*8 +: 8]`，即 `chr_ram[n]`。8 KiB CHR 占低 8 Kb，高位恒 0。 |
+| `sprite_oam_bus[2047:0]` | 项 `si` 的 Y/tile/attr/X 在 `[si*32 +: 8]`、`+8`、`+16`、`+24`，即 `oam_ram[si*4 .. si*4+3]`。64 次迭代（`g_oam_flatten`）。 |
+| `sprite_chr_slots[127:0]` | **不是**整片 CHR 的扁平总线。**8 次迭代、16 次读**（`g_sprite_chr_slots`）：slot `g` 的低平面在 `[g*16 + 0 +: 8]` = `chr_ram[s_pat_addr[g]]`，高平面在 `[g*16 + 8 +: 8]` = `chr_ram[s_pat_addr[g] + 13'd8]`，`s_pat_addr[g]` 取自 `nes_ppu_sprite` 新导出的 `pat_addr_cur_o[g*13 +: 13]`。 |
+
+**（已按事实更新，`575e191`）**这一格原先是 `sprite_chr_bus[65535:0]`（字节 n 在 `[n*8 +: 8]`，即 `chr_ram[n]`），由一个 **8,192 次迭代**的 `g_chr_flatten` 组合拼成。那条路被删掉了：8,192 个常量索引的读口让 Quartus 直接拒收（`Error (10106): loop must terminate within 5000 iterations`），Verific 的 elaboration 器也在同一构造上崩（`read to RAM wasn't mapped to a specific read port`）。现在 `u_sprite` 收 `.chr_slots(sprite_chr_slots)`，并用 `.PER_SLOT_CHR(1'b1)` 选中单元内部 `g_chr_per_slot` 分支；`.chr(65536'd0)` 仍然传着，但那条 `g_chr_flat` 默认路径在 PPU 里**不再被读**。**交付的仍是同两个字节、同两个字节地址**（`s_pat_addr` 与 `s_pat_addr + 8`），所以渲染结果不变。逐条推导与实测数字见 [`docs/00-overview/risk-register.md`](../../docs/00-overview/risk-register.md) 第 10.4 节与 [`docs/modules/ppu-external-chr.md`](../../docs/modules/ppu-external-chr.md) 1.2 / 1.3 节。
 
 `ctrl` 接 `control_reg`，`mask` 接 `mask_reg`，`scanline`/`dot` 直接接 PPU 计数器。`nes_ppu_sprite.v` 是纯组合模块（`clk`/`ce` 未被引用），所以这些连线不引入任何 dot 级流水或预取状态，背景取数通路和 vblank/NMI 时序完全不受影响。
 
@@ -292,7 +294,7 @@ PASS nes_ppu_sprite
 - **背景/精灵混色**：`sprite_pixel` 和 `sprite_priority` 是交给上层的原始量，本模块不输出最终 palette RAM 索引。"背景透明时精灵一定显示"这一支不在这里。**顶层 `nes_ppu2c02.v` 已经完成混色并由 `tb_nes_ppu2c02.v` 的 `test_sprite_pixels_and_priority` 断言，见上文"精灵集成"。**
 - **每一帧的逐 dot 扫描**：因为模块是纯组合，testbench 只在关键 (scanline, dot) 点上探测，没有跑满 341×262 的全帧逐点比对。**与 `nes_ppu2c02.v` 的联合断言已经补上**（`test_sprite_pixels_and_priority` / `test_sprite_mask_gating` / `test_sprite_ctrl_passthrough` / `test_sprite0_status` / `test_sprite_overflow_status`），但仍然只钉关键像素，没有整屏逐点比对。
 - **多精灵相互遮挡的全组合**：只验证了"6 个精灵在同一 X 重叠取最小 OAM 下标"这一种遮挡形态，没有穷举 8 个 slot 的所有不透明组合。
-- **CHR 越界与 `chr` 总线宽度**：CHR 按 8 KiB 全量给满，8×8 的 `s_pat_addr` 必然落在 0..0x7F7、8×16 落在 0..0x1077，没有测非法 `tile`/`ctrl` 组合下的越界读。顶层摊平时也只给了低 8 KiB（8192 字节）。
+- **CHR 越界与 `chr` 总线宽度**：CHR 按 8 KiB 全量给满，8×8 的 `s_pat_addr` 必然落在 0..0x7F7、8×16 落在 0..0x1077，没有测非法 `tile`/`ctrl` 组合下的越界读。**这条限制仍然有效**（本 TB 走 `PER_SLOT_CHR = 0` 的 `g_chr_flat`，真的在读 `chr`）；TB 侧摊平也只给了低 8 KiB（8192 字节）。**注意别把它读成 PPU 里那个 `g_chr_flatten`**——那个已经在 `575e191` 删掉了（见上面第 1 节），现在只存在于本 TB 这条默认路径上。
 - **`OAM` 总线宽度**：`oam` 固定 2048 位、64 项全部可寻址，已测项 0 和项 63，但没有测项 32..62 的逐项扫描。
 - **PAL / NTSC 差异、奇数帧跳 dot**：与精灵无关，未实现也不测。
 - ModelSim/Questa 的 `run_ppu_tb.do` **没有**精灵源文件；`tools/sim_all.ps1` 也不包含 `tb_nes_ppu_sprite`，而且 `ppu-core`/`ppu-tb`/`system-*` 目标现在缺 `nes_ppu_sprite.v` 会编译失败。这些脚本不在本次写入范围内，需要单独补。

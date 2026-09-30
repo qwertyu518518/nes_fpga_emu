@@ -696,7 +696,7 @@
 
 - 【事实】**缺陷 1 是仿真抓不到的**：`read_buffer_reg[7:0]` 与 `v_addr[14:0]` 各自被两个 `always` 块驱动，而 Icarus 按 last-write-wins 处理，多出来的驱动无害。**因此 51 个目标的 `tools/sim_all.ps1` 门禁当时仍然全绿**——这正是"仿真门禁对多驱动网有盲区"的实证（已在 R-05 登记）。`575e191` 的 commit message 记录的处理是"把每根网合并成单一驱动"，并说明两条路径按构造互斥，所以合并是忠实的并集而不是优先级选择。
 - 【事实】缺陷 3 的修法是**删掉** `g_chr_flatten`，不是把它改形。`575e191` 的 commit message 记录的理由：它存在的唯一目的是给 `nes_ppu_sprite` 每 slot 两个字节，而它用 **8,192 个常量索引的读口**做到这一点——**这是 `chr_ram` 一直无法推断 BRAM 的第二个独立原因**（第一个是 R-03 记录的多读口）。改法是让精灵单元改取"每 slot 当前行 pattern 地址 + 128 bit slot 向量"，由 **8 次迭代、16 次读**构成；`nes_ppu_sprite` 因此新增 `PER_SLOT_CHR` 参数、默认 0，它自己的 testbench 与内部 CHR 路径不受影响。
-- 【事实】`rtl/` 下**已经没有 `g_chr_flatten` 这个 generate 名字**（全仓搜索只在 `docs/modules/ppu-external-chr.md:56` 与 `:96` 两处文档里还留着，那是**未同步的旧描述**）。本节不代改那两行。
+- 【事实】`rtl/` 下**已经没有 `g_chr_flatten` / `sprite_chr_bus` 这两个名字**，剩下的提及全在文档里，且都只出现在 3 个文件：`docs/00-overview/risk-register.md`（本节）、`docs/modules/ppu-external-chr.md`（1.1 的分支对照表、1.3 的等价性那条、11.3.1 的接线表，全部以"已删除 / 已被替换"的口径写）、`tb/ppu/README.md`（顶层接线表那条与精灵 TB 的越界限制那条）。另有 `docs/00-overview/verification-plan.md:506` 与 `:545` 两处只提到 `sprite_chr_bus`——那两处**有意保留**，它们是"那一轮"的历史结论，原文自带"以下是那一轮的历史结论"与"**当时**仍是接口骨架"的框定，描述的是修复前的状态，改掉等于篡改历史记录。
 - 【事实】`575e191` 的 commit message 自己写明："Resource numbers are unchanged by this commit, still 63127 LEs and 0 of 46 M9K for the external CHR build, so this is a legality fix only and not progress toward fitting the device."——**这一句与 10.1 的报告数字一致，也说明"修好合法性"不等于"装得下"**。
 
 ### 10.5 明确**没有**测量的东西

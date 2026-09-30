@@ -53,33 +53,38 @@ endgenerate
 |---|---|---|
 | `ppu_space_read` | `< $2000` 读 `chr_ram[address[12:0]]` | `< $2000` 返回 `8'h00`（**已按事实更新两轮**：先是 `$2007` 读未实现、外部 CHR 的 `$2007` 写已实现；**读臂那一轮起 `$2007` 的 CHR 读不再经过这个函数**——它走 `chr_rd_armed_q ? chr_rdata : 8'h00`，所以这个 `< $2000 → 8'h00` 分支对 `$2007` 已经**不可达**，它现在是 nometable / palette 读旁边的历史残留。见 11.3.2 与 11.3.9） |
 | `bg_pattern_low` / `bg_pattern_high` | `chr_ram[bg_pattern_addr]` / `+ 13'd8` | `(bg_ready && bg_pa_enable) ? bg_lo_q : 8'h00` / `bg_hi_q`（**已按事实更新**：不再是绑 `8'h00`） |
-| `sprite_chr_bus` | `g_chr_flatten` 8192 份 `chr_ram` 组合拼成 65536 bit | `65536'd0`（内部路径的展平总线在外部模式下用不到） |
-| `u_sprite` | `EXTERNAL_CHR=1'b0`、`chr_sh=16'h0000`、`scanline_sel=scanline` | `EXTERNAL_CHR=1'b1`、`chr_sh=sp_chr_sh`（16 bit，由 shadow 解复用出低/高两个平面）、`scanline_sel=scanline`（**已按事实更新**：不再绑全 0；`scanline_sel` 仍直连 `scanline` 是**当前正确的接法**，因为"下一行"的重定时已经搬进 `pat_addr_o` 内部，见 11.3.1） |
+| 精灵 CHR 数据通路（**已按事实更新**） | **没有展平总线，`sprite_chr_bus` 这根 65536 bit 网已被删除**（`575e191`）。现在由 `g_sprite_chr_slots`（`:602-607`）用 **8 次迭代、16 次读**把 `chr_ram` 组合读成 128 bit `sprite_chr_slots`：每 slot 16 bit，低平面 = `chr_ram[s_pat_addr]`、高平面 = `chr_ram[s_pat_addr + 13'd8]`，地址取自 `pat_addr_cur_o` 导出的 104 bit `sprite_pat_cur_bus`（`:599-600`、`:631`），经 `.chr_slots(...)` 喂进精灵单元 | **同样不读 `chr_ram`**：字节来自 `sp_shadow` 按 slot 解复用出的 `chr_sh[15:0]`（`:748-750`、`:774`）。两个分支**都**传 `.chr(65536'd0)`（内部 `:617`、外部 `:773`），但内部那一份只是 `PER_SLOT_CHR = 1` 选中的 `g_chr_per_slot` 之外**那条不再被读的默认路径 `g_chr_flat` 的实参** |
+| `u_sprite` | `EXTERNAL_CHR=1'b0`、**`PER_SLOT_CHR=1'b1`**（`575e191` 新增）、`chr_sh=16'h0000`、`.chr_slots(sprite_chr_slots)`、`.chr(65536'd0)`、`scanline_sel=scanline` | `EXTERNAL_CHR=1'b1`、`chr_sh=sp_chr_sh`（16 bit，由 shadow 解复用出低/高两个平面）、`.chr(65536'd0)`、`scanline_sel=scanline`（**已按事实更新**：不再绑全 0；`scanline_sel` 仍直连 `scanline` 是**当前正确的接法**，因为"下一行"的重定时已经搬进 `pat_addr_o` 内部，见 11.3.1） |
 | `chr_ram` 的 `$2007` 写 | 有 | **没有**（外部模式改成打到外部端口：`chr_waddr` / `chr_we` / `chr_wdata`，见 11.3.2） |
-| `chr_req` / `chr_addr` | 不存在（内部模式不发） | 背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux**（**已按事实更新**，`nes_ppu2c02.v:686-687`，精灵优先）；`chr_waddr` / `chr_we` / `chr_wdata` **不再绑常数**（`5cc36e7` / `576cc74`），由 `v_addr` 与寄存器译码驱动（`:712-715`） |
-| 取数状态机 | 不存在（内部路径纯组合） | **有两个**：`nes_chr_fetch_unit u_chr_fetch`（`:670-684`）与 `nes_sprite_chr_fetch u_sprite_chr_fetch`（`:633-645`） |
-| 平面锁存 | 不需要（直接组合读 `chr_ram`） | **有**：`bg_lo_q` / `bg_hi_q` / `bg_ready`（`:573-575`、`:692-704`）与 128 bit `sp_shadow` |
+| `chr_req` / `chr_addr` | 不存在（内部模式不发） | 背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux**（**已按事实更新**，`nes_ppu2c02.v:807-808`，精灵优先）；`chr_waddr` / `chr_we` / `chr_wdata` **不再绑常数**（`5cc36e7` / `576cc74`），由 `v_addr` 与寄存器译码驱动（`:811-814`） |
+| 取数状态机 | 不存在（内部路径纯组合） | **有两个**：`nes_chr_fetch_unit u_chr_fetch`（`:789-803`）与 `nes_sprite_chr_fetch u_sprite_chr_fetch`（`:752-764`） |
+| 平面锁存 | 不需要（直接组合读 `chr_ram`） | **有**：`bg_lo_q` / `bg_hi_q` / `bg_ready`（`:690-692`、`:816-827`）与 128 bit `sp_shadow` |
 | `$2007` 读 + `increment_v` | 有 | 有 |
 
-**（已按事实更新）`g_chr_external` 的背景取数逻辑已经实现，精灵预取单元也已经例化**，不再是"只把输出绑常数"。`chr_req` / `chr_addr` 由背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux** 驱动（`:686-687`），`chr_rdata` 已被真正读进 `bg_lo_q` / `bg_hi_q`（背景）与 `sp_shadow`（精灵），`bg_pattern_low` / `bg_pattern_high` 读的是锁存器。**`$2007` 对外部 CHR 的写通路也已实现**（`5cc36e7` / `576cc74`）：`chr_waddr` / `chr_we` / `chr_wdata` 三根线不再是常数，`chr_we` 是**恰好 1 `clk` 宽的组合 strobe**、`chr_waddr` 是**自增前**的 `v_addr`（逐条推导与证据见 11.3.2 与 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md)）。仍然绑常数的是 `sprite_chr_bus = 65536'd0`（内部路径的展平总线在外部模式下用不到）以及 `ppu_space_read` 对 `< $2000` 的 `8'h00`——**这一条现在是历史残留而不是活行为**：`$2007` 的 CHR 读在读臂那一轮起改走 `chr_rd_armed_q ? chr_rdata : 8'h00`，不再经过 `ppu_space_read`（见 11.3.9）。**但精灵像素的正确性已经有 A/B 证据**（`ad3c17a`：七个精灵可观测量在 552,960 个比较点上 0 分歧，1,708 个精灵决定像素跨三类优先级），精灵 A/B 里的 9 个精灵场景各自隔离一项、各有自己的非空洞 `$fatal`，8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转**逐项已被 A/B 证明**（逐条数字见 11.3.1），剩下的缺口只有 §8.2 的 overflow **行为**差异、9 个场景之外没构造出来的优先级组合与仲裁无背压。（先前记在这里的 shadow 差一行、8 位 `chr_sh` 只能交付一个字节两条**已修掉**：`chr_sh` 现在 16 bit 交付两个平面，`pat_addr_o` 改用下一行 scanline。）`nametable_ram` 的 `nt_fetch` 影子数组**已删除**，取数支路直接读 `nametable_ram` 的第二个组合读口。完整接线、取数节拍、像素级证据与仍未实现项见第 11 节。
+**（已按事实更新）`g_chr_external` 的背景取数逻辑已经实现，精灵预取单元也已经例化**，不再是"只把输出绑常数"。`chr_req` / `chr_addr` 由背景 `nes_chr_fetch_unit` 与精灵 `nes_sprite_chr_fetch` 两个 master 的**组合优先 mux** 驱动（`:807-808`），`chr_rdata` 已被真正读进 `bg_lo_q` / `bg_hi_q`（背景）与 `sp_shadow`（精灵），`bg_pattern_low` / `bg_pattern_high` 读的是锁存器。**`$2007` 对外部 CHR 的写通路也已实现**（`5cc36e7` / `576cc74`）：`chr_waddr` / `chr_we` / `chr_wdata` 三根线不再是常数，`chr_we` 是**恰好 1 `clk` 宽的组合 strobe**、`chr_waddr` 是**自增前**的 `v_addr`（逐条推导与证据见 11.3.2 与 [`docs/ppu_chr_external_write.md`](../ppu_chr_external_write.md)）。**（已按事实更新）**原先记在这里的"`sprite_chr_bus = 65536'd0` 仍然绑常数"一条**已随那根网一起作废**：`sprite_chr_bus` 与 8192 次迭代的 `g_chr_flatten` 在 `575e191` 里被删除，`.chr(65536'd0)`（内部 `:617`、外部 `:773`）现在**两个分支都在传**，但它只是 `PER_SLOT_CHR = 1` 选中的 `g_chr_per_slot` 之外**那条不再被读的默认路径 `g_chr_flat` 的实参**——精灵平面字节改由 128 bit `chr_slots` 交付（见上表与 1.2 节）。**因此本段仍然绑常数、且唯一还剩下的是历史残留的只有一条**：`ppu_space_read` 对 `< $2000` 的 `8'h00`——**这一条现在是历史残留而不是活行为**：`$2007` 的 CHR 读在读臂那一轮起改走 `chr_rd_armed_q ? chr_rdata : 8'h00`，不再经过 `ppu_space_read`（见 11.3.9）。**但精灵像素的正确性已经有 A/B 证据**（`ad3c17a`：七个精灵可观测量在 552,960 个比较点上 0 分歧，1,708 个精灵决定像素跨三类优先级），精灵 A/B 里的 9 个精灵场景各自隔离一项、各有自己的非空洞 `$fatal`，8×16 高度、每行 8 个 sprite 上限、overflow 标志位、水平/垂直/双翻转**逐项已被 A/B 证明**（逐条数字见 11.3.1），剩下的缺口只有 §8.2 的 overflow **行为**差异、9 个场景之外没构造出来的优先级组合与仲裁无背压。（先前记在这里的 shadow 差一行、8 位 `chr_sh` 只能交付一个字节两条**已修掉**：`chr_sh` 现在 16 bit 交付两个平面，`pat_addr_o` 改用下一行 scanline。）`nametable_ram` 的 `nt_fetch` 影子数组**已删除**，取数支路直接读 `nametable_ram` 的第二个组合读口。完整接线、取数节拍、像素级证据与仍未实现项见第 11 节。
 
 ### 1.2 `rtl/nes_core/ppu/nes_ppu_sprite.v`
 
 | 改动 | 内容 |
 |---|---|
-| 参数 | `EXTERNAL_CHR`（默认 `1'b0`） |
+| 参数 | `EXTERNAL_CHR`（默认 `1'b0`）；**`PER_SLOT_CHR`（默认 `1'b0`，`575e191` 新增）** |
 | 新输入 | `chr_sh[15:0]`：外部模式下当前 slot 的 pattern **两个平面**，`[7:0]` 是低平面、`[15:8]` 是高平面（**已按事实更新**：原为 `chr_sh[7:0]` 单字节，已加宽到 16 bit） |
 | 新输入 | `scanline_sel[8:0]`：渲染链使用的 scanline |
+| 新输入 | **`chr_slots[127:0]`（`575e191` 新增）**：8 slot × 16 bit，slot `g` 的低平面在 `[{g, 4'b0000} +: 8]`、高平面在 `[{g, 4'b1000} +: 8]`。**只有 `PER_SLOT_CHR = 1` 时被读** |
 | 新输出 | `pat_addr_o[103:0]`：8 slot × 13 bit。**已按事实更新**：`g_chr_external` 里它就是 `nes_sprite_chr_fetch` 的 `pat_addr` 输入，不再是"纯观测、无驱动用途" |
-| 分支 | `g_chr_internal` 用 `chr[{s_pat_addr,3'b000} +: 8]` 取低平面、`+64` 取高平面；`g_chr_external` 取 `chr_sh[7:0]` / `chr_sh[15:8]` 作为低/高平面 |
+| 新输出 | **`pat_addr_cur_o[103:0]`（`575e191` 新增）**：8 slot × 13 bit，每段是**本行**渲染用的 `s_pat_addr`。`PER_SLOT_CHR = 1` 时它被 PPU 拿去索引 `chr_ram` 并组装 `chr_slots`，所以它现在**有驱动用途**；`pat_addr_o`（下一行）与它**不能互换** |
+| 分支 | `g_chr_internal` 现在**再分两层**：`PER_SLOT_CHR = 1` 走 `g_chr_per_slot`（`chr_slots[{SLOT_U8, 4'b0000} +: 8]` / `[{SLOT_U8, 4'b1000} +: 8]`），`PER_SLOT_CHR = 0`（**默认**）走 `g_chr_flat`（`chr[{s_pat_addr,3'b000} +: 8]` 取低平面、`+ 13'd64` 取高平面）；`g_chr_external` 取 `chr_sh[7:0]` / `chr_sh[15:8]` 作为低/高平面 |
 
-`pat_addr_o` 每一段是 `s_pat_addr = {s_table, 5'b00000, s_tile, 1'b0, s_fine[2:0]}`，也就是**每个 slot 本行需要的那 1 个字节的地址**（`tile*16 + fine`）。外部预取器照着 `pat_addr_o` 发请求就能拿到正确的 16 个字节。**三处 CHR 地址约定必须指向同一批字节**，这一点是接线时踩过的坑：
+`pat_addr_o` 每一段是 `s_pat_addr = {s_table, 5'b00000, s_tile, 1'b0, s_fine[2:0]}`，也就是**每个 slot 本行需要的那 1 个字节的地址**（`tile*16 + fine`）。外部预取器照着 `pat_addr_o` 发请求就能拿到正确的 16 个字节。**四处 CHR 地址约定必须指向同一批字节**（已按事实更新：`575e191` 之后内部路径分成两条，这一节从三处变成四处），这一点是接线时踩过的坑：
 
 | 处 | 写法 | 实际指向的字节 |
 |---|---|---|
-| `nes_ppu_sprite` 内部路径 | `chr[{s_pat_addr, 3'b000} +: 8]`，高平面 `+ 13'd64` | `chr` 是 65536 bit 扁平总线，`{pat,3'b000}` 是**位**索引且每 8 位一个字节 → 字节 `s_pat_addr`；`+13'd64` **位** = **+8 字节** |
+| `nes_ppu_sprite` 内部路径 **`g_chr_flat`**（`PER_SLOT_CHR = 0`，**默认**；`tb_nes_ppu_sprite` 走的就是这条） | `chr[{s_pat_addr, 3'b000} +: 8]`，高平面 `+ 13'd64` | `chr` 是 65536 bit 扁平总线，`{pat,3'b000}` 是**位**索引且每 8 位一个字节 → 字节 `s_pat_addr`；`+13'd64` **位** = **+8 字节** |
+| `nes_ppu2c02` 内部路径 **`g_sprite_chr_slots`**（`PER_SLOT_CHR = 1`，**PPU 现在选的就是这条**） | `chr_ram[s_pat_addr]` / `chr_ram[s_pat_addr + 13'd8]`，索引取自 `pat_addr_cur_o` | `chr_ram` 是 `reg [7:0] chr_ram [0:8191]`，**按字节索引**，所以这里 `+ 13'd8` 就是 **+8 字节** |
 | `nes_chr_fetch_unit`（背景） | `chr_addr = tile_base + (plane ? 8 : 0)` | 字节 `tile_base` / `tile_base + 8` |
 | `nes_sprite_chr_fetch`（精灵） | `chr_addr = pat_addr` / `pat_addr + 8`，`& 14'h3FFF` | 字节 `pat_addr` / `pat_addr + 8` |
+
+**（已按事实更新）这四条现在必须一起读，因为 `575e191` 之后内部路径有两条并存。** 它们**指向同一对字节**（`s_pat_addr` 与 `s_pat_addr + 8`），但**算术不同**：`g_chr_flat` 的 `+13'd64` 是**位**步长（因为索引的是 65536 bit 扁平总线），`g_sprite_chr_slots` 的 `+13'd8` 是**字节**步长（因为索引的是字节数组 `chr_ram`）。`nes_ppu_sprite.v:132-140` 那条"`13'd64` 不能改成 `13'd8`"的告诫**仍然有效、且只对 `g_chr_flat` 有效**——它讲的是位偏移与字节偏移的区别，在 `g_chr_flat` 上把 `13'd64` 改成 `13'd8` 会读到 `s_pat_addr + 1`；**反过来**在 `g_sprite_chr_slots` 上把 `13'd8` 改成 `13'd64`，最小地址 0 会读成字节 64（tile 4 的第 0 行，不是 tile 0 的高平面），最大地址 `8183 + 64 = 8247` 还会**越过 `chr_ram[0:8191]` 的深度**。两条路径各有各的正确写法，不要互相"修正"。
 
 **这里曾有一个真实缺陷**：`nes_sprite_chr_fetch` 的 `plane_byte` 原来输出 `chr_addr = {pat + plane*8, 3'b000}`，把 pattern 地址当**位索引**再左移 3 位，而 `chr_addr` 是**字节**地址 → 地址整整偏 8 倍，同时 `chr_addr[13]` 永远为 0（外部 16 KiB CHR 的上半 8 KiB 取不到）。现已改为按字节算（`pat` / `pat + 8`，14 位回卷），`sprite-fetch-tb` 的独立重算同步更新，并加了一条"14 位地址字段必须被驱动起来否则 `$fatal`"的承重断言。
 
@@ -93,24 +98,29 @@ assign scanline_chain = (^scanline_sel === 1'bx) ? scanline : scanline_sel;
 
 ### 1.3 等价性与兼容性
 
-- **`EXTERNAL_CHR = 0`（默认）时与改造前逐位一致。** `g_chr_internal` 分支的表达式、`g_chr_flatten` 的 8192 份组合读、`chr_ram` 写、`$2007` 读全部照抄原样，只是被挪进了 `generate` 里。`tools/sim_all.ps1` 的 `ppu-core`（编译）、`ppu-sprite`、`ppu-integration` 三个目标全绿，`system-v0`/`v1`/`v2`/`v3`/`v4`/`v5` 与 `platform-tb` 也全绿。
+- **`EXTERNAL_CHR = 0`（默认）时渲染结果与改造前逐位一致。** **（已按事实更新）**这条现在**不再**建立在"`g_chr_flatten` 的 8192 份组合读照抄原样"上——`575e191` 把那个 generate 循环删掉了，理由与实测数字见 [`docs/00-overview/risk-register.md`](../00-overview/risk-register.md) 第 10.4 节（`Error (10106)` 8,192 次迭代超限、Verific `VRFX` 崩溃、以及 8,192 个常量索引读口是 `chr_ram` 无法推断 BRAM 的一个独立原因）。**等价性改由下面这条机制承担**：`g_chr_internal` 现在用 `g_sprite_chr_slots` 的 **8 次迭代、16 次读**，为每个 slot 取回**同样那两个字节、同样那两个地址**——`chr_ram[s_pat_addr]`（低平面）与 `chr_ram[s_pat_addr + 13'd8]`（高平面），正是原展平总线里 `chr[{s_pat_addr, 3'b000} +: 8]` 与 `chr[({s_pat_addr, 3'b000} + 13'd64) +: 8]` 所落的那一对（见 1.2 节那张四行表的算术对照）。**交付的字节相同，位序也相同**（低平面进 `s_plane_lo`、高平面进 `s_plane_hi`，`s_pat = {s_plane_hi[...], s_plane_lo[...]}` 不变），所以**像素与精灵可观测量不变**。
 
-- **`reg [7:0] chr_ram [0:8191]` 必须留在 `nes_ppu2c02` 模块作用域，名字不能改。** 8 个 testbench 用层次化路径直接读写它：
+  **两条门禁证据各自压在哪个事实上，不要混着说**：`tools/sim_all.ps1` 的 `ppu-sprite`（top = `tb_nes_ppu_sprite`）之所以仍然全绿，靠的是 **`PER_SLOT_CHR` 默认 `1'b0`**——那个 TB 用命名端口例化、没有覆盖参数（`tb/ppu/tb_nes_ppu_sprite.v:54-70`），所以它**仍在跑 `g_chr_flat` 那条默认路径**，`g_chr_per_slot` 并没有被它覆盖；`ppu-core`（top = `nes_ppu2c02`，elaboration）与 `ppu-integration`（top = `tb_nes_ppu2c02`）走默认 `EXTERNAL_CHR = 0`，因此 elaboration 与集成证据压在**新的每 slot 路径**上；`ppu-ext-chr-tb`（top = `tb_nes_ppu2c02_ext_chr`）则是 A/B 实例，把 `EXTERNAL_CHR = 0` 的内部路径与 `EXTERNAL_CHR = 1` 的外部路径逐 `ce` 逐 dot 比对，**内部那一侧现在跑的正是每 slot 路径**。`system-v0`/`v1`/`v2`/`v3`/`v4`/`v5` 与 `platform-tb` 也全绿，它们同样走内部 CHR 路径。**没有证据的部分不因此扩大**：`PER_SLOT_CHR = 1` 与 `PER_SLOT_CHR = 0` 两条路径**没有**被同一个 testbench 直接对拍过，它们的等价性目前建立在"同一对字节、同一算术"这条推导 + 上面的 A/B 结果上。
+
+- **`reg [7:0] chr_ram [0:8191]` 必须留在 `nes_ppu2c02` 模块作用域，名字不能改。** **11 个** testbench 文件用层次化路径直接读写它（`575e191` 之前这个数字就已经是 11，**删掉展平循环不改变其中任何一条路径**——展平是从 PPU 内部往外送数据，不影响外部按层次名寻址）：
 
   | testbench | 层次化写法 |
   |---|---|
   | `tb/ppu/tb_nes_ppu2c02.v` | `dut.chr_ram[...]` |
+  | `tb/ppu/tb_nes_ppu2c02_ext_chr.v` | `dut_a.chr_ram[...]` / `dut_b.chr_ram[...]` |
+  | `tb/ppu/tb_chr_fetch_feasibility.v` | `dut.chr_ram[...]` |
   | `tb/system/tb_nes_system_v0.v` | `dut.u_ppu.chr_ram[...]` |
   | `tb/system/tb_nes_system_v0_nmi.v` | `dut.u_ppu.chr_ram[...]` |
   | `tb/system/tb_nes_system_audio.v` | `dut.u_ppu.chr_ram[...]` |
   | `tb/system/tb_nes_system_v2.v` | `dut.u_ppu.chr_ram[...]` |
   | `tb/system/tb_nes_system_v3.v` | `dut.u_ppu.chr_ram[...]` |
   | `tb/system/tb_nes_system_v4.v` | `dut.u_ppu.chr_ram[...]` |
+  | `tb/system/tb_nes_system_v6.v` | `ab_v5.u_ppu.chr_ram[...]`（v5 侧内部 CHR 实例，A 侧 v6 走外部端口） |
   | `tb/platform/tb_nes_ep4ce10_top.v` | `dut.u_nes.u_ppu.chr_ram[i]` |
 
-  把它移进 `g_chr_internal`、改名、或者改成 `logic`，这 8 个 TB 会在 elaboration 阶段直接报错。这是硬性兼容约束，不是风格偏好。
+  把它移进 `g_chr_internal`、改名、或者改成 `logic`，这 11 个 TB 会在 elaboration 阶段直接报错。这是硬性兼容约束，不是风格偏好。**（`chr_ram` 现在仍声明在 `nes_ppu2c02` 模块作用域、`nes_ppu2c02.v:417`，写口 `:637`，这一点在 `575e191` 之后未变。）**
 
-- **`nes_ppu_sprite` 的 `chr` 端口必须仍然是 65536 bit**（`input wire [65535:0] chr`）。`tb/ppu/tb_nes_ppu_sprite.v` 直接用大向量 `chr` 灌 pattern 字节；缩窄它会改变这个 TB 的激励方式。`EXTERNAL_CHR` 分支只是让它不被读，不改它的宽度。
+- **`nes_ppu_sprite` 的 `chr` 端口必须仍然是 65536 bit**（`input wire [65535:0] chr`）。`tb/ppu/tb_nes_ppu_sprite.v` 直接用大向量 `chr` 灌 pattern 字节；缩窄它会改变这个 TB 的激励方式。`EXTERNAL_CHR` 分支只是让它不被读，不改它的宽度。**（已按事实更新）**`575e191` 之后 PPU 两个分支都传 `.chr(65536'd0)`，**但这不构成缩窄它的理由**：这个 TB 走 `PER_SLOT_CHR = 0` 的 `g_chr_flat`，**真的在读 `chr`**，所以宽度与位索引语义都仍然是承重约束。
 
 ---
 
@@ -603,10 +613,10 @@ PASS tb_nes_ppu2c02_ext_chr
 
 | 项 | 现状 |
 |---|---|
-| `nes_sprite_chr_fetch` 例化 | **有**，`nes_ppu2c02.v:633-645`，`start = (dot == 9'd257)`（`:625`） |
-| `sprite_pat_addr_bus` | **有消费者**——它就是 `u_sprite_chr_fetch` 的 `pat_addr` 输入（`nes_ppu_sprite` 的 `pat_addr_o` 导到 PPU 层再进预取单元，`:666` / `:638`） |
-| `sprite_chr_bus` | `nes_ppu2c02.v:654` 仍绑 `65536'd0`（内部路径的展平总线在外部模式下用不到；`nes_ppu_sprite` 的 `g_chr_external` 分支不读它） |
-| `chr_sh` | **不再绑 `8'h00`**，改由 `sp_chr_sh` 驱动（`:631`、`:655`） |
+| `nes_sprite_chr_fetch` 例化 | **有**，`nes_ppu2c02.v:752-764`，`start = (dot == 9'd257)`（`assign sp_start`，`:744`） |
+| `sprite_pat_addr_bus` | **有消费者**——它就是 `u_sprite_chr_fetch` 的 `pat_addr` 输入（`nes_ppu_sprite` 的 `pat_addr_o` 导到 PPU 层再进预取单元，`:785` / `:757`） |
+| 内部路径的精灵 CHR 字节（**已按事实更新**） | **`sprite_chr_bus` 这根 65536 bit 展平总线已在 `575e191` 删除**。`g_chr_internal` 现在用 `g_sprite_chr_slots`（`:602-607`）的 **8 次迭代、16 次读**拼出 128 bit `sprite_chr_slots`，经 `.chr_slots(...)`（`:619`）喂进精灵单元的 `g_chr_per_slot` 分支（`.PER_SLOT_CHR(1'b1)`，`:611`）。**外部模式不读 `chr_ram`、也不读 `chr_slots`**：精灵平面字节来自 `sp_shadow` 解复用出的 `chr_sh[15:0]`；两个分支都传 `.chr(65536'd0)`（内部 `:617`、外部 `:773`），而那只是 `g_chr_flat` 这条默认路径的未读实参 |
+| `chr_sh` | **不再绑 `8'h00`**，改由 `sp_chr_sh` 驱动（`:750`、`:774`） |
 | `dot 257..272` shadow 预取（5.1-5.4） | **已实现**，但窗口实测是 **dot 257 发 start / dot 259..290 发 16 次请求 / dot 291 落 busy / dot 292 抬 `shadow_valid`**，与 5.3 原始设想的 `257..272 / 273..340` 划分不同 |
 
 **第 1、2、3 条已修掉（第 2、3 条在本节，第 1 条见上），剩下两条必须记下来——第 4 条的仲裁，以及第 1 条末尾那段残留缺口（§8.2 的 overflow **行为**差异、9 个场景之外没构造出来的优先级组合）：**

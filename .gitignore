@@ -5,3 +5,25 @@
 # Simulation logs
 *.log
 .slim/*.log
+
+# Quartus generated databases and reports
+db/
+incremental_db/
+output_files/
+*.rpt
+
+# Programmer bitstream artifacts
+*.sof
+*.pof
+*.jic
+*.cdf
+*.sld
+
+# Scratch Quartus projects left in the repository root.
+# The curated project lives in quartus/ and must stay tracked, so this is
+# root-anchored and then negated for that directory.
+# Example of what this hides: R01.qpf R02.qpf pa.qpf pb.qpf pc.qpf ptest.qpf
+/*.qpf
+/*.qsf
+!/quartus/*.qpf
+!/quartus/*.qsf
