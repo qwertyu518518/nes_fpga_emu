@@ -6,7 +6,11 @@
 
 **（2026-09-30 登记）本机现已安装 Quartus Prime Lite 23.1，并在仓库之外做过一次 PPU 单独综合。** 那次跑**没有**用到本目录的 `.qpf` / `.qsf` / `.sdc`——它的顶层是 `D:\quartusProject\` 下的激励包装，**不是 `nes_ep4ce10_top`**。实测数字与工具链注意事项见第 0.3 节；完整登记在 [`docs/00-overview/risk-register.md`](../docs/00-overview/risk-register.md) 第 10 节。**本目录的三个文件仍然一次都没有被编译过**，这一条没有被那次跑改变。
 
-标记沿用 `docs/hardware/00-index.md` 的约定：**【厂商例程观察】** = 来自厂商例程的观察，不是本工程的验证结果；**【未验证】** = 必须由工具报告或上板测量回答；**【实测】** = 本机 Quartus 报告文件里的数字（报告在 `D:\quartusProject\` 下、不在仓库内，引用前请自己打开核对）。
+标记沿用 `docs/hardware/00-index.md` 的约定：**【厂商例程观察】** = 来自厂商例程的观察，不是本工程的验证结果；**【未验证】** = 必须由工具报告或上板测量回答；**【实测】** = 本机工具报告文件里的数字（报告在 `D:\quartusProject\` 下、不在仓库内，引用前请自己打开核对）。
+
+> **（2026-09-30 登记）本机还有第二条综合链：Vivado 2018.3。** 同一个 `nes_ppu2c02` 已经在 Xilinx Zynq-7020（`xc7z020clg400-2`）上单独综合过一次，实测 **28,380 Slice LUT / 53,200 = 53.35 %**、**0 / 140 块 RAM tile**、0 error / 0 critical warning。**两条工具链的并排对照在 [`docs/00-overview/toolchains.md`](../docs/00-overview/toolchains.md)**，完整登记在 `risk-register.md` **第 11 节**。
+>
+> **三点必须一起读**：**(a) 没有做出任何迁移决定**，三条路线（全在 PL / PPU 在 PL 而其余在 ARM / 全在 ARM 而 PL 只做视频）都仍然开着，本文件与那一份记录都不推荐其中任何一条；**(b) 那次跑没有实现阶段、没有时序**（无 XDC：`No constraint files found.`），所以 28,380 是实现后用量的**上界**；**(c) 本目录的三个文件仍然一次都没有被编译过**——Vivado 那次跑用的是 `D:\vivadoProject\ppu_zynq\` 下仓库外的激励顶层，与本目录无关，这一点没有被那次跑改变。
 
 PLL 相关的交叉引用：SDC 第 6 节的 `TODO(PLL)`（状态 A → B 的改写清单）在 [`docs/hardware/12-ntsc-clock-and-pll.md`](../docs/hardware/12-ntsc-clock-and-pll.md) **第 6 节**有对应的验证步骤与通过判据，改 SDC 前后请对照那 6.2 / 6.3 节。
 
@@ -373,7 +377,7 @@ bit 15..11 = 5 bit 红   bit 10..5 = 6 bit 绿   bit 4..0 = 5 bit 蓝
 - `docs/hardware/05-vga-lcd.md`：第 2 节 RGB565 位分配与 5/6/5 输出、第 6 节"RGB bit 到模拟颜色的顺序必须上板验证"。
 - `docs/hardware/09-input-and-pins.md`：第 1 节 4 键的引脚与极性、第 6 节引脚复用和资源矩阵。
 - `docs/hardware/08-wm8978-audio.md`：`audio_valid` / `audio_left` 为什么现在不接引脚。
-- `docs/hardware/00-overview/risk-register.md`：R-05（无 Quartus 证据）、R-07（50 MHz 到 NTSC 时钟未验证）—— 本目录**不关闭**这两条风险，只提供了关闭它们所需的输入。**注意**：该文件第 262 行写的【事实】"仓库内没有 `.qsf`、`.sdc`、`.qip`、`.ip`、`.tcl`、`.srf`、`.stp` 文件（全仓搜索 0 结果）"**已经过期**——`.qpf`/`.qsf`/`.sdc` 三个文件现在都存在（`.qip`/`.sdf` 仍然不存在）。该文件本轮不在允许修改的范围内，请下次同步时更正；本目录的实测计数见第 0.1 节。
+- `docs/hardware/00-overview/risk-register.md`：R-05（无 Quartus 证据）、R-07（50 MHz 到 NTSC 时钟未验证）—— 本目录**不关闭**这两条风险，只提供了关闭它们所需的输入。**注意**：该登记册 R-05 里早先那条【事实】——仓库内没有 `.qsf`、`.sdc`、`.qip`、`.ip`、`.tcl`、`.srf`、`.stp` 文件（全仓搜索 0 结果）——**已经过期，而且已经被改写成肯定句**：`.qpf`/`.qsf`/`.sdc` 三个文件现在都存在（`.qip`/`.sdf` 仍然不存在），现行那句话是 R-05 证据里的「仓库内**已有** `quartus/op_fpga_emu.{qpf,qsf,sdc}` 工程骨架」。**这里刻意不写行号**：该登记册的行号会随每一轮登记移动，按构造名与证据标记去定位才不会失效。本目录的实测计数见第 0.1 节。
 
 ---
 
