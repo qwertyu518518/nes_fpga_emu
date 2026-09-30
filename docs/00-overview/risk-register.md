@@ -27,17 +27,17 @@
 >
 > **实测 / 未测的边界必须一起读**：
 >
-> - 第二个器件上的**面积**是实测的（PPU 一次、整核一次），**时序一次都没有测**（无 XDC、无引脚、无 SDC：`No constraint files found.`）。
+> - 第二个器件上的**面积**是实测的（PPU 一次、整核一次）；**时序**在**那三次跑上**一次都没有测（无 XDC、无引脚、无 SDC：`No constraint files found.`）。**（2026-10-01 补记）另有第四次跑专门测时序**：同一个 PPU 探针、同一份未改动的 RTL，只把 `create_clock` 从 20.000 ns 改成 80.000 ns，**PPU 单独在 `xc7z020clg400-2` 上于 80.000 ns 收敛（WNS +6.538 ns、TNS 0.000、0 / 39,533），在 20.000 ns 上不收敛（WNS −40.242 ns、TNS −2851.741、410 / 39,599）**——登记在**第 13 节**。**第 13 节的范围只有那一个模块、那一个器件、那一个约束**：`EP4CE10F17C8` 上仍然没有任何时序数字，整核 `nes_system_v6` 仍然没有任何时序数字，`b10db66` 之后的源码仍然没有跑过任何一次时序。
 > - **两个器件都没有上过板。**
-> - **整芯片顶层（`nes_ep4ce10_top` 或任何等价整机顶层）在两个器件上都从未被综合过。** 第 12 节测的是 `nes_system_v6` 这一个可综合顶层，**它不是整机**：视频、音频、SDRAM、TF、平台封装一个都没有。
-> - **所以不得把第 11 / 12 节读成"项目现在装得下了"。** 78.24 % 是**一个模块的面积占一个器件的比例**，不是整机结论。
+> - **整芯片顶层（`nes_ep4ce10_top` 或任何等价整机顶层）在两个器件上都从未被综合过。** 第 12 节测的是 `nes_system_v6` 这一个可综合顶层，**它不是整机**：视频、音频、SDRAM、TF、平台封装一个都没有。**第 13 节测的 PPU 更不是整机。**
+> - **所以不得把第 11 / 12 / 13 节读成"项目现在装得下了"。** 78.24 % 是**一个模块的面积占一个器件的比例**，不是整机结论；+6.538 ns 是**一个模块在一个器件上、在一份没有引脚约束的探针里的余量**，不是整机结论。
 
 证据标记约定：
 
 | 标记 | 含义 |
 |---|---|
 | 【事实】 | 可直接在仓库文件中读到的实现或文档内容，条目内给出文件与行号 |
-| 【实测】 | 本机工具链报告文件里的数字。**报告不在仓库内**，条目内给出报告的绝对路径与章节名；引用前必须自己打开该报告核对。**本文件现有两条独立的实测链**：Quartus Prime 23.1（`D:\quartusProject\`，器件 `EP4CE10F17C8`，第 10 节）与 Vivado 2018.3（`D:\vivadoProject\ppu_zynq\`，器件 `xc7z020clg400-2`，第 11 节）。**两者的报告编码不同**：Quartus 是 cp1252，Vivado 是 ASCII/UTF-8 |
+| 【实测】 | 本机工具链报告文件里的数字。**报告不在仓库内**，条目内给出报告的绝对路径与章节名；引用前必须自己打开该报告核对。**本文件现有三条独立的实测链**：Quartus Prime 23.1（`D:\quartusProject\`，器件 `EP4CE10F17C8`，第 10 节）、Vivado 2018.3 综合（`D:\vivadoProject\ppu_zynq\`，器件 `xc7z020clg400-2`，第 11 节）、Vivado 2018.3 实现与 STA（`D:\vivadoProject\constraint_probe\`，同一器件，第 13 节；除法替换对照在 `D:\vivadoProject\divide_probe\`）。**前两者的报告编码不同**：Quartus 是 cp1252，Vivado 是 ASCII/UTF-8 |
 | 【审查】 | 独立审查已经写入仓库文档的结论，条目内引用该文档位置 |
 | 【推断】 | 基于现有实现与器件资料的分析，**尚未经过综合、仿真或测量验证** |
 
@@ -63,8 +63,8 @@
 |---|---|---|---|---|---|
 | R-01 | 零延迟组合 RAM/ROM 与 BRAM/SDRAM 分层冲突 | S0 | 未解决 | 平台/综合阶段 | 存储层具备显式读延迟合同，`bus_ready` 不再是常量，延迟变体 TB 通过 |
 | R-02 | CPU/PPU 同相导致 PPU 滚动 dot 被跳过 | S0 | 未解决（当前被 TB 断言为预期行为） | v1 功能完成、平台阶段 | 滚动更新不再被 CPU 访问删除，系统级 TB 断言跳过数为 0 |
-| R-03 | CHR/nametable 多端口与常量除法/取模的时序风险 | S0 | 未解决（**PPU 的面积已在两个器件上分别实测**：`EP4CE10F17C8` 63,127 LE = 612 %，见第 10 节；`xc7z020clg400-2` 28,380 Slice LUT = 53.35 %，见第 11 节。**整核（`nes_system_v6`）只在第二个器件上实测过一次：41,624 Slice LUT = 78.24 %，见第 12 节；第一个器件上从未综合过整核**。**BRAM / 块 RAM 在两个器件上都实测为 0**，见 10.1、11.3、12.4。**时序在两个器件上都未测量**） | 平台/综合阶段 | 存在 PPU 单独综合的 M9K/LE 报告（**已在两个器件上满足**）；**最差 slack 与未约束路径仍未测量（两个器件都缺约束文件）**；重构后逐像素等价性 TB 通过 |
-| R-04 | PRG / 8 KiB CHR 留在片上对 EP4CE10 BRAM 的压力（`PRG_SIZE_BYTES` 正在参数化） | S0 | 未解决（与 R-01、R-03 耦合；**第 10 节的实测表明 BRAM 不是 EP4CE10 上的绑定约束**，M9K 估算表的算术已更正；**第 11、12 节在第二个器件上独立复现了"0 个块 RAM"，所以"推不出块 RAM"是架构性质而不是单厂商结论**；**第 12 节在整核尺度上仍然实测 0 / 140 块 RAM tile，而且给出第三条独立理由：`prg_rom` 根本没有驱动源**；**但 PRG/CHR 容量本身仍未决定**） | 平台/综合阶段、ROM 容量范围 | `PRG_SIZE_BYTES` 取值被正式决定，存储预算表 + NES-only Fitter/实现报告含 VGA/音频/SDRAM FIFO 预留行 |
+| R-03 | CHR/nametable 多端口与常量除法/取模的时序风险 | S0 | 未解决（**PPU 的面积已在两个器件上分别实测**：`EP4CE10F17C8` 63,127 LE = 612 %，见第 10 节；`xc7z020clg400-2` 28,380 Slice LUT = 53.35 %，见第 11 节。**整核（`nes_system_v6`）只在第二个器件上实测过一次：41,624 Slice LUT = 78.24 %，见第 12 节；第一个器件上从未综合过整核**。**BRAM / 块 RAM 在两个器件上都实测为 0**，见 10.1、11.3、12.4。**时序：第二个器件上的 PPU 单独已经测了，见第 13 节——同一份未改动的 RTL 在它自己的 dot 速率合同 80.000 ns 上收敛（WNS +6.538 ns、TNS 0.000、0 / 39,533 失败端点），在 20.000 ns 上不收敛（WNS −40.242 ns、TNS −2851.741、410 / 39,599 失败端点）；那组数字描述 `b10db66` 之前的源码，`b10db66` 之后的源码没有跑过任何一次时序**。**第一个器件上的时序仍未测量（无 SDC）；整核的时序仍未测量；视频 / 音频 / SD-TF / SDRAM / 平台顶层的时序一次都没有测过；硬件上任何东西都没有测过**） | 平台/综合阶段 | 存在 PPU 单独综合的 M9K/LE 报告（**已在两个器件上满足**）；**最差 slack：第二个器件上的 PPU 单独已有一个数字（第 13 节，两个约束各一个）；第一个器件上仍然没有；整核与平台层仍然没有**；重构后逐像素等价性 TB 通过 |
+| R-04 | PRG / 8 KiB CHR 留在片上对 EP4CE10 BRAM 的压力（`PRG_SIZE_BYTES` 正在参数化） | S0 | 未解决（与 R-01、R-03 耦合；**第 10 节的实测表明 BRAM 不是 EP4CE10 上的绑定约束**，M9K 估算表的算术已更正；**第 11、12 节在第二个器件上独立复现了"0 个块 RAM"，所以"推不出块 RAM"是架构性质而不是单厂商结论**；**第 12 节在整核尺度上仍然实测 0 / 140 块 RAM tile，而且给出第三条独立理由：`prg_rom` 根本没有驱动源**；**（2026-10-01）面积在两个器件上都实测了；时序只在第二个器件上对 PPU 单独测了（第 13 节），而本条门槛要的那份"含 VGA / 音频 / SDRAM FIFO 预留行"的布局布线报告**——**那需要整芯片顶层，那一个在任何器件上都从未被综合过，所以时序这一半在任何器件上仍然是空的**；**但 PRG/CHR 容量本身仍未决定**） | 平台/综合阶段、ROM 容量范围 | `PRG_SIZE_BYTES` 取值被正式决定，存储预算表 + NES-only Fitter/实现报告含 VGA/音频/SDRAM FIFO 预留行 |
 | R-05 | 当前无 Quartus / ModelSim / 上板证据 | S1 | 未开始（**Quartus Prime Lite 23.1 已安装，第 10 节有一份 PPU-only 的 map+fit 报告；但属于本仓库顶层的编译/布局布线报告与板级 bring-up 仍然没有**） | 任何“已上板/已通过综合”声明 | 属于本项目的 Fitter/TimeQuest 报告 + 一次可观测的板级 bring-up |
 | R-06 | 当前 NMI 端到端覆盖缺口 | S1 | 未解决 | v1 功能完成声明 | 系统级 NMI TB 通过，NMI 形式在 CPU 合同中有明确约定 |
 | R-07 | 50 MHz 到 NTSC/VGA/音频时钟未实现、未验证 | S0 | 未开始 | 所有视频/音频时序、平台/综合阶段 | PLL IP 已生成并由 TimeQuest 确认；绝对频率与 3:1 比例都有断言和实测证据 |
@@ -163,7 +163,7 @@
 
 ### R-03 CHR/nametable 多端口与常量除法/取模的时序风险
 
-**等级/状态：** S0 / 未解决（**PPU 的面积与块 RAM 推断已在两个器件上分别实测，见第 10 节（`EP4CE10F17C8`）与第 11 节（`xc7z020clg400-2`）；整核（`nes_system_v6`）只在第二个器件上实测过一次，见第 12 节；时序（fmax / 最差 slack / 未约束路径）在两个器件上都未测量，因此本条不标"已关闭（部分）"**）
+**等级/状态：** S0 / 未解决（**PPU 的面积与块 RAM 推断已在两个器件上分别实测，见第 10 节（`EP4CE10F17C8`）与第 11 节（`xc7z020clg400-2`）；整核（`nes_system_v6`）只在第二个器件上实测过一次，见第 12 节；时序方面，第二个器件上的 PPU 单独已在第 13 节被测两次（同一份未改动的 RTL，20.000 ns 与 80.000 ns 各一次），而第一个器件上的时序、整核的时序、平台 / 视频 / 音频 / SD-TF / SDRAM 的时序、以及硬件上的一切仍然全部未测，因此本条不标"已关闭（部分）"**）
 
 **触发条件**
 
@@ -201,8 +201,8 @@
 
 **进入下一阶段前的门槛**
 
-- 存在一次 PPU 单独综合的实现报告（Fitter / 实现 + TimeQuest），记录 M9K/块 RAM 数、逻辑单元数、寄存器、最差 slack 和未约束路径。**门槛核对（截至第 12 节写入时）：M9K/块 RAM 与逻辑单元两项已在两个器件上分别满足**——`EP4CE10F17C8`：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt`，63,127 LE、0/46 M9K；`xc7z020clg400-2`：`D:\vivadoProject\ppu_zynq\out\ext.util.rpt`，28,380 Slice LUT、0/140 块 RAM tile。**最差 slack 与未约束路径两项在两个器件上都未满足**——两次跑都没有约束文件（Quartus 无 SDC，Vivado 无 XDC）。所以本条**不能**标"已关闭（部分）"，只标"未解决（PPU 的面积与块 RAM 已在两个器件上实测，整核只在第二个器件上实测，时序在两个器件上都未测量）"。
-- 报告结论要么证明当前结构可接受（则在本条下记录 fmax 与端口代价），要么触发缓解路线的第 1、2 步。**这一条未满足**：两份报告都没有 fmax，第 1、2 步因此**没有被触发也没有被否决**。第 10 节与第 11 节只登记面积事实，不代替这个判断。
+- 存在一次 PPU 单独综合的实现报告（Fitter / 实现 + TimeQuest），记录 M9K/块 RAM 数、逻辑单元数、寄存器、最差 slack 和未约束路径。**门槛核对（截至第 13 节写入时）：M9K/块 RAM 与逻辑单元两项已在两个器件上分别满足**——`EP4CE10F17C8`：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt`，63,127 LE、0/46 M9K；`xc7z020clg400-2`：`D:\vivadoProject\ppu_zynq\out\ext.util.rpt`，28,380 Slice LUT、0/140 块 RAM tile。**最差 slack 这一项：第二个器件上的 PPU 单独现在有了数字**——`D:\vivadoProject\constraint_probe\out\p80.tsum_max.rpt`，**80.000 ns 合同下 WNS +6.538 ns、TNS 0.000、0 / 39,533 失败端点；同一份 RTL 在 20.000 ns 下 WNS −40.242 ns、TNS −2851.741、410 / 39,599 失败端点**（第 13 节）。**未约束路径这一项**：那一次跑有约束，所以 `p80.check_timing.rpt` 给 `There are 0 pins that are not constrained for maximum delay.`，**但它同时给 `rst_in` 1 个输入端口无 input delay、156 个输出端口无 output delay，所以它是一个没有引脚约束的探针而不是板级约束集**（第 13 节）。**第一个器件上的这一整项仍然未满足**——Quartus 那边仍然没有 SDC。**所以本条仍然不能标"已关闭（部分）"，只标"未解决（PPU 的面积与块 RAM 已在两个器件上实测；时序只在第二个器件上、对 PPU 单独测了；整核只在第二个器件上实测；第一个器件上的时序、整核的时序、平台层的时序与硬件全部未测）"**。
+- 报告结论要么证明当前结构可接受（则在本条下记录 slack 与端口代价），要么触发缓解路线的第 1、2 步。**这一条现在的状态是"部分满足、部分未满足"**：第 13 节的 80.000 ns 结果**证明当前结构在它自己的 dot 速率合同下可接受**（余量 +6.538 ns，登记在 13.7）；**但第 1、2 步因此既没有被触发也没有被否决**——13.4 否掉的是"关键路径是 `/30` / `%30`"这个具体归因，不是"取数结构可接受"这个结论，而**取数通路本身仍然每像素组合读 nametable 与 CHR（11.4 的端口表），这一条没有任何新证据**。第 10、11、12、13 节都不代替这个判断。
 - 重构后：`pixel_valid` / `pixel_index` 在随机 tile/attribute/palette/fine X/fine Y 图案下与重构前的功能级模型逐像素相同，并有可复现的 TB。**未满足**（重构没有做）。
 - 第 10 节登记的 PPU 资源数字**只覆盖 `nes_ppu2c02` 加它的三个子单元加一个计数器驱动的激励包装**，不是整芯片、也不是 `nes_ep4ce10_top`。引用时必须带这个范围限定词。
 - **额外一项（`nes_system_v6` 引入）**：外部 CHR 路径把 CHR 从"片上多读口数组"换成"单口外部总线"，这条路径的资源结论**不在**上面任何一条门槛覆盖范围内——它需要一条新的门槛：**外部 CHR 存储器方案确定并落地**（容量、时序、接口），且有对应的综合数字。**这一条门槛至今一条都没有满足**：128 KiB CHR 只存在于 testbench。
@@ -872,7 +872,7 @@ RAM "g_chr_internal.chr_ram_reg" dissolved into registers
 
 | 项 | 判定 | 依据 |
 |---|---|---|
-| **fmax / 时序收敛 / slack / 未约束端点** | **完全没有测。** 三份日志里都只有 `No constraint files found.`（各 3 次）与 `WARNING: [Constraints 18-5210] No constraints selected for write.`。**没有 XDC、没有引脚分配、没有 SDC、没有时钟约束** | 11.1 / 三份 `*.synth.log` |
+| **fmax / 时序收敛 / slack / 未约束端点** | **这三次跑完全没有测。** 三份日志里都只有 `No constraint files found.`（各 3 次）与 `WARNING: [Constraints 18-5210] No constraints selected for write.`。**没有 XDC、没有引脚分配、没有 SDC、没有时钟约束**。**（2026-10-01 补记）时序是在另一个探针上单独测的，不在这三次跑里**——见**第 13 节**：同一个 PPU 探针、同一份未改动的 RTL，跑完了 `opt_design` / `place_design` / `route_design` / `report_timing_summary`，两个约束各一个数字。**第 13 节的范围只有 PPU 单独、只有 `xc7z020clg400-2`；本行这三个构建的时序仍然一个字都没有。** | 11.1 / 三份 `*.synth.log`；第 13 节 |
 | **28,380 是实现后用量的上界，不是实现后用量** | Vivado 自己在报告里写了：`The Final LUT count, after physical optimizations and full implementation, is typically lower. Run opt_design after synthesis, if not already completed, for a more realistic count.` | `ext.util.rpt` 第 1 节脚注，`fold` / `int` 同一行 |
 | **实现 / 布局布线 / fmax** | **没跑。** Vivado 综合在 407.22 % 的 `int` 上也不报错，所以"综合通过"与"能实现"是两件事，**本节只做了前者** | `summary.txt` 只有 `synth_design` / `report_utilization` / `write_checkpoint`，没有 `opt_design` / `place_design` / `route_design` / `report_timing_summary` |
 | **`ext` 的 IOB 占用是 harness 的产物，不是 PPU 的成本** | `ext` 用掉 **159 / 125 bonded IOB = 127.20 %**，`fold` 用掉 126 / 125 = 100.80 %。原因是探针把 `obs_o[123:0]` 与 `stim_count_o[31:0]` 暴露成**顶层输出端口**（`ppu_stim.v` 的端口表），在真实板上是内部网。`ppu_fold_top.v` 只暴露 `obs_o[123:0]`，**顶层输出比 `ppu_stim` 少 33 位**（`stim_count_o` 32 位 + `rtl_reset_o` 1 位），159 − 126 = 33 与之一致 | `ppu_stim.v` / `ppu_fold_top.v` 的模块端口表；`ext.util.rpt` / `fold.util.rpt` 第 4 节 |
@@ -1168,10 +1168,12 @@ RAM "g_chr_internal.chr_ram_reg" dissolved into registers
   - 【实测】**对照：PPU 那一次的日志**（`D:\vivadoProject\ppu_zynq\out\ext.synth.log`）共 **856 行**、以 `WARNING` 开头 **204** 行、**0 error**、**0 critical warning**，工具内部计数器 **65,945**。
   - **一条必须纠正的流传说法**：本轮早些时候说过"上一次日志有约 65,900 条 warning"——**那说的是工具内部计数器（65,945），不是日志行数**；日志本身是 856 行、204 行 warning。**两个数都是真的，但都别被当成对方的数。**
 
-### 12.9 时序：**仍然不是结果**，两个器件都不是
+### 12.9 时序：**对这三个构建仍然不是结果**，两个器件都不是
+
+> **（2026-10-01 补记）本小节说的是第 12 节这三个构建，不是全部。** PPU 单独在同一个器件上的时序已经在**第 13 节**测了（同一份未改动的 RTL，80.000 ns 收敛 / 20.000 ns 不收敛）。**但那不改变本小节的任何一句**：整核 `nes_system_v6` **仍然没有跑过实现，因此仍然没有任何时序数字**。
 
 - 【实测】**没有任何约束**：无 XDC、无引脚分配、无 SDC、无时钟约束。`m4.synth.log` 有 `No constraint files found.` **3 次**（`:995` / `:1562` / `:1765`）与 `WARNING: [Constraints 18-5210] No constraints selected for write.` **1 次**（`:1974`）。`summary.txt` 记的 `Constraints 18-5210` 也是 1 条。
-- 【实测】**四份报告里零条时序数据**：`m4.util.rpt` / `fold.util.rpt` / `m0.util.rpt` / `m4.util_hier.rpt` 里**没有 timing summary、没有 slack、没有 WNS/TNS、没有 fmax**。**所以本节不报告 fmax，也不报告任何频率。**
+- 【实测】**四份报告里零条时序数据**：`m4.util.rpt` / `fold.util.rpt` / `m0.util.rpt` / `m4.util_hier.rpt` 里**没有 timing summary、没有 slack、没有 WNS/TNS、没有任何频率数字**。**所以本节不报告任何频率。**
 - 【实测】**没有跑实现**：三个构建只有 `synth_design` + `report_utilization` + `write_checkpoint`。**没有 `opt_design` / `place_design` / `route_design` / `report_timing_summary`。** "综合通过"与"能实现"是两件事，本节只做了前者。
 - 【事实】**给下一个人记一个已确认的 grep 陷阱**：`m4.util_hier.rpt` 里有两处会让人以为命中了时序的字符串，**它们都是子串误报**——`Met` 是 `nes_apu_pulse__parameterized0` 这个模块名里的两个字母（`:37` 与 `:38` 两行）。**做时序关键字普查必须按词边界，不要按子串。**
 
@@ -1209,5 +1211,270 @@ RAM "g_chr_internal.chr_ram_reg" dissolved into registers
 - 【事实】**Vivado 工程文件在仓库外**：`D:\vivadoProject\core_zynq\proj\core_zynq.xpr`。**仓库内仍然没有任何 `.xpr` / `.xdc`**（与 11.8 一致）。
 - 【事实】**工具链本身与第 11 节完全同一条**：Vivado **v2018.3 (win64) Build 2405991 Thu Dec 6 23:38:27 MST 2018**、`D:\Xilinx\Vivado\2018.3\bin\vivado.bat`、**不在 `PATH` 上**、**不需要用户提供 `.lic`**（三份日志都有 `Got license for feature 'Synthesis' and/or device 'xc7z020'`）、报告是 **ASCII / UTF-8**（严格 UTF-8 解码不抛异常，与 Quartus 的 cp1252 不同）、`probe.tcl` 用**原生 Vivado Synthesis 默认设置**。**详见 11.8，本节不重复。**
 - 【事实】**报告清单**（引用前请自己打开核对，全部在仓库外）：`out\m4.util.rpt`、`out\m4.util_hier.rpt`、`out\m4.synth.log`、`out\m4.errors.txt`、`out\m4.warntypes.txt`、`out\m4.memlines.txt`、`out\m4.census.txt`、`out\m4.byinst.txt`、`out\m4.meth.rpt`、`out\m4.dcp`；`fold.*` 同名一组（外加 `fold.synth.log` 里那条 `Synth 8-4446`）；`m0.*` 同名一组；`out\summary.txt`（291 行）。
+
+---
+
+## 13. 第二个器件上的 PPU 时序实测：同一条 RTL，两个约束（2026-10-01 登记）
+
+**为什么需要这一节**：第 11、12 节记录的是**面积**，并且明确写着"时序一次都没有测"。那两次的话在当时是真的——那几次跑**确实**没有约束文件、确实没跑实现。**本节是第四次跑**：同一个 PPU 探针、同一套 harness、**同一份未改动的 RTL**，只把 `create_clock` 的周期从 20.000 ns 改成 80.000 ns，并且**这次跑完了 `opt_design` / `place_design` / `route_design` / `report_timing_summary`**。结果改变了一个读者的结论，所以必须登记在本文件里，而不是留在仓库外的报告目录里。
+
+**本节不推荐任何做法、不决定任何架构、不对 OAM 二次扫描提出任何意见。** 第 13.10 节明确列出仍然未测量的东西。
+
+### 13.0 头条与它的配对项（先读这一段，两个数必须一起读）
+
+> **头条：约束在 80.000 ns 时，同一份 RTL 收敛。**
+>
+> 【实测】`D:\vivadoProject\constraint_probe\out\p80.tsum_max.rpt:288`：**WNS +6.538 ns、TNS 0.000 ns、失败端点 0 / 总端点 39,533。** `p80.critpath.rpt:14` 的标题行原文是 `Slack (MET) : 6.538ns`，`:21` 的 `Requirement` 是 `80.000ns`，`:22` 的 `Data Path Delay` 是 `73.459ns ( logic 14.945ns (20.345%) route 58.514ns (79.655%) )`，`:23` 的 `Logic Levels` 是 `82`（`CARRY4=4 LUT2=7 LUT3=14 LUT4=14 LUT5=11 LUT6=32`），起终点是 `u_stim/u_dut/scanline_reg[0]_rep__0/C` → `u_stim/obs_q_reg[26]/D`。
+>
+> **紧挨着它的配对项：约束在 20.000 ns 时，同一份 RTL 不收敛。**
+>
+> 【实测】`D:\vivadoProject\ppu_zynq\out\impl_ext_ooc_np.tsum_max.rpt:288`：**WNS −40.242 ns、TNS −2851.741 ns、失败端点 410 / 总端点 39,599。** `:380` 给出那条最差路径的构成原文：`Data Path Delay: 60.200ns ( logic 10.944ns (18.179%) route 49.256ns (81.821%) )`。同一份报告 `:364` 的散文行把总违例写成 `-2851.742ns`，与表里的 `-2851.741` 差 0.001 ns，是四舍五入，**引用时用表里的 −2851.741**。
+>
+> **这两个数不是两个答案，是同一条 RTL 在两个约束下的两次测量。** 下面六条边界一条都不许省：
+>
+> 1. **"通过"这个词的范围只有一处**：**PPU 单独**（`nes_ppu2c02` + 3 个子单元 + 激励包装）、**器件 `xc7z020clg400-2`**、**约束 80.000 ns**、**Vivado 2018.3 非工程 out-of-context 流程**。**任何别的东西都不在这句话里。**
+> 2. **两个数字都描述 `b10db66` 之前的源码**（13.1 的 SHA-256）。**`b10db66` 之后没有跑过任何一次时序**，所以"当前 HEAD 在 80 ns 下是多少"**本节没有数字**（13.8）。
+> 3. **80 ns 不是"挑一个宽松的数让报告变绿"**，它是这个设计自己的 dot 速率合同推导出来的（13.2）。
+> 4. **余量很薄，而且剩下的部分一次都没测过**：+6.538 ns 是一个**已测量的余量**，不是"没问题"的结论；视频、音频、SD/TF、SDRAM 控制器与整个平台顶层**在两个工具上都从未被综合或实现过**（12.10 逐条），**任何一条都会扰动布局**（13.7）。
+> 5. **没有引脚、没有 IOSTANDARD、没有 I/O delay、没有板级文件。**【实测】`p80.check_timing.rpt`：`:32` `There are 0 register/latch pins with no clock.`；`:47` `There are 0 pins that are not constrained for maximum delay.`；`:54` `There is 1 input port with no input delay specified. (HIGH)` / `rst_in`；`:63` `There are 156 ports with no output delay specified. (HIGH)`。**所以这是逻辑时序探针，不是板级 bring-up。**
+> 6. **out-of-context 是被迫的，不是选的。**【实测】`D:\vivadoProject\ppu_zynq\out\impl_ext_stock.impl.log:169`：`ERROR: [Place 30-58] IO placement is infeasible. Number of unplaced terminals (157) is greater than number of available sites (125).`——**157 = `obs_o[123:0]` 124 位 + `stim_count_o[31:0]` 32 位 + `rtl_reset_o` 1 位**，是激励包装把观测总线暴露成顶层输出端口造成的（与 11.6 那一行同一类产物）。因此两次时序跑都用 `synth_design -mode out_of_context` 关掉 IO buffer 插入（`p80_summary.txt:5`、`impl2_summary.txt:5`）。
+
+### 13.1 两次跑的全部可核对事实
+
+【事实】**两次跑用的是同一份 RTL，这一点是按字节核对的，不是推断。**
+
+| 源 | SHA-256 | 字节 |
+|---|---|---|
+| `D:\vivadoProject\ppu_zynq\rtlf\nes_ppu2c02.v` | `57CF45FA943A97DBED9150A47A81E418BAA4C66D47E284EE4C85681096B7A3F7` | 49,414 |
+| `D:\vivadoProject\constraint_probe\rtlf\nes_ppu2c02.v` | `57CF45FA943A97DBED9150A47A81E418BAA4C66D47E284EE4C85681096B7A3F7` | 49,414 |
+| 仓库 HEAD `rtl/nes_core/ppu/nes_ppu2c02.v` | `08DF208348DC65E914C2A2DD118F43D3A018594532D8EA490EF20585560C5473` | 51,105 |
+| `D:\vivadoProject\divide_probe\rtlf\nes_ppu2c02.v`（13.8） | `837CCE0E729973B124BF6DD1F9C8E81DB1E1C9845117FE6F4FFA796147E1BD64` | 52,157 |
+
+- 【推断】**因此 20 ns 与 80 ns 这两个时序数字描述的是同一个源码修订，即 `b10db66` 之前的那一版 `nes_ppu2c02.v`。** 两者**不是**"同一版代码两个结果"以外的任何东西——**唯一的变量就是 `create_clock` 的周期。**
+- 【事实】**`-40.242` 那组数字不是过期数据，是那一版源码在 20 ns 下的正确数字。** 引用它的时候**必须同时写明"这是 `b10db66` 之前的源码"**，因为与 `b10db66` 之后的任何比较都只有在标明修订之后才有意义（13.8 给了那个比较）。
+- 【事实】**20 ns 那一次被独立复现过。** `D:\vivadoProject\constraint_probe\out\probe4_summary.txt` 的第二遍（`:39-54`，`--- probe4_control ---`，与第一遍同一流程、只关掉实现指令）给出**逐字相同**的结果：`failing_endpoints 410`、`WNS -40.242`、`DATAPATH_DELAY 60.200`、`LOGIC_LEVELS 82`、LUT 原语数 `33641` / `fail_DUT_u_dut 398` / `fail_HARNESS_obs_q 12`；其 `probe4_control.util_impl.rpt:34` 的 `Slice LUTs` 也是 **31,250**。**所以 20 ns 那组数字不是单次偶然。**
+
+【实测】两个约束，除周期外流程与顶层都相同（`ppu_synth_ext_top`、`EXTERNAL_CHR = 1`、同一套 harness、非工程 out-of-context）：
+
+| 项 | **20.000 ns** | **80.000 ns** |
+|---|---|---|
+| 约束文件 | `constraint_probe\constr\ppu_sys_clk_20.xdc`：`create_clock -name sys_clk -period 20.000 [get_ports clk]` | `constraint_probe\constr\ppu_sys_clk_80.xdc`：`create_clock -name sys_clk -period 80.000 [get_ports clk]` |
+| 报告 | `ppu_zynq\out\impl_ext_ooc_np.tsum_max.rpt` / `.tsum_min.rpt` / `.util_impl.rpt` / `.headline.txt` | `constraint_probe\out\p80.tsum_max.rpt` / `.tsum_min.rpt` / `.util_impl.rpt` / `.critpath.rpt` / `.route_status.rpt` / `.check_timing.rpt` / `p80_summary.txt` |
+| **WNS** | **−40.242 ns** | **+6.538 ns** |
+| **TNS** | **−2851.741 ns** | **0.000 ns** |
+| **失败端点 / 总端点** | **410 / 39,599** | **0 / 39,533** |
+| 时序是否满足 | **否** | **是** |
+| 最差路径 datapath | 60.200 ns（logic 10.944 = 18.179 % / route 49.256 = **81.821 %**） | 73.459 ns（logic 14.945 = 20.345 % / route 58.514 = 79.655 %） |
+| 最差路径逻辑级数 | **82** | **82** |
+| 保持侧 | WHS 0.170 / THS 0.000 / 0 失败（`impl_ext_ooc_np.tsum_min.rpt:129`） | WHS 0.127 / THS 0.000 / 0 失败（`p80.tsum_min.rpt:129`） |
+| Slice LUT（实现后） | 31,250 / 53,200 = **58.74 %** | **29,668 / 53,200 = 55.77 %** |
+| Slice Registers（实现后） | 19,613 / 106,400 = 18.43 % | 19,591 / 106,400 = 18.41 % |
+| 块 RAM tile / DSP | 0 / 140、0 / 220 | **0 / 140、0 / 220**（`p80.util_impl.rpt:96` / `:109`） |
+| Bonded IOB | 0 / 125（out-of-context） | **0 / 125**（`p80.util_impl.rpt:119`） |
+| 路由错误 | — | **0**（41,210 / 41,210 布通，`p80.route_status.rpt`） |
+| 未受最大延迟约束的内部端点 | — | **0**（`p80.check_timing.rpt:47`） |
+| 前 200 条里的负 slack 路径 | — | **0**（`p80_summary.txt:29`；同文件 `:30-31` 给出前 200 条的归属：`DUT_u_dut 196` / `HARNESS_obs_q 4`） |
+| 墙钟 | 综合 + 实现 + 报告，`elapsed_s 1467.617`（`impl2_summary.txt:20`） | 综合 867.218 s、实现 1047.531 s、合计 1063.519 s（`p80_summary.txt:8,14,32`） |
+
+- 【推断】**面积那一格的两个数（31,250 与 29,668）差 1,582 个 Slice LUT，这不是约束改出来的。** 两次跑的综合输入逐字节相同（上一段），差别来自**实现策略的自动选择**（80 ns 那次工具自己选了不同的优化/布局策略）。**本节不解释这个差，也不把它当成任何结论。**
+- 【实测】**本节不给任何 fmax 数字，而且这是刻意的。** 三个 `*_summary.txt` 里各有一个 `fmax_MHz` 字段，但它们是**公式产物而不是测量**：20 ns 那次写 `fmax_MHz  1000/(period+wns) = -49.4022`（`impl_ext_ooc_np.headline.txt:11`），80 ns 那次写 `fmax_MHz : 11.5556`（`p80_summary.txt:28`，正是 `1000/(80+6.538)`），除法探针那次写 `1000/(period-wns) = 16.8859`（`divide_probe\out\divide_summary.txt:71`）。**三个字段连正负号约定都不一样，其中两个在物理上不可能是频率。** **引用频率时一律用 `Data Path Delay` 与 `WNS` 原始值自己算，并且写清算式。**
+
+### 13.2 为什么 80 ns 是这个设计自己的合同，而不是一个方便
+
+【事实】**dot 速率由 RTL 写死，不是由约束文件选择的：**
+
+- `rtl/nes_core/system/nes_system_v6.v:171` `reg [3:0] div_phase;`
+- `:176` `assign ce_ppu = !reset && (div_phase[1:0] == 2'b00);`、`:177` `assign ce_cpu = !reset && (div_phase == 4'd0);`
+- `:182-186`：`div_phase` 在 `4'd11` 归零，即**循环 0..11，共 12 个系统 clk**
+- 【推断】因此 **`ce_ppu` 在 12 拍里的第 0 / 4 / 8 拍为高，即每 4 个系统 clk 一次、4 拍里 3 拍为高**；**`ce_cpu` 每 12 拍一次**。**所以 1 个 CPU 周期 = 12 个系统 clk，1 个 PPU dot = 4 个系统 clk。**
+- 【实测】**交叉核对**：`tb/system/README.md:332` 印着实测断言输出 `TIMING frame_done=2 frame_period=357368clk vblank_window=241:1..261:0 rise=241:1 fall=261:1 PASS`；`tb/system/tb_nes_system_v6.v:4840` 与 `:4848` 的断言/打印文本里写着 `4 clk per ppu ce`。89,342 dot（262 × 341）× 4 = **357,368 clk**，与断言一致。
+- 【推断】**一个 dot 的工作有 4 × 20.000 ns = 80.000 ns 可用**，所以 **`ce` 到 `ce` 的路径上诚实的约束就是 80.000 ns。** 20.000 ns 约束的是"每个系统 clk 都要完成一整个 dot 的组合锥"，而 RTL 从来没有承诺过这件事——**RTL 承诺的是 `ce` 到 `ce`。**
+
+> **必须一起读的开放项（本节不做决定，登记为未决）：**
+>
+> - 【事实】**板载振荡器是 50 MHz，`sys_clk` 在 `U18`**（ALINX 引脚表，已登记在 11.10）。
+> - 【实测】**20 ns 那次约束用的就是这块板子的振荡器周期**，约束文件自己的注释写着：`# The PPU logic runs directly off the board oscillator sys_clk (50 MHz on the ALINX pin table, U18) and is qualified by ce_ppu. The logic being timed here is the sys_clk domain, so the constraint is the oscillator period itself: 20.000 ns = 50 MHz`（`constraint_probe\constr\ppu_sys_clk_20.xdc`），并明确写了 `# Deliberately NOT 21.477 ns (CPU-cycle rate). That is a different question about the platform top and is out of scope for the PPU-only probe.`。
+> - 【推断】**按 50 MHz 算出来的帧率不是 60.1**：357,368 clk ÷ 50 MHz = 7.14736 ms，即 **139.9 fps**。
+> - 【推断】**能精确复现 NTSC 时序的时钟是 21.477272 MHz**：÷12 = 1.789773 MHz（CPU）、÷4 = 5.369318 MHz（dot）、5.369318 MHz ÷ 89,342 = **60.0988 Hz**（帧）。
+> - **这两组数之间的取舍是一个未决问题，属于 R-07 与平台顶层，不在本节范围内。** **本节既不选 50 MHz 也不选 21.477272 MHz，也不给出任何倾向。** 上面 80 ns 的推导**不依赖**这个取舍：它只依赖"1 个 dot = 4 个系统 clk"这个比例，而这个比例与绝对频率无关（11.5 与 10.6 记录了同一事实）。
+
+### 13.3 一条被审查提出、并且被测量**否掉**的机制解释（这一节必须先读，否则会被重新推导一遍）
+
+**被否掉的理论**：既然每个状态元件都是 `ce`-pin 门控的，那么 20 ns 的失败就是**测量产物**——每个 `ce` 之间其实有 4 × 20 = 80 ns 的真实预算。
+
+**【实测】测量说这个理论是错的，三条独立证据：**
+
+1. **`obs_q` 根本没有被 `ce` 门控。** 它是一个自由运行的 `FDRE`，`CE` 引脚接的是常量。
+   - 【实测】`constraint_probe\out\final_corroboration.txt:2-6`：`--- u_stim/obs_q_reg[25]  REF_NAME=FDRE ---` 逐引脚列出 `CE   net=u_stim/<const1>`；`probe1_ce_driver.txt:6` `u_stim/obs_q_reg[25]/CE          driver_net : u_stim/<const1>`，`:9-10` 给出驱动单元是 `u_stim/VCC/P`（`[28]` 同）。
+   - 【推断】**所以它确实提出一个真正的单周期要求——而这个要求落在 harness 上，不落在 PPU 上。** 把它当成"PPU 的失败"是归因错误。
+2. **`nes_ppu_sprite` 是纯组合的**，所以那条被报成 82 级的路径**一个寄存器都没有**，**没有 `ce` 门控可以利用**。
+   - 【事实】`rtl/nes_core/ppu/nes_ppu_sprite.v` 全文只有 4 个 `always @*`（`:211`、`:234`、`:335`、`:365`），**没有任何 `posedge` / `negedge`**（逐行检索 0 命中）。
+   - 【推断】**`ce` 门控的余量在模块内部不存在可利用的形式。**
+3. **410 个失败端点里，398 个是真正的 `u_dut` 寄存器到寄存器路径，只有 12 个是 harness 的 `obs_q`。**
+   - 【实测】`constraint_probe\out\probe3_endpoints.txt:3-8`：`DUT_u_dut  failing=398  worst_slack=-37.120`、`HARNESS_obs_q  failing=12  worst_slack=-40.242`、`DUT_to_DUT_failing_rr 398`。
+   - 【实测】同一轮的另一种切法（`final_corroboration.txt:27-30`）给出：`CE_DUT  n=284  worst_slack=-1.062`、`D_DUT  n=114  worst_slack=-37.120`、`D_OTHER  n=12  worst_slack=-40.242`。**284 + 114 = 398**，与上一条逐字对上。
+
+【推断】**所以结论是：20 ns 是一次"真实约束下的真实失败"；错的是"20 ns 是这个设计欠的约束"这个前提。** **80 ns 的结果是本项目不必陷入危机的原因，它与被否掉的机制解释是两件独立的事，不要混着用。**
+
+- 【实测】**还有一条相关的、同样是实测的旁证**：由 `ce` 驱动的那些最差端点是 **nametable 写使能**，不是数据通路——`final_corroboration.txt:32-35`：`v_addr_reg[2]/C -> nametable_ram_reg[1097][0..2]/CE`，三条都是 `slack -1.062`、`datapath 20.852`、`L=2`。而 `final_corroboration.txt:37-39` 记录：`u_stim/u_dut/st_ce` 的 fanout 是 19，而 **`CE pins driven by u_stim/u_dut/st_ce : 0`**——**综合之后 `st_ce` 这根网一个 `CE` 引脚都没驱动。**
+
+### 13.4 关键路径：先前误认的那条已被否掉，现在这条被定位了
+
+**（a）`/30` 与 `%30` 的假设：已被否掉。**
+
+- 【实测】**除法替换版建出来、并且在整个 7 bit 输入域上被证明穷尽等价之后，只拿回 1.021 ns。** 见 13.8 的完整数字。
+- 【实测】**对基线最差路径逐词检索，下面每一个都是 0 命中**（`constraint_probe\out\probe5_critpath_plain.rpt` 与 `probe5_critpath.rpt` 两份都检索过）：`bg_coarse_y`、`bg_vertical_sections`、`nametable_ram`、`bg_name`、`bg_pattern`、`palette_ram`、`chr_addr`、`dot`。**另外 `sprite_oam_bus` 与 `nth_set` 也是 0 命中**（见下面 (b) 的限定词）。
+- 【推断】**所以 13.x 之前把那条路径归给背景取数通路与常量除法的说法，与报告不符。**
+
+**（b）真正的路径：精灵 overflow / OAM 64 项范围扫描的锥体。**
+
+【实测】20 ns 下最差路径的完整头尾（`constraint_probe\out\probe5_critpath_plain.rpt`）：
+
+| 位置 | 内容 |
+|---|---|
+| `:14-17` | `Slack (VIOLATED) : -40.242ns`、`Source: u_stim/u_dut/scanline_reg[1]_rep__0/C`、`Destination: u_stim/obs_q_reg[25]/D` |
+| `:22` | `Data Path Delay: 60.200ns ( logic 10.944ns (18.179%) route 49.256ns (81.821%) )` |
+| `:23` | `Logic Levels: 82 (CARRY4=5 LUT2=5 LUT3=7 LUT4=3 LUT5=15 LUT6=47)` |
+| `:43` | `LUT2 … u_stim/u_dut/sprite_overflow_reg_i_1032/O` |
+| `:45-49` | 两级 `CARRY4`：`sprite_overflow_reg_reg_i_687/CO[3]` → `sprite_overflow_reg_reg_i_686/O[1]` |
+| `:51-55` | `LUT3 sprite_overflow_reg_i_392/O` → `CARRY4 sprite_overflow_reg_reg_i_159/CO[3]` → **网 `u_stim/u_dut/g_chr_external.u_sprite/g_slot[0].vec[1]`（fo=43，1.009 ns）** |
+| `:56-209` | 一条很长的 LUT 链 |
+| `:211-212` | 网 `u_stim/u_dut_n_118` → `u_stim/obs_q_reg[25]/D` |
+
+【实测】**同一条锥体、换一个起点寄存器的那条路径也被取到了**：`probe1_cells.txt:18-26` 给出 `SLACK : -40.175`、`DATAPATH_DELAY : 60.133`、`LOGIC_LEVELS : 82`、`STARTPOINT_PIN : u_stim/u_dut/oam_ram_reg[0][1]/C`、`ENDPOINT_PIN : u_stim/obs_q_reg[25]/D`。而 `final_corroboration.txt:20-25` 给出那个起点单元的逐引脚网名：`u_stim/u_dut/oam_ram_reg[0][1]  REF_NAME=FDRE`、`Q  net=u_stim/u_dut/sprite_oam_bus[1]`。
+
+- 【推断】**所以这条路径的两端分别是 OAM 的范围扫描输出与精灵 overflow 的判定，中间是 `nes_ppu_sprite` 里那 8 路 slot 选的 64 项优先编码。** 除法替换之后，这条路径成了最差路径（`divide_probe\out\divide_summary.txt:41,63-66`：slack −39.221、datapath 59.180、起点 `u_stim/u_dut/oam_ram_reg[0][1]/C`、终点 `u_stim/obs_q_reg[25]/D`）。
+
+**（c）那条 64 项优先编码在源码里的位置（已按当前源码重新定位）：**
+
+- 【事实】`rtl/nes_core/ppu/nes_ppu_sprite.v:169-190` 是那个 `function [5:0] nth_set;`，内部是 `for (b = 0; b < 64; b = b + 1)` 的前缀计数 + 优先编码（`:179` 的循环、`:181` 的 `c[2:0] == pick` 比较、`:182` 的命中、`:185` 的 `c = c + 7'd1`）。
+- 【事实】**它被例化 16 次**：`:286` `assign s_idx = nth_set(in_range, SLOT_PICK);` 与 `:299` `assign nl_idx = nth_set(nl_in_range, SLOT_PICK);`，两句都在 `:254` 的 `for (g = 0; g < 8; g = g + 1) begin : g_slot` 里——**8 次迭代 × 2 次调用 = 16**（当前行与下一行各 8 次）。
+- 【事实】喂给它的两个 64 位向量是纯组合算出来的：`:211-224` 的 `always @*` 产出 `in_range`（并累加 `range_count`），`:234-244` 的 `always @*` 产出 `nl_in_range`；两段都是 `for (si/ni = 0; ... < 64; ...)`。
+
+> **必须写准的一条限定词**：**上面 (c) 是"逻辑级数"的归因，不是逐单元名的归因。** 路径中段那约 70 个 LUT 在报告里的名字是优化器生成的（`u_stim/u_dut/obs_q[28]_i_*`，靠近终点时变成 `u_stim/u_dut/g_chr_external.u_sprite_chr_fetch/obs_q[28]_i_*` 与 `obs_q[25]_i_*`），**报告里既没有 `nth_set` 也没有 `sprite_oam_bus` 这两个名字**（对 `probe5_critpath_plain.rpt` 检索这两个词都是 0 命中）。**所以"这 82 级里有多少级属于那 16 个 `nth_set`"是一次按级数的审查归因，本节把它标成【审查】，不标成【实测】。** 能够逐字核实的只有三样：起终点单元、两级 `sprite_overflow_reg_*` carry 链、以及中间那根 `g_chr_external.u_sprite/g_slot[0].vec[1]` 网。
+
+- 【事实】**顺带记一条工具陷阱**：Vivado 2018.3 的 `report_timing` **没有 `-output_pins` 这个选项**，原文是 `ERROR: [Common 17-170] Unknown option '-output_pins', please type 'report_timing -help' for usage info.`（`ppu_zynq\out\impl2_summary.txt:41-43`，`paths_err` 与 `critpath_err` 两个字段都是这一句；同文件 `:39` 还有 `'delay_type' max_min not recognized`）。**后果**：那几份 `*_summary.txt` 里的 `LEVEL` 字段全是 `n/a`，**逻辑级数只能从不带那个选项的 `report_timing` 里取**——本节的 82 就是从 `probe5_critpath_plain.rpt:23` 与 `p80.critpath.rpt:23` 取的。**默认的节点表带的是同一份数据，所以少一个选项不影响级数本身，只影响那几份 summary 的 `LEVEL` 列。**
+
+### 13.5 高扇出假设：**已被否掉，登记为已关闭的问题，不要重试**
+
+**被否掉的理论**：那条路径 81.8 % 的时间花在路由上，是因为 `s_idx` / `nl_idx` 各自驱动几百个 LUT 负载——把它们拆开就能拿回路由时间。
+
+【实测】三条独立证据，每一条都指向"这个方向没有可拿的东西"：
+
+1. **没有任何一根网的名字匹配 `*s_idx*` 或 `*nl_idx*`。** `constraint_probe\out\probe4_fanout_evidence.txt:4-5`：`*s_idx*  nets=0  total_pins=0  max_pins=0  ()`、`*nl_idx*  nets=0  total_pins=0  max_pins=0  ()`。**综合之后它们根本不是网。**
+2. **`sprite_oam_bus` 的最高扇出是 14 个引脚。** 同一份文件 `:6`：`*sprite_oam_bus*  nets=2688  total_pins=19814  max_pins=14  (u_stim/u_dut/sprite_oam_bus__0[1014])`。
+3. **工具自己说无事可做。** 在那 2,688 根网上设 `MAX_FANOUT 32`（`probe4_summary.txt:8-11`：`MAX_FANOUT set on 0 nets matching *s_idx*` / `0 nets matching *nl_idx*` / `2688 nets matching *sprite_oam_bus*` / `nets_with_MAX_FANOUT_32 : 2688`），再跑 `phys_opt_design -directive AggressiveFanoutOpt`（脚本 `constraint_probe\probe4.tcl:135`，日志 `constraint_probe\logs\probe4.log:1486,1489`：`Command: phys_opt_design -directive AggressiveFanoutOpt` / `Directive used for phys_opt_design is: AggressiveFanoutOpt`），日志给出的是 `:1352-1353` 与 `:2070-2071` 两处同一句：`INFO: [Physopt 32-65] No nets found for high-fanout optimization.` / `INFO: [Physopt 32-232] Optimized 0 net. Created 0 new instance.`——**因为最大扇出 14 远低于阈值 32，所以连候选都不存在。**
+
+【实测】**做了之后的结果（与同一次跑的对照组逐项对照）：**
+
+| | 对照（`probe4_control`，默认 `phys_opt_design`，`probe4_summary.txt:39-54`） | 实验（`probe4_fanout`，`AggressiveFanoutOpt` + `MAX_FANOUT 32`，`probe4_summary.txt:17-32`） | 差 |
+|---|---|---|---|
+| WNS | −40.242 | −39.257 | **拿回 0.985 ns** |
+| datapath | 60.200 | 59.215 | −0.985 ns |
+| 逻辑级数 | 82 | 81 | −1 |
+| 失败端点 | 410 | 384 | −26 |
+| Slice LUT | **31,250** | **31,266** | **+16** |
+
+- 【推断】**所以"靠剪扇出拿回路由时间"这条路已经被量过了：它换来 0.985 ns，代价是 16 个 Slice LUT，而且工具报告它一个候选都没找到。** **本节把它登记为已关闭的问题。任何"先把 `s_idx` / `nl_idx` 拆一拆"的想法都不必再试。**
+- 【实测】**那 81.8 % 的来源仍然是实测的**：`impl_ext_ooc_np.tsum_max.rpt:380` 的 `route 49.256ns (81.821%)`。**本节只说"剪扇出拿不到它"，不说"那 81.8 % 另有出处"——那个问题仍然开着。**
+
+### 13.6 先前对不上账的那些逻辑级，现在对上了（附证据强度说明）
+
+- 【审查】**一条审查只能解释 82 级里的约 45–51 级。** 剩下的**约 31–37 级**被归因为 `nes_ppu_sprite` 里那 **16 个并行的 `nth_set` 64 项优先选择行走**（8 路当前行 + 8 路下一行链，位置见 13.4(c)）。
+- 【事实】**这个归因的可核对程度有明确上限，必须写出来**：82 这个总数是实测（`probe5_critpath_plain.rpt:23` / `p80.critpath.rpt:23`），两端的单元与那根 `g_slot[0].vec[1]` 网是实测，**但"31–37 级里有多少级落在那 16 个 `nth_set` 上"不是逐单元名测出来的**——路径中段的单元名是优化器生成的（13.4(c) 的限定词）。
+- 【事实】**一条独立支持这个方向的旁证**：13.5 那次实验里，slack 拿回 0.985 ns 的同时**逻辑级数只从 82 降到 81**——即那 0.985 ns **不是**从"少走若干级"来的，而是从一级之内的布线与打包来的。**这与"那 82 级是一大段平衡的 LUT 链、深度对布局指令不敏感"一致，与"它是若干条深度悬殊的独立通路"不一致。**
+
+### 13.7 余量很薄，而剩下的部分一次都没测过（这是本节的实测发现，不是预测）
+
+【实测】**在它自己的合同上，PPU 收敛，余量是 +6.538 ns，同一次跑的资源是：**
+
+| 项 | 值 | 出处 |
+|---|---|---|
+| Slice LUT | **29,668 / 53,200 = 55.77 %** | `p80.util_impl.rpt:34` |
+| Slice Registers | 19,591 / 106,400 = 18.41 % | `p80.util_impl.rpt:37` |
+| 块 RAM tile | **0 / 140** | `p80.util_impl.rpt:96` |
+| DSP | **0 / 220** | `p80.util_impl.rpt:109` |
+| 收敛时最差路径 | 73.459 ns / 82 级 | `p80.critpath.rpt:22-23` |
+
+**同一句话必须带着下面这半句一起说，否则会被读成"时序问题已经解决"：**
+
+> **这只是一个模块在一个器件上的 +6.538 ns。整个平台一次都没有被任何工具看过。**【事实】**视频输出通路、音频通路、SD/TF 控制器、SDRAM 控制器与整个平台顶层，在 Quartus 与 Vivado 上都从未被综合或实现过一次**——12.10 逐条列出了那 9 个文件（`rtl\platform\ep4ce10\nes_ep4ce10_top.v`、`rtl\nes_core\video\` 下的 `nes_video_scaler.v` / `nes_line_buffer_vga.v` / `nes_vga_timing.v`、`rtl\nes_core\peripheral\` 下的 `sd_spi_cmd.v` / `wm8978_i2c.v` / `nes_audio_i2s.v` / `nes_cdc_fifo.v` / `nes_i2s_shifter.v`），路径已逐个核对。**任何一条被加进来都会改变布局。**
+>
+> **本节把这件事登记为"一个已测量的余量 + 一个未测量的剩余"，并且不给它加上任何预测。** 加进来的东西会让余量变成多少、会不会变成负的——**本节没有任何证据，所以本节不说。**
+
+【事实】**外加两条同类的限制，一条都不许省：**
+
+- **没有引脚、没有 IOSTANDARD、没有 I/O delay**（13.0 第 5 条）。所以这 +6.538 ns 是**器件内部逻辑的**余量，**不含任何 pad 到 pad 的路径**。
+- **这是 PPU 单独，不是整核。** 第 12 节的整核 `nes_system_v6`（41,624 Slice LUT = 78.24 %）**没有跑过实现，也就没有时序**（12.9）。
+
+### 13.8 `b10db66`：除法替换已经落地，它在仓库树里的时序效果**未测量**
+
+【事实】**`b10db66`（"Replace the four /30 and %30 with threshold comparators"）已落地并已推送，改动只在 `rtl\nes_core\ppu\nes_ppu2c02.v` 一个文件，+36 / −4。**
+
+【事实】**当前 HEAD 源码里的四处替换位置（已按当前源码重新定位，不是沿用旧行号）：**
+
+| 位置（HEAD） | 内容 |
+|---|---|
+| `:549`–`:552` | `bg_cys_ge30` / `bg_cys_ge60` / `bg_cys_ge90` / `bg_cys_ge120` 四个 `>=` 比较器 |
+| `:553`–`:557` | `bg_cys_s1` … `bg_cys_s4` 四级条件减法 |
+| `:558` | `bg_vertical_sections = {6'b0, (bg_cys_ge30 ^ bg_cys_ge60 ^ bg_cys_ge90 ^ bg_cys_ge120)};` |
+| `:559` | `bg_coarse_y = bg_cys_s4[4:0];` |
+| `:698`–`:705`、`:733`–`:740` | 下一行链的同构八根网 |
+| `:741` | `bg_vertical_sections_nl = {6'b0, (bg_cys_ge30_nl ^ … )};` |
+| `:742` | `bg_coarse_y_nl = bg_cys_s4_nl[4:0];` |
+
+【事实】**该 commit message 自己记录的性质，以及本节在当前源码上复核过的部分，分开写：**
+
+- 【事实】**本节复核过的（按当前 HEAD 源码重新定位）：** `bg_y_total` 是 `wire [8:0]`（`:422`）、`bg_coarse_y_sum` 是 `wire [6:0]`（`:424`）、`bg_vertical_sections` 是 `wire [6:0]`（`:433`）、`bg_coarse_y` 是 `wire [4:0]`（`:435`）——**所以"7 bit 截断是继承来的"这一条成立**：`bg_y_total` 仍按 9 bit 在 512 处回绕，和仍按 7 bit 截断，与 `/` 和 `%` 当时看到的输入完全相同，**替换没有任何一处加宽**。
+- 【事实】**本节复核过的第二点：除法结果确实只有 bit 0 被消费。** `bg_vertical_sections` 在 RTL 里只被读 `[0]`（`nes_ppu2c02.v:561` 与 `:748`），`bg_vertical_sections_nl` 只被读 `[0]`（`:743`）；两个层次引用进来的 testbench 也只读 `[0]`（`tb/ppu/tb_chr_fetch_feasibility.v:219`、`tb/ppu/tb_nes_ppu2c02_ext_chr.v:783`）。**所以把 bits 6:1 驱成 0 是安全的。**
+- 【事实】**本节没有独立复核、只按 commit message 引用的：** "没有任何一处被寄存、组合结构与延迟不变"这一条**没有**被本节用报告或网表验证过——**它是 commit message 的陈述。**
+- 【事实】**门禁**：`tools\sim_all.ps1 -Mode all` → `Result: PASS (51 of 51)`、exit 0、墙钟 **1055.9 s**（同样按 commit message 记录，本轮没有重跑）。
+
+【实测】**它在 Vivado 上的效果是在一份 scratch 副本上量的，而且只量了 20 ns：**
+
+| 项 | 基线（20 ns，`b10db66` 之前） | 除法替换（20 ns，scratch 副本） | 差 |
+|---|---|---|---|
+| WNS | −40.242 | **−39.221** | **拿回 1.021 ns** |
+| 仍缺的量 | 40.242 ns | **39.221 ns** | **1.021 ns = 缺口的 2.60 %** |
+| TNS | −2851.741 | −2760.816 | 收窄 90.925 ns |
+| 失败端点 | **410** | **111** | **−299** |
+| 总端点 | 39,599 | 40,010 | +411 |
+| datapath | 60.200 | 59.180 | −1.020 ns |
+| Slice LUT | **31,250** | **29,564** | **−1,686** |
+| Slice Registers | 19,613 | 19,745 | +132 |
+| 逻辑级数 | 82 | **该次没有这个数**（`divide_summary.txt` 的 20 行路径表根本没有 `LEVEL` 字段，见 13.4(c) 的工具陷阱） | — |
+
+- 出处：`divide_probe\out\divide_summary.txt:6-7,41,63-71`（`change vs baseline : only the 4 /30 and %30 sites, combinational, unregistered` / `baseline : D:/vivadoProject/ppu_zynq/out/impl_ext_ooc_np.* (WNS -40.242, 82 levels)`）；`div_ext_ooc_np.tsum_max.rpt` 的 Design Timing Summary 表（WNS / TNS / 111 / 40,010）；`div_ext_ooc_np.util_impl.rpt:34` 与 `:37`。
+- 【事实】**穷尽等价门禁也是实测的**：`divide_probe\sim\xsim.log:17-27` 印着 `== exhaustive compare over all 128 values of the 7-bit sum ==`、四行 `128/128 pass, 0 fail`（当前行的 `q0` 与 `mod`、下一行的 `q0` 与 `mod`），以及 `EQUIV_GATE: PASS  (256 comparisons, 0 failures)`，随后 `$finish called at time : 128 ns`。
+- 【事实】**"它在仓库树里的时序效果未测量"这句话必须按它的准确含义读**：
+  - **实测发生在 scratch 副本上**（`divide_probe\rtlf\nes_ppu2c02.v`，SHA-256 `837CCE0E…`，52,157 字节），**它与落地进 HEAD 的那一份不是逐字节相同**（HEAD 是 `08DF2083…`，51,105 字节）。**所以"HEAD 在 20 ns 下是多少"本节没有数字。**
+  - **只测了 20 ns，没有测 80 ns。** **"HEAD 在 80 ns 下是 +6.538 还是别的数"本节没有数字。**
+  - **13.0 与 13.1 的两个头条数字都描述 `b10db66` 之前的源码**（13.1 的 SHA-256 表）。**把 `b10db66` 的 1.021 ns 与 `b10db66` 的 −40.242 比较是合法的**（同一 scratch 基线）；**把 1.021 ns 加到 13.0 的 +6.538 上是越界的**——那是一次把两个不同修订的数字相加的算术，本节**不**这样写，也**不**给出加完之后的结果。
+
+### 13.9 本节仍然没有测量的东西（一条都不许省）
+
+| 未测量项 | 依据 |
+|---|---|
+| **当前 HEAD（`b10db66` 之后）在 80 ns 或 20 ns 下的任何时序数字** | 13.8：只测了 scratch 副本、只测了 20 ns |
+| **`EP4CE10F17C8` 上的任何时序数字** | 两个器件上都没有 SDC / XDC，Quartus 侧每次跑都出 `Critical Warning (332012): Synopsys Design Constraints File file not found`（10.5） |
+| **整核 `nes_system_v6` 的任何时序数字** | 12.9：三个构建只有 `synth_design` + `report_utilization` + `write_checkpoint` |
+| **视频、音频、SD/TF、SDRAM 控制器、平台顶层** | 12.10：那 9 个文件在两个器件上都没有被综合过一次 |
+| **任何 pad 到 pad 的路径** | 13.0 第 5 条：无引脚、无 IOSTANDARD、无 I/O delay |
+| **上板行为、任何硬件观测** | 没有 |
+| **`b10db66` 之后 `bg_vertical_sections` bits 6:1 在实现后的真实代价** | 未测量；13.8 只给出 scratch 副本的总量差 |
+| **`b10db66` 之后那条关键路径是否还是同一条** | 未测量；13.8 那次 scratch 跑的最差路径起点已经换成 `oam_ram_reg[0][1]/C`，但**落地的那一份没有跑过** |
+| **那 81.821 % 路由占用的成因** | 13.5 只否掉了"剪扇出"这一条出路，**没有给出成因** |
+
+### 13.10 本节的工具链与目录事实
+
+- 【事实】本轮新增两个工程目录，**都在仓库外**：`D:\vivadoProject\constraint_probe\`（两个约束探针 + 四轮反证）与 `D:\vivadoProject\divide_probe\`（除法替换探针 + 等价性仿真）。**仓库内仍然没有任何 `.xpr` / `.xdc`**（与 11.8、12.12 一致）。
+- 【事实】**工具链本身与第 11、12 节完全同一条**：Vivado **v2018.3 (64-bit) Build 2405991 Thu Dec 6 23:38:27 MST 2018**、`D:\Xilinx\Vivado\2018.3\bin\vivado.bat`、**不在 `PATH` 上**、**不需要用户提供 `.lic`**、报告是 **ASCII / UTF-8**（与 Quartus 的 cp1252 不同，见 10.6）。**详见 11.8，本节不重复。**
+- 【事实】**报告清单**（引用前请自己打开核对，全部在仓库外）：
+  - 80 ns：`constraint_probe\out\p80_summary.txt`、`p80.tsum_max.rpt`、`p80.tsum_min.rpt`、`p80.critpath.rpt`、`p80.paths.rpt`、`p80.route_status.rpt`、`p80.check_timing.rpt`、`p80.util_impl.rpt`、`p80.util_synth.rpt`、`p80_routed.dcp`。
+  - 20 ns：`ppu_zynq\out\impl_ext_ooc_np.tsum_max.rpt`、`impl_ext_ooc_np.tsum_min.rpt`、`impl_ext_ooc_np.util_impl.rpt`、`impl_ext_ooc_np.headline.txt`、`impl_ext_ooc_np.facts.txt`、`impl_ext_stock.impl.log`（IO 不可行那一条）、`impl2_summary.txt`。
+  - 反证：`constraint_probe\out\final_corroboration.txt`、`probe1_cells.txt`、`probe1_ce_driver.txt`、`probe3_endpoints.txt`、`probe3_all_failing_paths.txt`、`probe4_summary.txt`、`probe4_fanout_evidence.txt`、`probe5_critpath_plain.rpt`、`probe4_fanout.util_impl.rpt`、`probe4_control.util_impl.rpt`、`logs\probe4.log`。
+  - 除法替换：`divide_probe\out\divide_summary.txt`、`div_ext_ooc_np.tsum_max.rpt`、`div_ext_ooc_np.util_impl.rpt`、`divide.tcl`、`constr\ppu_sys_clk.xdc`、`sim\div_equiv_tb.v`、`sim\xsim.log`。
+- 【事实】**本节引用的全部报告都在仓库外，仓库内不新增任何文件。**
+
 
 

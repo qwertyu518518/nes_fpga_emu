@@ -2,23 +2,26 @@
 
 本文件把本机**两条互相独立的综合链**放在一起。**为什么要并排写**：只写 Quartus 那一侧，读者会以为 Quartus 是本项目唯一的选项；只写 Vivado 那一侧，读者会以为第 10 节的 `EP4CE10F17C8` 结论被推翻了。**两条都在，两条都有效。**
 
-**入口**：[`risk-register.md`](risk-register.md) 第 10 节（Quartus / `EP4CE10F17C8`）、**第 11 节**（Vivado / `xc7z020clg400-2`，PPU 单独；"没有做出任何迁移决定"的边界声明在 11.0）与**第 12 节**（Vivado / 同一器件，**整核 NES core `nes_system_v6`**；边界声明在 12.0）。Quartus 那一侧更详细的工具链注意事项同时写在 [`quartus/README.md`](../../quartus/README.md) 第 0.3 节。
+**入口**：[`risk-register.md`](risk-register.md) 第 10 节（Quartus / `EP4CE10F17C8`）、**第 11 节**（Vivado / `xc7z020clg400-2`，PPU 单独面积；"没有做出任何迁移决定"的边界声明在 11.0）、**第 12 节**（Vivado / 同一器件，**整核 NES core `nes_system_v6`** 面积；边界声明在 12.0）与**第 13 节**（Vivado / 同一器件，**PPU 时序：同一条 RTL、两个约束**；边界声明在 13.0）。Quartus 那一侧更详细的工具链注意事项同时写在 [`quartus/README.md`](../../quartus/README.md) 第 0.3 节。
 
 > **最重要的一句，写在前面**：
 >
-> **没有做出任何迁移决定。** 本文件登记的是**三次测量**，不是一条计划。三条路线——**全在 PL**、**PPU 在 PL 而其余在 ARM**、**全在 ARM 而 PL 只做视频**——**都仍然开着**，本文件**不推荐其中任何一条**。
+> **没有做出任何迁移决定。** 本文件登记的是**四次跑**（三次面积 + 一次时序），不是一条计划。三条路线——**全在 PL**、**PPU 在 PL 而其余在 ARM**、**全在 ARM 而 PL 只做视频**——**都仍然开着**，本文件**不推荐其中任何一条**。
 >
-> **三次测量的规模不同，不能互相替代，也不能只读一行：**
+> **四次跑的规模与目的都不同，不能互相替代，也不能只读一行：**
 >
 > | 次数 | 测的是什么 | 器件 | Slice LUT / 53,200 | 登记位置 |
 > |---|---|---|---|---|
 > | 1 | **PPU 单独**（`nes_ppu2c02` + 3 个子单元 + 激励包装） | Cyclone IV E `EP4CE10F17C8` | 63,127 LE / 10,320 = **612 %**（装不下） | 第 10 节 |
 > | 2 | **PPU 单独**（同一份 RTL、同一套 harness） | Zynq-7020 `xc7z020clg400-2` | 28,380 / 53,200 = **53.35 %** | 第 11 节 |
 > | 3 | **整核 NES core**（`nes_system_v6` 的 21 文件闭包 + 激励包装，**仍然没有平台层**） | Zynq-7020 `xc7z020clg400-2` | **41,624 / 53,200 = 78.24 %** | **第 12 节** |
+> | 4 | **PPU 单独，同一份未改动的 RTL，只改 `create_clock` 的周期，跑完实现与 STA** | Zynq-7020 `xc7z020clg400-2` | 实现后 **29,668 / 53,200 = 55.77 %**（80.000 ns 那一次） | **第 13 节** |
 >
 > **只读第二行会以为剩下 24,820 个 LUT 是白送的。第三行才是回答"装不装得下"的那一个**，而且它**仍然不是整机**——**没有视频、没有音频、没有 SDRAM、没有 TF、没有平台顶层**（第 12.10 节逐条列出）。
 >
-> **三次都没有时序，两个器件都没有上过板，整芯片顶层在两个器件上都从未被综合过。** 第三次比前两次多两个必须一起读的限制：**anti-constant-folding 交叉核对没有通过判据**（分离度只有 1.14×，第 12.5 节），**mapper 扫描作废**（只测到 MMC3 一条配置，第 12.6 节）。
+> **第四行的两个数必须一起读，谁都不许被单独引用**（第 13 节）：**约束在 80.000 ns 时收敛（WNS +6.538 ns、TNS 0.000、0 / 39,533 失败端点）；约束在 20.000 ns 时同一份 RTL 不收敛（WNS −40.242 ns、TNS −2851.741、410 / 39,599 失败端点）**。80 ns 是这个设计自己的 dot 速率合同（第 13.2 节），不是一个为了变绿而挑的数。**这组数字描述 `b10db66` 之前的源码，`b10db66` 之后没有跑过任何一次时序。**
+>
+> **三次面积跑都没有时序。第四次有，但范围只有一处**：**PPU 单独、只有 `xc7z020clg400-2`、没有引脚约束、没有 IOSTANDARD、没有 I/O delay**。**`EP4CE10F17C8` 上仍然没有任何时序数字，整核仍然没有，视频 / 音频 / SD-TF / SDRAM / 平台顶层仍然一次都没有被任何工具看过，两个器件都没有上过板。** 第三次比前两次多两个必须一起读的限制：**anti-constant-folding 交叉核对没有通过判据**（分离度只有 1.14×，第 12.5 节），**mapper 扫描作废**（只测到 MMC3 一条配置，第 12.6 节）。
 
 ---
 
@@ -30,17 +33,17 @@
 | 器件 | Cyclone IV E **`EP4CE10F17C8`**（三层 `FAMILY` / `DEVICE` / `DEVICE_FAMILY`） | Zynq-7020 **`xc7z020clg400-2`**（日志原文 `Loading part: xc7z020clg400-2`） |
 | 安装位置 | `D:\intelfpga_lite\23.1std\`，可执行文件在 `quartus\bin64\` | `D:\Xilinx\Vivado\2018.3\`，入口 `bin\vivado.bat` |
 | 是否在 `PATH` | 是 | **否**，且没有 `XILINX_VIVADO` 环境变量（两者都已核对） |
-| license | **不需要** license 文件；Lite **只支持 Cyclone IV E**，本项目目标属于该族 | **不需要用户提供的 `.lic` 文件**；**PPU 探针与整核探针的每一份日志**都有 `Got license for feature 'Synthesis' and/or device 'xc7z020'`；免费 WebPACK 版覆盖 `XC7Z020-CLG400-2` |
-| 跑到的阶段 | `quartus_map` + `quartus_fit`（**没有 TimeQuest / STA**） | `synth_design` + `report_utilization` + `write_checkpoint`（**没有 `opt_design` / `place_design` / `route_design` / `report_timing_summary`**） |
-| 约束文件 | **无 SDC、无引脚分配** | **无 XDC、无引脚分配、无 SDC、无时钟约束** |
+| license | **不需要** license 文件；Lite **只支持 Cyclone IV E**，本项目目标属于该族 | **不需要用户提供的 `.lic` 文件**；**PPU 探针与整核探针的每一份日志**都有 `Got license for feature 'Synthesis' and/or device 'xc7z020'`；**第四次时序跑另外拿到了 Implementation 特征**（`constraint_probe\logs\probe4.log:1201` 等 `INFO: [Common 17-349] Got license for feature 'Implementation' and/or device 'xc7z020'`）；免费 WebPACK 版覆盖 `XC7Z020-CLG400-2` |
+| 跑到的阶段 | `quartus_map` + `quartus_fit`（**没有 TimeQuest / STA**） | **三次面积跑**：`synth_design` + `report_utilization` + `write_checkpoint`（**没有 `opt_design` / `place_design` / `route_design` / `report_timing_summary`**）；**第四次（PPU 时序，第 13 节）跑完了 `synth_design` + `opt_design` + `place_design` + `route_design` + `report_timing_summary`** |
+| 约束文件 | **无 SDC、无引脚分配** | **三次面积跑：无 XDC、无引脚分配、无 SDC、无时钟约束**；**第四次（第 13 节）只有 `create_clock -name sys_clk -period <80.000 或 20.000> [get_ports clk]`**——**没有引脚分配、没有 IOSTANDARD、没有 `set_input_delay` / `set_output_delay`、没有板级文件** |
 | 报告编码 | **cp1252**（严格 UTF-8 解码会抛异常，正确读法 `[Text.Encoding]::GetEncoding(1252)`） | **ASCII / UTF-8**（严格 UTF-8 解码不抛异常） |
-| 顶层（全部在仓库外） | `ppu_synth_ext_top` / `ppu_synth_int_top` / `ppu_fold_top` / `cfu_stim` / `cfu_fold` | **PPU 探针**：`ppu_synth_ext_top` / `ppu_synth_int_top` / `ppu_fold_top`；**整核探针**：`nes_stim` / `nes_fold_top` |
-| 仓库内工程 | `quartus/op_fpga_emu.{qpf,qsf,sdc}` —— **从未被打开或编译过** | **不存在**（仓库内没有任何 `.xpr` / `.xdc`）；两次探针的工程都在 `D:\vivadoProject\` 下（`ppu_zynq\proj\`、`core_zynq\proj\`） |
-| 登记位置 | `risk-register.md` 第 10 节 | `risk-register.md` 第 11 节（PPU）与**第 12 节（整核）** |
+| 顶层（全部在仓库外） | `ppu_synth_ext_top` / `ppu_synth_int_top` / `ppu_fold_top` / `cfu_stim` / `cfu_fold` | **PPU 探针**：`ppu_synth_ext_top` / `ppu_synth_int_top` / `ppu_fold_top`；**整核探针**：`nes_stim` / `nes_fold_top`。**第四次时序跑仍然是 `ppu_synth_ext_top`** |
+| 仓库内工程 | `quartus/op_fpga_emu.{qpf,qsf,sdc}` —— **从未被打开或编译过** | **不存在**（仓库内没有任何 `.xpr` / `.xdc`）；探针的工程都在 `D:\vivadoProject\` 下（`ppu_zynq\proj\`、`core_zynq\proj\`，时序探针 `constraint_probe\` 与 `divide_probe\` 连 `.xpr` 都没有，只用批处理 tcl） |
+| 登记位置 | `risk-register.md` 第 10 节 | `risk-register.md` 第 11 节（PPU 面积）、**第 12 节（整核面积）**、**第 13 节（PPU 时序）** |
 
 **`D:\Xilinx\` 下有 3 个 `.lic` 文件**（`data\ip\core_licenses\Xilinx.lic`、`XilinxFree.lic`、`data\sysgen\hwcosim_compiler\pp_ethernet\Xilinx_IP.lic`）。**它们是安装目录 `data\` 树里随 IP 附带的 license 文本，不是用户要提供的工具 license。** 正确说法是"**不需要用户提供 `.lic` 文件，本文件登记的每一次综合都成功取到 license**"。
 
-**慢启动**：`vivado.bat` 每次调用会 `call setupEnv.bat` **两次**（一次不带参数、一次带 `XILINX_VIVADO`），所以很慢。**必须把所有步骤放进同一次 `vivado -mode batch -source <script>.tcl`**——PPU 那次三个构建就是这么跑的（`ext` 360.8 s + `fold` 322.0 s + `int` 1,679.5 s，`tcl_start 11:40:30` → `tcl_end 12:21:28`，约 41 分钟）；**整核那次也一样**（`m4` 4,282.6 s + `fold` 4,315.8 s + `m0` 4,320.7 s，每个变体约 71–72 分钟，第四个变体 `m1` 起手后被中止，`summary.txt` 里没有 `tcl_end`）。
+**慢启动**：`vivado.bat` 每次调用会 `call setupEnv.bat` **两次**（一次不带参数、一次带 `XILINX_VIVADO`），所以很慢。**必须把所有步骤放进同一次 `vivado -mode batch -source <script>.tcl`**——PPU 那次三个构建就是这么跑的（`ext` 360.8 s + `fold` 322.0 s + `int` 1,679.5 s，`tcl_start 11:40:30` → `tcl_end 12:21:28`，约 41 分钟）；**整核那次也一样**（`m4` 4,282.6 s + `fold` 4,315.8 s + `m0` 4,320.7 s，每个变体约 71–72 分钟，第四个变体 `m1` 起手后被中止，`summary.txt` 里没有 `tcl_end`）；**第四次时序跑同样是一次批处理**（综合 867.2 s、实现 1,047.5 s、合计 1,063.5 s，`p80_summary.txt`）。
 
 **Quartus 侧另一条已知限制**：`quartus_sh --flow syn` 在 Lite Edition 上失败（`Error (18169): The Quartus Prime Pro Edition Design Software must be installed to use quartus_syn.`），改用 `quartus_map` / `quartus_fit` / `quartus_sh --flow compile`。旧版 `quartus` 13.1 在 `D:\altera\13.1\quartus\bin64\`，仅作回退；**第 10 节的全部数字都来自 23.1。**
 
@@ -63,6 +66,8 @@
 
 **所以两次面积差不是"两次综合的输入不同"造成的。** 变的只有器件与工具链。
 
+> **（2026-10-01 补记）这张表的"与本仓库逐字节相同"是当时成立的，现在对 `nes_ppu2c02.v` 已经不成立。** `b10db66` 之后 `rtl\nes_core\ppu\nes_ppu2c02.v` 变了（51,105 字节 / **1,073 行**），所以上表第一行那句"逐字节相同（1,041 行）"**描述的是那两轮探针当时的仓库状态**。四个不同修订的 SHA-256 对照表在 `risk-register.md` **13.1**，引用时必须带上修订名。其余三行（`nes_ppu_sprite.v` / `nes_sprite_chr_fetch.v` / `nes_chr_fetch_unit.v`）**没有**被那四次时序跑改动，`b10db66` 也只动了 `nes_ppu2c02.v` 一个文件。
+
 ---
 
 ## 3. PPU 单独综合的跨器件面积对照（`EXTERNAL_CHR = 1`，同一份 RTL、同一套 harness、同一个负对照组）
@@ -73,8 +78,8 @@
 | 其中组合 | 44,323 组合函数 / 10,320 = **429 %** | 28,380 Slice LUT（Vivado 的 `Slice LUTs` 不含寄存器） | 打包因子 **1.56×** |
 | 寄存器 | 19,260 | 19,586 | 差 326（1.7 %） |
 | 片上存储 | **0 / 423,936 bit**（0 个 M9K） | **0 / 140 块 RAM tile**（0 个 RAMB36E1 / RAMB18E1） | 都是 0 |
-| 实现阶段 | `quartus_fit` **Failed**（`Error (171000): Can't fit design in device`） | **没跑** | — |
-| 时序 | **没有**（无 SDC） | **没有**（无 XDC） | 都是没有 |
+| 实现阶段 | `quartus_fit` **Failed**（`Error (171000): Can't fit design in device`） | **面积那三次跑没跑** | — |
+| 时序 | **没有**（无 SDC） | **面积那三次跑没有**（无 XDC）；**第四次跑有，见 3.2** | 链 A 仍然没有 |
 | 负对照组 | 187 LE（塌缩 **338×**） | 1,319 LUT（塌缩 **21.5×**） | 口径不同，见下 |
 
 - **填充率 11.5×** 的口径：6.116 ÷ 0.5335 = 11.47。**这不是"Vivado 更省"，是同一份设计在两个容量不同的器件上占的比例不同。**
@@ -114,6 +119,31 @@
 
 ---
 
+## 3.2 第四次跑：PPU 时序，同一条 RTL、两个约束（**第 13 节，本文件唯一有时序数字的一节**）
+
+【实测】**同一个 PPU 探针、同一套 harness、同一份未改动的 RTL**，只把 `create_clock` 的周期从 20.000 ns 改成 80.000 ns，跑完了 `opt_design` / `place_design` / `route_design` / `report_timing_summary`。器件 `xc7z020clg400-2`，Vivado v2018.3，非工程 out-of-context。完整登记在 `risk-register.md` **第 13 节**。
+
+| | **20.000 ns** | **80.000 ns** |
+|---|---|---|
+| WNS | **−40.242 ns** | **+6.538 ns** |
+| TNS | **−2851.741 ns** | **0.000 ns** |
+| 失败端点 / 总端点 | **410 / 39,599** | **0 / 39,533** |
+| 时序是否满足 | **否** | **是** |
+| 最差路径 datapath / 级数 | 60.200 ns / 82 级 | 73.459 ns / 82 级 |
+| Slice LUT（实现后） | 31,250 / 53,200 = 58.74 % | 29,668 / 53,200 = 55.77 % |
+| 块 RAM tile / DSP | 0 / 140、0 / 220 | 0 / 140、0 / 220 |
+| 报告 | `D:\vivadoProject\ppu_zynq\out\impl_ext_ooc_np.*` | `D:\vivadoProject\constraint_probe\out\p80_*` |
+
+**这一节**：
+
+- **只对 PPU 单独成立**，**只对 `xc7z020clg400-2` 成立**，**只对上面这两个约束成立**。**链 A（`EP4CE10F17C8`）仍然没有任何时序数字**，**整核 `nes_system_v6` 仍然没有任何时序数字**，**视频 / 音频 / SD-TF / SDRAM / 平台顶层仍然一次都没有被任何工具看过**，**两个器件都没有上过板**。
+- **没有引脚、没有 IOSTANDARD、没有 I/O delay、没有板级文件**：`p80.check_timing.rpt` 给 `There are 0 pins that are not constrained for maximum delay.`，同时给 `rst_in` 1 个输入端口无 input delay、156 个输出端口无 output delay。**所以这是逻辑时序探针，不是板级约束集。**
+- **out-of-context 是被迫的**：`ppu_zynq\out\impl_ext_stock.impl.log:169` 是 `ERROR: [Place 30-58] IO placement is infeasible. Number of unplaced terminals (157) is greater than number of available sites (125).`——157 根是激励包装的 157 位观测总线（`obs_o` 124 + `stim_count_o` 32 + `rtl_reset_o` 1）。**所以"157 位观测总线超出 125 个 bonded IOB"是必须用 out-of-context 的原因，不是它的代价。**
+- **这两个数字描述 `b10db66` 之前的源码**（两侧 RTL 的 SHA-256 相同，见第 13.1 节）。**`b10db66` 之后没有跑过任何一次时序。**
+- **本文件不给任何 fmax 数字**：三份 `*_summary.txt` 里的 `fmax_MHz` 字段是公式产物（20 ns 那次写 `1000/(period+wns) = -49.4022`，80 ns 那次写 `11.5556`，除法替换那次写 `1000/(period-wns) = 16.8859`——**三个字段连正负号约定都不一样，其中两个在物理上不可能是频率**）。**引用频率时用 `Data Path Delay` 与 `WNS` 原始值自己算，并写清算式。**
+
+---
+
 ## 4. 两条链在"推不出块 RAM"上独立同意
 
 **这是两条链唯一在结论层面互相印证的一条，也是本文件最值得记的一条**（4.1 是同一个工具链上的第三次确认，它**加深**这条结论但**不构成新的跨厂商印证**）。
@@ -149,14 +179,16 @@
 
 | 缺失项 | 链 A | 链 B |
 |---|---|---|
-| **fmax / 最差 slack / 未约束端点** | 无 SDC：`Critical Warning (332012): Synopsys Design Constraints File file not found` | 无 XDC：`No constraint files found.` + `WARNING: [Constraints 18-5210] No constraints selected for write.` |
-| **引脚分配** | 0 条 | 0 条 |
+| **最差 slack / TNS / 失败端点** | **仍然没有**：无 SDC，`Critical Warning (332012): Synopsys Design Constraints File file not found` | **第四次跑有了，但范围只有 PPU 单独**：80.000 ns 合同下 WNS **+6.538 ns**、TNS **0.000**、**0 / 39,533** 失败端点；同一份 RTL 在 20.000 ns 下 WNS **−40.242 ns**、TNS **−2851.741**、**410 / 39,599**（3.2 节）。**面积那三次跑仍然没有**（`No constraint files found.` + `WARNING: [Constraints 18-5210] No constraints selected for write.`），**整核仍然没有** |
+| **引脚分配 / IOSTANDARD / I/O delay** | 0 条 | 面积那三次跑 0 条；**第四次跑仍然 0 条**（`p80.check_timing.rpt`：`rst_in` 无 input delay、156 个输出端口无 output delay）——**它的 80.000 ns 只约束了内部逻辑** |
 | **整芯片顶层（`nes_ep4ce10_top` 或等价物）** | 从未被综合过 | 不存在这样的工程（只有 `nes_ppu2c02` 与 `nes_system_v6` 两个仓库外顶层） |
 | **上板观测** | 没有 | **没有** |
 | **仓库内工程被工具解析** | `quartus/` 下三个文件**从未被打开或编译过** | 仓库内无 Vivado 工程 |
 | **整核（`nes_system_v6`）的面积** | **从未被综合过** | 41,624 / 53,200 = 78.24 %（第 12 节）——**但仍然没有视频、音频、SDRAM、TF、平台顶层** |
+| **整核（`nes_system_v6`）的时序** | 没有 | **没有**：那三个构建只有 `synth_design` + `report_utilization` + `write_checkpoint`（`risk-register.md` 12.9） |
+| **视频 / 音频 / SD-TF / SDRAM / 平台顶层的面积与时序** | 没有 | **没有**：那 9 个文件在两个器件上都没有被综合过一次（`risk-register.md` 12.10） |
 
-**Vivado 自己写明的上界**：报告第 1 节脚注 `The Final LUT count, after physical optimizations and full implementation, is typically lower.` —— 所以 **28,380 与 41,624 都是实现后用量的上界**。
+**Vivado 自己写明的上界**：面积报告第 1 节脚注 `The Final LUT count, after physical optimizations and full implementation, is typically lower.` —— 所以 **28,380 与 41,624 都是实现后用量的上界**。**第四次跑给出了 PPU 单独的实现后用量**（80.000 ns 那一次是 **29,668 / 53,200 = 55.77 %**），**整核仍然只有上界，没有实现后用量**。
 
 ---
 
@@ -171,6 +203,20 @@
 7. **Vivado 报的源码行号不一定指向出问题的语句。** 整核那条 `Synth 8-6859` 多驱动网警告给的是 `nes_cpu6502.v:216` 与 `nes_cpu_bus.v:155`，但当前源码这两行分别是 `assign nmi_rise = …` 与 `assign dma_req_present = …`——**真正的驱动语句在 `:230` 与 `:233`**。**引用这类发现要引日志原文，再另引当前源码里真正的构造，不要把工具给的行号当引用。**
 8. **按子串 grep 时序关键字会误报。** 整核 `m4.util_hier.rpt` 里两处会让人以为命中了时序的 `Met`，是模块名 `nes_apu_pulse__parameterized0` 里的两个字母。**必须按词边界。**
 9. **generic 绑参数要确认类型。** 整核探针用 `set_property generic {MAPPER=4}`，Vivado 2018.3 把整数绑成了**字符串** `m`（日志原文 `Parameter MAPPER_SELECT bound to: m - type: string`），于是 5 个 mapper 变体跑出**逐字节相同**的结果。**"跑完了 5 个变体"不等于"跑到了 5 种配置"。**
+10. **`report_timing` 在 2018.3 上没有 `-output_pins`，`-delay_type max_min` 也不被接受。** 原文是 `ERROR: [Common 17-170] Unknown option '-output_pins', please type 'report_timing -help' for usage info.`（`ppu_zynq\out\impl2_summary.txt` 的 `paths_err` 与 `critpath_err` 两个字段）与 `ERROR: [Vivado 12-1248] '-delay_type' max_min not recognized.`。**后果**：那几份 `*_summary.txt` 里的 `LEVEL` 字段全是 `n/a`，**逻辑级数只能从不带那个选项的 `report_timing` 里取**。**默认的节点表带的是同一份数据，所以少一个选项不影响级数本身，只影响 summary 那一列。**
+11. **`*_summary.txt` 里那个 `fmax_MHz` 字段是公式产物，不是测量，不要引用。** 三份实测到的写法互不一致：20 ns 那次是 `1000/(period+wns) = -49.4022`（负数）、80 ns 那次是 `11.5556`（即 `1000/(80+6.538)`）、除法替换那次是 `1000/(period-wns) = 16.8859`。**三个字段连正负号约定都不一样，其中两个在物理上不可能是频率。引用频率时用 `Data Path Delay` 与 `WNS` 原始值自己算，并写清算式。**
+12. **不要用"所有状态元件都被 `ce` 门控，所以每个 `ce` 之间其实有 4 倍预算"来解释一次时序失败。这条已经被测量否掉了，不要重新推导一遍。**（第 13.3 节）那次失败**不是**测量产物：
+    - **harness 的 `obs_q` 根本没有被 `ce` 门控**：它是自由运行的 `FDRE`，`CE` 引脚接 `u_stim/<const1>`，驱动单元是 `u_stim/VCC/P`（`constraint_probe\out\final_corroboration.txt` 与 `probe1_ce_driver.txt`）。**它确实提出一个真正的单周期要求——而那个要求落在 harness 上，不落在 PPU 上。**
+    - **`nes_ppu_sprite` 是纯组合的**：全文只有 4 个 `always @*`（`:211`、`:234`、`:335`、`:365`），**没有任何 `posedge` / `negedge`**。所以那条被报成 82 级的路径**一个寄存器都没有**，**没有 `ce` 门控可以利用**。
+    - **失败端点的归属**：410 个里 **398 个是 `u_dut` 内部的寄存器到寄存器路径**，只有 **12 个是 harness 的 `obs_q`**（`probe3_endpoints.txt`；另一种切法给 `CE_DUT 284` / `D_DUT 114` / `D_OTHER 12`，284 + 114 = 398）。
+    - **错的是前提，不是测量**：那条经验规则里唯一成立的部分是"约束是产品的承诺"，而错的是"20 ns 是这个设计欠的约束"（第 13.2 节）。**再看到这条理论被提出来，直接指到 13.3。**
+13. **不要指望靠剪扇出拿回那条关键路径的路由时间。这条也已经被测量否掉了，登记为已关闭的问题。**（第 13.5 节）那条路径 **81.821 %** 的时间在路由上（`impl_ext_ooc_np.tsum_max.rpt:380`），曾被归因为 `s_idx` / `nl_idx` 各自驱动几百个 LUT 负载。三条实测证据：
+    - **`*s_idx*` 与 `*nl_idx*` 匹配到 0 根网**（`constraint_probe\out\probe4_fanout_evidence.txt:4-5`）——**综合之后它们不是网**。
+    - **`sprite_oam_bus` 的最大扇出是 14 个引脚**（同一份文件 `:6`：2,688 根网、`total_pins 19814`、`max_pins 14`）。
+    - **工具自己说无事可做**：在那 2,688 根网上设 `MAX_FANOUT 32` 再跑 `phys_opt_design -directive AggressiveFanoutOpt`，日志给出 `INFO: [Physopt 32-65] No nets found for high-fanout optimization.` 与 `INFO: [Physopt 32-232] Optimized 0 net. Created 0 new instance.`（`constraint_probe\logs\probe4.log`）——**因为 14 远低于阈值 32，连候选都不存在。**
+    - **做了之后**：WNS −40.242 → −39.257（**拿回 0.985 ns**），Slice LUT 31,250 → 31,266（**+16**）。**代价与收益都被记下来了，所以不必再试一次。**
+    - **本条只否掉了"剪扇出"这一条出路**，**没有**给出那 81.8 % 的成因——那个问题仍然开着（`risk-register.md` 13.9）。
+14. **关键路径的名字不要按源码变量名去找。** 路径中段的 LUT 在报告里的名字是**优化器生成**的（`u_stim/u_dut/obs_q[28]_i_*`，靠近终点时变成 `u_stim/u_dut/g_chr_external.u_sprite_chr_fetch/obs_q[28]_i_*` 与 `obs_q[25]_i_*`），**报告里既没有 `nth_set` 也没有 `sprite_oam_bus` 这两个词**（检索 0 命中）。**所以"某几级属于某个源码函数"只能是按级数的归因，不能写成逐单元名的实测。** 能够逐字核实的只有起终点单元、中间那几级 `sprite_overflow_reg_*` carry 链、以及那根 `u_stim/u_dut/g_chr_external.u_sprite/g_slot[0].vec[1]` 网（第 13.4 节）。
 
 ---
 
