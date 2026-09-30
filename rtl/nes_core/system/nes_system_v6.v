@@ -450,7 +450,7 @@ nes_cpu_bus #(
     .cpu_dout(cpu_dout),
     .cpu_din(bus_cpu_din),
     .cpu_ready(cpu_bus_ready),
-    .cpu_fire(cpu_bus_fire),
+    .cpu_fire(),
     .cpu_stall(cpu_bus_stall),
     .dma_req_oam(oam_dma_cpu_read_req),
     .dma_req_dmc(apu_dmc_bus_req),
