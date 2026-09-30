@@ -103,7 +103,7 @@ C 语句通常一次执行完；硬件逻辑在一个时钟沿同时观察所有
 | 板级复位 | `sys_rst_n`，低有效，PIN_M1 | 【已确认事实】 |
 | 片上存储位 | 例程 Fitter 报告为 423,936 bit，约 51.75 KiB。**注意**：这是 bit 数除以 8 的换算值；按 1,024 byte/M9K，46 块的实际可用负载是 47,104 byte（见 `04-memory-and-fifo.md` 第 1.1 节） | 【已确认事实】（换算值）/【推断】（可用负载） |
 | 逻辑资源 | 10,320 LE；器件报告还列出 2 个 PLL、46 个 9-bit 乘法器 | 【已确认事实】 |
-| **本仓库 PPU 的实测占用** | 外部 CHR：**63,127 LE / 10,320（装不下）**、0 / 46 M9K；内部 CHR：568,724 LE、0 / 46 M9K。**fmax / slack 未测** | 【实测】`docs/00-overview/risk-register.md` 第 10 节 |
+| **本仓库 PPU 的实测占用** | 外部 CHR：**63,127 LE / 10,320（装不下）**、0 / 46 M9K；内部 CHR：568,724 LE、0 / 46 M9K。**`EP4CE10F17C8` 上 fmax / slack 未测**——该器件上没有任何时序数字；`xc7z020clg400-2` 上 PPU 单独另有一次时序实测（`docs/00-overview/risk-register.md` 第 13 节，**没有任何 fmax 数字**） | 【实测】`docs/00-overview/risk-register.md` 第 10 节 |
 | VGA | 640×480 常用 25 MHz 像素时钟，RGB565，HS/VS | 【已确认事实】 |
 | RGB LCD | DE 模式，RGB565；具体屏幕 ID 和时序需识别 | 【已确认事实】 |
 | TF 卡 | SPI 模式，片选/MOSI/MISO/CLK | 【已确认事实】 |
