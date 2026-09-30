@@ -149,7 +149,7 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 核心是 Verilog-2001 源码，可单独用 `-g2001` elaborate；`nes_ppu2c02.v` 依赖 `nes_ppu_sprite.v`，两条命令都必须带上它。testbench 使用 `$fatal`，因此 Icarus 入口使用 `-g2012`，与仓库现有 CPU testbench 相同。
 
-`tools/sim_all.ps1` 的 `ppu-core`/`ppu-tb`/`system-core`/`system-tb`/`system-nmi` 目标以及 `tb/system/run_system_*.do` 目前仍只列出 `nes_ppu2c02.v`，**本次改动没有同步这些脚本**（不在写入范围内）；直接跑它们会得到 `Unknown module type: nes_ppu_sprite`。补上 `rtl\nes_core\ppu\nes_ppu_sprite.v` 之后 `tb_nes_system_v0` 和 `tb_nes_system_v0_nmi` 都能通过（本次已手工验证），所以这是纯 source-list 问题，不是行为回归。
+`tools/sim_all.ps1` **这一侧不需要改**：`$ppuSources`（`:127`）已经是 `@($ppuSpriteRtl, $ppuRtl, $chrFetchUnitRtl, $spriteChrFetchRtl)`，**第一条就是 `rtl\nes_core\ppu\nes_ppu_sprite.v`**（`:81` 定义 `$ppuSpriteRtl`）。`ppu-core`（`:197`）、`ppu-integration`（`:224`）、`chr-feasibility-tb`（`:233`）、`ppu-ext-chr-tb`（`:260`）以及 `nes_system_v0`..`v6` 的源列表（`:140-146`）全部由它拼出，因此**这四个 PPU 目标与全部 `system-*` 目标都带着精灵源文件**；精灵单元自己另有 `ppu-sprite` 目标（`:201-209`，顶层 `tb_nes_ppu_sprite`）。**真正还没同步的是 ModelSim/Questa 侧的三个 `.do`**：`tb/ppu/run_ppu_tb.do:2` 与 `tb/system/run_system_tb.do:2` / `tb/system/run_system_nmi_tb.do:2` 的 `vlog` 行只列 `nes_ppu2c02.v`，直接跑它们会得到 `Unknown module type: nes_ppu_sprite`（外加 `nes_chr_fetch_unit` / `nes_sprite_chr_fetch`）。补上 `rtl/nes_core/ppu/nes_ppu_sprite.v` 之后 `tb_nes_system_v0` 和 `tb_nes_system_v0_nmi` 都能通过（已手工验证），所以这是纯 source-list 问题，不是行为回归。
 
 逐 dot 全帧扫描（`test_reset_and_frame`）会跑满 89342 个 dot，而 `nes_ppu_sprite.v` 是纯组合模块、每个 dot 都要重算 64 项范围和 8 个 slot，因此仿真时间约 11.1 ms、vvp 实测约 50 s（接入精灵前是 6.2 ms / 2.4 s）。下面是本版本的完整期望输出，逐行对应一个 test task：
 
@@ -297,7 +297,7 @@ PASS nes_ppu_sprite
 - **CHR 越界与 `chr` 总线宽度**：CHR 按 8 KiB 全量给满，8×8 的 `s_pat_addr` 必然落在 0..0x7F7、8×16 落在 0..0x1077，没有测非法 `tile`/`ctrl` 组合下的越界读。**这条限制仍然有效**（本 TB 走 `PER_SLOT_CHR = 0` 的 `g_chr_flat`，真的在读 `chr`）；TB 侧摊平也只给了低 8 KiB（8192 字节）。**注意别把它读成 PPU 里那个 `g_chr_flatten`**——那个已经在 `575e191` 删掉了（见上面第 1 节），现在只存在于本 TB 这条默认路径上。
 - **`OAM` 总线宽度**：`oam` 固定 2048 位、64 项全部可寻址，已测项 0 和项 63，但没有测项 32..62 的逐项扫描。
 - **PAL / NTSC 差异、奇数帧跳 dot**：与精灵无关，未实现也不测。
-- ModelSim/Questa 的 `run_ppu_tb.do` **没有**精灵源文件；`tools/sim_all.ps1` 也不包含 `tb_nes_ppu_sprite`，而且 `ppu-core`/`ppu-tb`/`system-*` 目标现在缺 `nes_ppu_sprite.v` 会编译失败。这些脚本不在本次写入范围内，需要单独补。
+- ModelSim/Questa 的 `run_ppu_tb.do:2` **没有**精灵源文件（`tb/system/run_system_tb.do:2` / `tb/system/run_system_nmi_tb.do:2` 同样没有），跑它们会 `Unknown module type: nes_ppu_sprite`。**`tools/sim_all.ps1` 这一侧已经没有这个问题**：`$ppuSources`（`:127`）第一条就是 `rtl\nes_core\ppu\nes_ppu_sprite.v`，`ppu-core` / `ppu-integration` / `chr-feasibility-tb` / `ppu-ext-chr-tb` / `system-*` 的源列表都由它拼出，精灵单元自己另有 `ppu-sprite` 目标（`:201-209`，顶层 `tb_nes_ppu_sprite`）。**所以要补的只有那三个 `.do`，门禁脚本本身不用动。**
 
 ## OAM DMA testbench
 
