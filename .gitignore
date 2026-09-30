@@ -27,3 +27,15 @@ output_files/
 /*.qsf
 !/quartus/*.qpf
 !/quartus/*.qsf
+
+# Vivado journals and tool scratch.
+# Vivado writes these into whatever directory it is launched from, so a run
+# started in the repository root drops them there.
+# Covers vivado.jou and vivado_<pid>.backup.jou.
+*.jou
+*.str
+.Xil/
+*.cache
+*.hw
+*.runs/
+*.gen/
