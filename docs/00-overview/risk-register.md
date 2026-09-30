@@ -6,7 +6,16 @@
 
 > **（2026-09-30 登记）先读这一段，否则会读错本文件的结论。**
 >
-> **PPU 在第二个器件上已经做过一次单独综合**——Xilinx Zynq-7020（`xc7z020clg400-2`），Vivado 2018.3，外部 CHR 构建实测 **28,380 个 Slice LUT / 53,200 = 53.35 %**。完整登记在**第 11 节**；两个工具链并排对照在 [`toolchains.md`](toolchains.md)。
+> **第二个器件（Xilinx Zynq-7020，`xc7z020clg400-2`，Vivado 2018.3）上已经做过两次单独综合：**
+>
+> | 测的是什么 | Slice LUT / 53,200 | 登记位置 |
+> |---|---|---|
+> | **PPU 单独**（`nes_ppu2c02` + 3 个子单元 + 激励包装，外部 CHR） | 28,380（**53.35 %**） | **第 11 节** |
+> | **整核 NES core**（`nes_system_v6` 的 21 文件闭包 + 激励包装，**仍然没有平台层**） | **41,624（78.24 %）** | **第 12 节** |
+>
+> 两个工具链并排对照在 [`toolchains.md`](toolchains.md)。
+>
+> **这两行不是同一个问题的两个答案，而是同一个问题的两个规模。** 只读第一行会以为剩下 24,820 个 LUT 是白送的；**第二行才是回答"装不装得下"的那一个**——它用掉 **41,624**，只剩 **11,576（21.76 %）**，而且**没有视频、没有音频、没有存储控制器、没有平台顶层**（第 12.10 节逐条列出缺什么）。
 >
 > **没有做出任何迁移决定。** 三条路线**都仍然开着**，本文件不推荐其中任何一条：
 >
@@ -14,9 +23,14 @@
 > 2. **PPU 在 PL、其余在 ARM**（PS 跑 CPU/APU/系统，PL 只做 PPU 与视频）；
 > 3. **全在 ARM、PL 只做视频**（软件模拟器或软核跑 NES，PL 只承担显示/缩放）。
 >
-> 第 11 节登记的是**一次测量**，不是一条计划，也不是"迁移已经决定/已经可行"的证据。**第 10 节的 EP4CE10 结论一条也没有被它削弱**——同一份 RTL 在 `EP4CE10F17C8` 上是 63,127 LE / 10,320（**612 %**），这个数字在第 10 节里继续有效。
+> 第 11 节与第 12 节登记的是**两次测量**，不是一条计划，也不是"迁移已经决定/已经可行"的证据。**第 10 节的 EP4CE10 结论一条也没有被它们削弱**——同一份 PPU RTL 在 `EP4CE10F17C8` 上是 63,127 LE / 10,320（**612 %**），这个数字在第 10 节里继续有效。
 >
-> **实测 / 未测的边界必须一起读**：第二个器件的**面积**是实测的，**时序不是**（无 XDC、无引脚、无 SDC：`No constraint files found.`）；**两个器件都没有上过板**，**整芯片（`nes_ep4ce10_top` 或任何等价顶层）在两个器件上都从未被综合过**。所以**不得**把第 11 节读成"项目现在装得下了"——它测的是**一个模块在一个器件上**的面积。
+> **实测 / 未测的边界必须一起读**：
+>
+> - 第二个器件上的**面积**是实测的（PPU 一次、整核一次），**时序一次都没有测**（无 XDC、无引脚、无 SDC：`No constraint files found.`）。
+> - **两个器件都没有上过板。**
+> - **整芯片顶层（`nes_ep4ce10_top` 或任何等价整机顶层）在两个器件上都从未被综合过。** 第 12 节测的是 `nes_system_v6` 这一个可综合顶层，**它不是整机**：视频、音频、SDRAM、TF、平台封装一个都没有。
+> - **所以不得把第 11 / 12 节读成"项目现在装得下了"。** 78.24 % 是**一个模块的面积占一个器件的比例**，不是整机结论。
 
 证据标记约定：
 
@@ -49,8 +63,8 @@
 |---|---|---|---|---|---|
 | R-01 | 零延迟组合 RAM/ROM 与 BRAM/SDRAM 分层冲突 | S0 | 未解决 | 平台/综合阶段 | 存储层具备显式读延迟合同，`bus_ready` 不再是常量，延迟变体 TB 通过 |
 | R-02 | CPU/PPU 同相导致 PPU 滚动 dot 被跳过 | S0 | 未解决（当前被 TB 断言为预期行为） | v1 功能完成、平台阶段 | 滚动更新不再被 CPU 访问删除，系统级 TB 断言跳过数为 0 |
-| R-03 | CHR/nametable 多端口与常量除法/取模的时序风险 | S0 | 未解决（**面积已在两个器件上分别实测**：`EP4CE10F17C8` 63,127 LE = 612 %，见第 10 节；`xc7z020clg400-2` 28,380 Slice LUT = 53.35 %，见第 11 节。**BRAM / 块 RAM 在两个器件上都实测为 0**，见 10.1 与 11.3。**时序在两个器件上都未测量**） | 平台/综合阶段 | 存在 PPU 单独综合的 M9K/LE 报告（**已在两个器件上满足**）；**最差 slack 与未约束路径仍未测量（两个器件都缺约束文件）**；重构后逐像素等价性 TB 通过 |
-| R-04 | PRG / 8 KiB CHR 留在片上对 EP4CE10 BRAM 的压力（`PRG_SIZE_BYTES` 正在参数化） | S0 | 未解决（与 R-01、R-03 耦合；**第 10 节的实测表明 BRAM 不是 EP4CE10 上的绑定约束**，M9K 估算表的算术已更正；**第 11 节在第二个器件上独立复现了"0 个块 RAM"，所以"推不出块 RAM"是架构性质而不是单厂商结论**，但 PRG/CHR 容量本身仍未决定） | 平台/综合阶段、ROM 容量范围 | `PRG_SIZE_BYTES` 取值被正式决定，存储预算表 + NES-only Fitter/实现报告含 VGA/音频/SDRAM FIFO 预留行 |
+| R-03 | CHR/nametable 多端口与常量除法/取模的时序风险 | S0 | 未解决（**PPU 的面积已在两个器件上分别实测**：`EP4CE10F17C8` 63,127 LE = 612 %，见第 10 节；`xc7z020clg400-2` 28,380 Slice LUT = 53.35 %，见第 11 节。**整核（`nes_system_v6`）只在第二个器件上实测过一次：41,624 Slice LUT = 78.24 %，见第 12 节；第一个器件上从未综合过整核**。**BRAM / 块 RAM 在两个器件上都实测为 0**，见 10.1、11.3、12.4。**时序在两个器件上都未测量**） | 平台/综合阶段 | 存在 PPU 单独综合的 M9K/LE 报告（**已在两个器件上满足**）；**最差 slack 与未约束路径仍未测量（两个器件都缺约束文件）**；重构后逐像素等价性 TB 通过 |
+| R-04 | PRG / 8 KiB CHR 留在片上对 EP4CE10 BRAM 的压力（`PRG_SIZE_BYTES` 正在参数化） | S0 | 未解决（与 R-01、R-03 耦合；**第 10 节的实测表明 BRAM 不是 EP4CE10 上的绑定约束**，M9K 估算表的算术已更正；**第 11、12 节在第二个器件上独立复现了"0 个块 RAM"，所以"推不出块 RAM"是架构性质而不是单厂商结论**；**第 12 节在整核尺度上仍然实测 0 / 140 块 RAM tile，而且给出第三条独立理由：`prg_rom` 根本没有驱动源**；**但 PRG/CHR 容量本身仍未决定**） | 平台/综合阶段、ROM 容量范围 | `PRG_SIZE_BYTES` 取值被正式决定，存储预算表 + NES-only Fitter/实现报告含 VGA/音频/SDRAM FIFO 预留行 |
 | R-05 | 当前无 Quartus / ModelSim / 上板证据 | S1 | 未开始（**Quartus Prime Lite 23.1 已安装，第 10 节有一份 PPU-only 的 map+fit 报告；但属于本仓库顶层的编译/布局布线报告与板级 bring-up 仍然没有**） | 任何“已上板/已通过综合”声明 | 属于本项目的 Fitter/TimeQuest 报告 + 一次可观测的板级 bring-up |
 | R-06 | 当前 NMI 端到端覆盖缺口 | S1 | 未解决 | v1 功能完成声明 | 系统级 NMI TB 通过，NMI 形式在 CPU 合同中有明确约定 |
 | R-07 | 50 MHz 到 NTSC/VGA/音频时钟未实现、未验证 | S0 | 未开始 | 所有视频/音频时序、平台/综合阶段 | PLL IP 已生成并由 TimeQuest 确认；绝对频率与 3:1 比例都有断言和实测证据 |
@@ -149,7 +163,7 @@
 
 ### R-03 CHR/nametable 多端口与常量除法/取模的时序风险
 
-**等级/状态：** S0 / 未解决（**面积与块 RAM 推断已在两个器件上分别实测，见第 10 节（`EP4CE10F17C8`）与第 11 节（`xc7z020clg400-2`）；时序（fmax / 最差 slack / 未约束路径）在两个器件上都未测量，因此本条不标"已关闭（部分）"**）
+**等级/状态：** S0 / 未解决（**PPU 的面积与块 RAM 推断已在两个器件上分别实测，见第 10 节（`EP4CE10F17C8`）与第 11 节（`xc7z020clg400-2`）；整核（`nes_system_v6`）只在第二个器件上实测过一次，见第 12 节；时序（fmax / 最差 slack / 未约束路径）在两个器件上都未测量，因此本条不标"已关闭（部分）"**）
 
 **触发条件**
 
@@ -175,6 +189,7 @@
 - 【实测】**PPU 单独综合已做两次，面积这一半在两个器件上都有报告**：第 10 节 `D:\quartusProject\ppu_synth2\final_ext.map.rpt`（Analysis & Synthesis）与 `final_ext.fit.rpt`（Fitter），器件 `EP4CE10F17C8`，Quartus Prime 23.1std.0 Build 991 SC Lite Edition；第 11 节 `D:\vivadoProject\ppu_zynq\out\ext.util.rpt`（与 `fold` / `int`），器件 `xc7z020clg400-2`，Vivado v2018.3。**两次的 RTL 与激励包装逐字节相同**（SHA-256 已核对，11.9），所以这两个数字是同一份设计的两次测量。全部数字、来源、anti-folding 对照组、四个合法性缺陷、以及**未测量的部分**分别见第 10 节与第 11 节。本条下面不再重复这些数字。
 - 【实测】上述报告确认 R-03 担心的那件事真的发生了：`final_ext.fit.rpt` 的 `Error (170011): Design contains 44323 blocks of type combinational node.  However, the device contains only 10320 blocks.` 与 `Error (171000): Can't fit design in device`；同时 `Total memory bits ; 0 / 423,936 ( 0 % )`——**BRAM 一个 bit 都没用上**，四个 `lpm_divide` 之外没有任何存储原语进网表。**第 11 节在 Vivado 上独立复现了同一件事**（`RAMB36E1 = 0`、`RAMB18E1 = 0`，并给出工具自己给的理由，见 11.3），所以这一条**不再只是 Cyclone IV E 上的观察**。
 - 【推断】**仍然未测量**：fmax、最差 slack、未约束端点。**两个器件都缺约束文件**：Quartus 每次跑都出 `Critical Warning (332012): Synopsys Design Constraints File file not found`，Vivado 每次跑都出 `No constraint files found.` 加 `WARNING: [Constraints 18-5210] No constraints selected for write.`。**所以第 1、2 条缓解路线的取舍至今没有被任何器件的时序数据回答过。**
+- 【实测】**整核尺度上这条风险同样成立，而且范围更大**：第 12 节在 `xc7z020clg400-2` 上综合了 `nes_system_v6` 的 21 文件闭包，实测 **41,624 Slice LUT / 53,200 = 78.24 %**、**36,888 Slice Register**、**0 / 140 块 RAM tile**、0 DSP、0 error / 2 critical warning。**块 RAM 仍是 0**，而这一次多出一条第 10、11 节都没有的理由：`prg_rom`（128 KiB）**没有驱动源**，128 KiB 在这个数字里**贡献为 0**（12.4）。**`EP4CE10F17C8` 上从未综合过整核**，所以本条在那个器件上的整核结论仍然是空的。**这仍然只回答面积，不回答时序**（12.9）。
 
 **缓解路线**
 
@@ -186,7 +201,7 @@
 
 **进入下一阶段前的门槛**
 
-- 存在一次 PPU 单独综合的实现报告（Fitter / 实现 + TimeQuest），记录 M9K/块 RAM 数、逻辑单元数、寄存器、最差 slack 和未约束路径。**门槛核对（截至第 11 节写入时）：M9K/块 RAM 与逻辑单元两项已在两个器件上分别满足**——`EP4CE10F17C8`：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt`，63,127 LE、0/46 M9K；`xc7z020clg400-2`：`D:\vivadoProject\ppu_zynq\out\ext.util.rpt`，28,380 Slice LUT、0/140 块 RAM tile。**最差 slack 与未约束路径两项在两个器件上都未满足**——两次跑都没有约束文件（Quartus 无 SDC，Vivado 无 XDC）。所以本条**不能**标"已关闭（部分）"，只标"未解决（面积与块 RAM 已在两个器件上实测，时序在两个器件上都未测量）"。
+- 存在一次 PPU 单独综合的实现报告（Fitter / 实现 + TimeQuest），记录 M9K/块 RAM 数、逻辑单元数、寄存器、最差 slack 和未约束路径。**门槛核对（截至第 12 节写入时）：M9K/块 RAM 与逻辑单元两项已在两个器件上分别满足**——`EP4CE10F17C8`：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt`，63,127 LE、0/46 M9K；`xc7z020clg400-2`：`D:\vivadoProject\ppu_zynq\out\ext.util.rpt`，28,380 Slice LUT、0/140 块 RAM tile。**最差 slack 与未约束路径两项在两个器件上都未满足**——两次跑都没有约束文件（Quartus 无 SDC，Vivado 无 XDC）。所以本条**不能**标"已关闭（部分）"，只标"未解决（PPU 的面积与块 RAM 已在两个器件上实测，整核只在第二个器件上实测，时序在两个器件上都未测量）"。
 - 报告结论要么证明当前结构可接受（则在本条下记录 fmax 与端口代价），要么触发缓解路线的第 1、2 步。**这一条未满足**：两份报告都没有 fmax，第 1、2 步因此**没有被触发也没有被否决**。第 10 节与第 11 节只登记面积事实，不代替这个判断。
 - 重构后：`pixel_valid` / `pixel_index` 在随机 tile/attribute/palette/fine X/fine Y 图案下与重构前的功能级模型逐像素相同，并有可复现的 TB。**未满足**（重构没有做）。
 - 第 10 节登记的 PPU 资源数字**只覆盖 `nes_ppu2c02` 加它的三个子单元加一个计数器驱动的激励包装**，不是整芯片、也不是 `nes_ep4ce10_top`。引用时必须带这个范围限定词。
@@ -243,6 +258,7 @@
 
   **这解释了第 10 节的实测**：PPU 现在一个 M9K 都没用（10.1 / 10.2），而它**如果**能推断成 BRAM 也只需要 4 到 12 块。**BRAM 有 34 到 42 块空闲，绑定约束是逻辑单元（63,127 / 10,320）。** 这只是容量算术，**不构成"应该改成 BRAM"或"不应该改"的任何结论**——能不能推断成 BRAM 一次都没被测过（10.5 节）。
   - 【实测】**第 11 节在第二个器件上独立复现了"推不出块 RAM"**：Vivado 2018.3 在 `xc7z020clg400-2` 上同样是 `RAMB36E1 = 0` / `RAMB18E1 = 0`（`ext` 与 `int` 两个构建都是），并且**工具自己给出了理由**（`RAM has too many ports (16)`、`RAM is sensitive to asynchronous reset signal`、`won't be mapped to RAM because it is too sparse`，11.3）。**所以"当前 PPU 的数组按现状无法映射为块 RAM"不再是单一厂商的观察，而是两个独立工具链同意的架构事实。** 但这**不改变**本条标题指向的那个算术：在 `EP4CE10F17C8` 上仍有 423,936 bit，结论不变。
+  - 【实测】**第 12 节把同一件事在整核尺度上又测了一遍，并多给出一条 CPU 侧的理由**：`nes_system_v6` 里 `prg_rom` 是 128 KiB、`cpu_ram` 是 2048×8，两者在 `m4` 构建里都是 **0 块 RAM tile**。工具对 `prg_rom` 给的理由是 `1: Unable to determine number of words or word size in RAM.` / `2: No valid read/write found for RAM.` 加 `WARNING: [Synth 8-3848] Net prg_rom ... does not have driver.`——**它连一个写源都没有**，所以 128 KiB 在 41,624 这个数字里贡献为 0（12.4）。`cpu_ram` 走的是与 PPU 的 `nametable_ram` / `palette_ram` 同一条理由（异步复位），它单独贡献 `u_bus` 的 **16,426 个触发器**，是整个设计里最大的单个寄存器消费者。**这意味着本条估算表里的 `prg_rom` 16 / 32 块 M9K 与 `cpu_ram` 2 块，在两个器件上都仍然没有落到任何一块 BRAM 上**——但**这是现状描述，不是"应该改成 BRAM"的任何结论**，改法一次都没被测过。
 - **【事实】片上放不下 128 KiB CHR ROM，这是算术结论不是偏好**：128 KiB = 131,072 byte，按 1,024 byte/M9K 需 **128 块**，超过器件全部 46 块。**因此 CHR 必须落在片外存储**（`CHR_ADDR_BITS = 17` 这条外部接口义务由此获得算术上的必要性），落到哪块片外器件是未决事项。与 `docs/hardware/01-ep4ce10-board.md` 第 3.4 / 3.5 节已记录的板级资源对照：TF 卡是 4 线 SPI（`sd_clk` J2 / `sd_cs` C2 / `sd_mosi` D1 / `sd_miso` K1），SDRAM 是 16 bit 双向数据总线加 13 位地址、2 位 Bank、2 位 DQM；`01-ep4ce10-board.md:140` 另把板上的一路 flash 记为 "EPCS"——**该文件没有记录任何 flash 型号或容量**，因此"板上这颗 flash 能不能当 CHR ROM 用"在仓库里**没有答案**，本条不猜。
 - 功能后果（与容量无关，独立成立）：片上 PRG + 8 KiB CHR RAM 等价于 NROM + CHR-RAM 且无 bank 切换，因此只能运行这一类游戏；任何需要 PRG banking 或 CHR ROM 的 mapper 都被容量挡在外面。把 `PRG_SIZE_BYTES` 调小只会进一步收窄 ROM 容量，不会缓解结构性冲突。
 - 640×480 RGB565 整帧缓存（614,400 byte）无论如何进不了片上 BRAM；即使只做行缓存，也必须在上面剩余的 M9K 之上再挤出一份。
@@ -273,7 +289,7 @@
 
 **进入下一阶段前的门槛**
 
-- 存在一份 NES-only 的布局布线/实现报告，含 M9K/块 RAM、逻辑单元、寄存器、PLL、IO 的实测数字。**门槛核对：PPU-only 那一半已在两个器件上分别满足**（第 10 节 `final_ext.fit.rpt` 给出 63,127 LE / 19,260 寄存器 / 0-46 M9K / 0-2 PLL / 159-180 引脚；第 11 节 `ext.util.rpt` 给出 28,380 Slice LUT / 19,586 寄存器 / 0-140 块 RAM tile / 0-220 DSP / 1-32 BUFG，**引脚那一行不可用作 PPU 成本，见 11.6**），**NES-only 整机那一半在两个器件上都未满足**——`nes_ep4ce10_top` 与任何等价整机顶层仍然没有被综合过，VGA / 音频 / SDRAM FIFO 三行预留至今没有任何实测数字。
+- 存在一份 NES-only 的布局布线/实现报告，含 M9K/块 RAM、逻辑单元、寄存器、PLL、IO 的实测数字。**门槛核对：PPU-only 那一半已在两个器件上分别满足**（第 10 节 `final_ext.fit.rpt` 给出 63,127 LE / 19,260 寄存器 / 0-46 M9K / 0-2 PLL / 159-180 引脚；第 11 节 `ext.util.rpt` 给出 28,380 Slice LUT / 19,586 寄存器 / 0-140 块 RAM tile / 0-220 DSP / 1-32 BUFG，**引脚那一行不可用作 PPU 成本，见 11.6**），**NES-only 整机那一半在两个器件上都未满足**——`nes_ep4ce10_top` 与任何等价整机顶层仍然没有被综合过，VGA / 音频 / SDRAM FIFO 三行预留至今没有任何实测数字。**中间那一档（`nes_system_v6` 这个 NES core 顶层）只在第二个器件上被综合过一次**（第 12 节：41,624 Slice LUT / 36,888 寄存器 / 0-140 块 RAM tile / 0-220 DSP / 1-32 BUFG / 532-125 IOB，**IOB 那一行是激励包装的产物，不是设计成本，见 12.3**），**`EP4CE10F17C8` 上整核一次都没有被综合过**。**所以本条门槛在任何器件上都仍然是"未满足"**。
 - 存在缓解路线第 2 条要求的预算表，所有已预留行均已计入，且“实测”列不得留空或用估算冒充。
 - `PRG_SIZE_BYTES` 的取值已由预算表结论反推确定，并在 `project-charter.md` 的 v1 范围中写成具体容量，而不是留作可调参数。
 - 预算表结论与 `architecture.md` 第 9 节的层次规划一致，或已通过 `decision-log.md` 正式修订该规划。
@@ -293,8 +309,8 @@
 
 **影响**
 
-- 现在唯一可重复的**行为**证据是 Icarus Verilog 下的 **35 个**自包含 testbench（`tools/sim_all.ps1` 的 `$allTargets` 实际求值实测 51 个目标 = 16 个 compile-only + 35 个仿真，最近一次 `-Mode all` 实测 `Result: PASS (51 of 51)`、0 FAIL、墙钟 1402 s）。**（2026-09-30 登记）本机现已安装 Quartus Prime Lite 23.1，第 10 节有一份 PPU-only 的 map + fit 报告；但仍然没有任何时序分析、板级电气或上板行为证据，`nes_ep4ce10_top` 也从未被综合过。** 本条**不因此关闭**：第 4 节门槛要求的是"属于本项目的报告 + TimeQuest slack + 一次板级 bring-up"，三样都还没有。
-- 因此以下判断目前**全部无证据**：fmax 够不够、SDC 是否完整、引脚与 IO standard 是否正确、复位与 PLL 是否稳定、画面与声音是否正确。**"资源够不够"与"能否推断成块 RAM"现在有了两次 PPU-only 测量**——见第 10 节（`EP4CE10F17C8`：63,127 / 10,320 LE，装不下，但 0 / 46 M9K）与第 11 节（`xc7z020clg400-2`：28,380 / 53,200 Slice LUT = 53.35 %，0 / 140 块 RAM tile）。**两次都只回答了 PPU，回答不了整机；两次都没有时序。**
+- 现在唯一可重复的**行为**证据是 Icarus Verilog 下的 **35 个**自包含 testbench（`tools/sim_all.ps1` 的 `$allTargets` 实际求值实测 51 个目标 = 16 个 compile-only + 35 个仿真，最近一次 `-Mode all` 实测 `Result: PASS (51 of 51)`、0 FAIL、墙钟 1402 s）。**（2026-09-30 登记）本机现已安装 Quartus Prime Lite 23.1，第 10 节有一份 PPU-only 的 map + fit 报告；本机另装了 Vivado 2018.3，第 11 节（`nes_ppu2c02`）与第 12 节（`nes_system_v6` 整核）各有一份 `synth_design` 报告。但仍然没有任何时序分析、板级电气或上板行为证据，`nes_ep4ce10_top` 也从未被综合过。** 本条**不因此关闭**：第 4 节门槛要求的是"属于本项目的报告 + TimeQuest slack + 一次板级 bring-up"，三样都还没有。
+- 因此以下判断目前**全部无证据**：fmax 够不够、SDC 是否完整、引脚与 IO standard 是否正确、复位与 PLL 是否稳定、画面与声音是否正确。**"资源够不够"与"能否推断成块 RAM"现在有了三次测量**——第 10 节（`EP4CE10F17C8`，PPU-only：63,127 / 10,320 LE，装不下，但 0 / 46 M9K）、第 11 节（`xc7z020clg400-2`，PPU-only：28,380 / 53,200 Slice LUT = 53.35 %，0 / 140 块 RAM tile）与第 12 节（`xc7z020clg400-2`，**整核 NES core**：**41,624 / 53,200 Slice LUT = 78.24 %**，36,888 寄存器，0 / 140 块 RAM tile，0 / 220 DSP）。**必须一起读的三句话**：三次都**没有时序**；前两次只回答了 PPU；**第三次回答的是 NES core，仍然没有视频、音频、SDRAM、TF 与平台顶层，所以仍然回答不了整机**（12.10）。**"78.24 %"是一个模块在一个器件上的面积占比，不是"装得下"的结论。**
 - **仿真门禁有一个已确认的盲区**（2026-09-30 登记）：`575e191` 之前 PPU 里有两组网（`read_buffer_reg[7:0]` 与 `v_addr[14:0]`）各有两个 `always` 块驱动，Quartus 报 `Error (10028)`，而 **Icarus 按 last-write-wins 容忍了它**，因此 51 个目标的 `sim_all.ps1` 门禁当时仍然全绿。**多驱动网是仿真抓不到、综合一抓就抓得到的一类缺陷**；引用 `PASS (51 of 51)` 时必须带上这个限定词。
 - 这直接限制 R-01/R-03/R-04 的关闭方式：它们无法靠仿真关闭。
 - 证据工具本身还有一个缺口：只有 Icarus 一个行为仿真器，`run_*.do` 只覆盖 `tb/cpu/`、`tb/ppu/`、`tb/system/`、`tb/apu/`，其余目录没有 ModelSim 入口脚本；`tools/sim_cpu.ps1` 的 `rtl` 与 `pure` 两个模式实际执行同一条命令。
@@ -308,7 +324,7 @@
 - 【审查】`docs/00-overview/verification-plan.md` 第 4 节 L5 的结论是"此层状态是未开始，而不是失败或通过"，并已明确记录"**骨架不是结果**"：`quartus/` 下三个文件存在、平台顶层 `nes_ep4ce10_top.v` 存在但**未综合**、`.qpf`/`.qsf`/`.sdc` **从未在 Quartus 中打开或编译过**；同文档第 3.3 节说明 ModelSim 通过也只增加独立工具证据，不代表 EP4CE10 适配完成。
 - 【事实】`tools/sim_cpu.ps1:3` 的 `ValidateSet` 为 `rtl|pure|integration|bus|all`，其中 `rtl` 与 `pure` 都调用 `-Top nes_cpu6502` 加同一份源文件；`:14-15` 把工具路径硬编码为 `C:\iverilog\bin`。
 - 【实测】Quartus Prime **Lite Edition 23.1std.0 Build 991 11/28/2023 SC Lite Edition** 已安装，可执行文件在 `D:\intelfpga_lite\23.1std\quartus\bin64\`；`quartus` 13.1 另在 `D:\altera\13.1\quartus\bin64\`。工具链细节（不需要 license、Lite 只支持 Cyclone IV E、`quartus_sh --flow syn` 失败、报告文件是 cp1252）见第 10.6 节。
-- 【实测】**本机另装了 Vivado 2018.3**，并且已经用它对 `nes_ppu2c02` 做过一次 PPU 单独综合（器件 `xc7z020clg400-2`，第 11 节）。**这一条仍然不关闭 R-05**：第 11 节与第 10 节一样是 PPU-only、没有实现阶段、没有约束、没有时序、没有上板，**整芯片顶层在两个器件上都未被综合过**。工具链细节（免费 WebPACK 版、无需 license 文件、`vivado.bat` 每次调用都重跑 `setupEnv.bat`、报告是 ASCII/UTF-8）见 11.8 与 [`toolchains.md`](toolchains.md)。
+- 【实测】**本机另装了 Vivado 2018.3**，并且已经用它对 `nes_ppu2c02`（第 11 节）与对 `nes_system_v6` 整核（第 12 节）各做过一次单独综合，器件都是 `xc7z020clg400-2`。**这一条仍然不关闭 R-05**：第 11、12 节与第 10 节一样没有实现阶段、没有约束、没有时序、没有上板，**而且第 12 节的那一次仍然不是整机**——`nes_system_v6` 里没有视频、音频、SDRAM、TF 与平台封装，`nes_ep4ce10_top` 在两个器件上都没有被综合过。**整核那次还额外暴露了一个本条关心的东西**：**2 条 `CRITICAL WARNING`（`Synth 8-6859` 多驱动网）而 `PASS (51 of 51)` 当时仍然全绿**（12.8）——这是"仿真门禁对多驱动网有盲区"的第二次独立实例。工具链细节（免费 WebPACK 版、无需 license 文件、`vivado.bat` 每次调用都重跑 `setupEnv.bat`、报告是 ASCII/UTF-8）见 11.8 与 [`toolchains.md`](toolchains.md)。
 - 【实测】仓库的 `quartus/op_fpga_emu.{qpf,qsf,sdc}` **仍然没有被编译过**：第 10 节所有报告的顶层是 `ppu_synth_ext_top` / `ppu_synth_int_top` / `ppu_fold_top` / `cfu_stim` / `cfu_fold`，**没有一个是 `nes_ep4ce10_top`**，而这些激励包装与源文件副本都放在 `D:\quartusProject\` 下、不在仓库内。
 - 【事实】`tb/ppu/README.md` 与 `tb/system/README.md` 的期望运行时间分别约为几十秒和约 9 秒，说明仿真规模已经不小，进一步的证据补齐需要规划时间预算。
 
@@ -322,7 +338,7 @@
 
 **进入下一阶段前的门槛**
 
-- 存在至少一份属于本项目的综合与布局布线/实现报告，含器件、封装、速度等级、资源与时序 slack。**门槛核对：资源那部分已有两次 PPU-only 测量（第 10 节的 `EP4CE10F17C8` 与第 11 节的 `xc7z020clg400-2`）；"属于本项目"的上位定义（整芯片顶层 `nes_ep4ce10_top` 或任何等价顶层）、时序 slack 这两项在两个器件上都未满足**——两次跑都没有约束文件，因此都没有任何 slack。
+- 存在至少一份属于本项目的综合与布局布线/实现报告，含器件、封装、速度等级、资源与时序 slack。**门槛核对：资源那部分已有三次测量（第 10 节的 `EP4CE10F17C8` PPU-only、第 11 节的 `xc7z020clg400-2` PPU-only、第 12 节的 `xc7z020clg400-2` 整核 NES core）；"属于本项目"的上位定义（整芯片顶层 `nes_ep4ce10_top` 或任何等价顶层）、时序 slack 这两项在两个器件上都未满足**——三次跑都没有约束文件，因此都没有任何 slack。
 - 存在一次可复现的板级 bring-up 观测，哪怕只是把一个固定常量或计数器输出到引脚。**未满足**。
 - 在此之前，任何文档、README 或状态报告都不得出现“已综合”“已布局布线”“时序通过”“已上板”“画面正常”等表述；`verification-plan.md` 的 L5 保持“未开始”。
 
@@ -744,7 +760,9 @@
 
 ---
 
-## 11. PPU 在第二个器件上的单独综合实测：Zynq-7020（2026-09-30 登记）
+## 11. 第二个器件上的 PPU 单独综合实测：Zynq-7020（2026-09-30 登记）
+
+> **本节的范围是 PPU 单独。** 同一个器件上还有一次**整核 NES core** 的综合，登记在**第 12 节**；两节的数字不要互相替代，也不要只看其中一节。
 
 ### 11.0 边界声明（先读这一段，后面所有数字都受它约束）
 
@@ -763,6 +781,7 @@
 > - **第二个器件的面积是实测的，它的时序不是。** 没有 XDC、没有引脚分配、没有 SDC、没有时钟约束：`No constraint files found.` 与 `WARNING: [Constraints 18-5210] No constraints selected for write.`（11.6）。
 > - **两个器件都没有上过板。** 本仓库至今没有任何板级观测，`nes_ep4ce10_top` 与任何等价整机顶层**从未被综合过**。
 > - **这不是"项目现在装得下了"。** 11.1 测的是**一个模块（`nes_ppu2c02` 加它的子单元加一个激励包装）在一个器件上**的面积。把它读成整机结论就越过了证据边界。
+> - **（第 12 节写入时补的一条）28,380 也不该被当成"整核还剩 24,820 个 LUT 是白送的"。** 同一个器件上 `nes_system_v6` 整核实测 **41,624 Slice LUT = 78.24 %**（12.1）。**两个数字都成立，问题在问的规模不同**：11.1 回答"PPU 有多大"，12.1 回答"NES core 有多大"，**两个都回答不了整机有多大**。
 >
 > **第 10 节的 `EP4CE10F17C8` 结论一条也没有被削弱。** 同一份 RTL 在那块器件上仍然是 63,127 / 10,320 LE = **612 %**，Fitter 仍然是 `Error (171000): Can't fit design in device`。**两块器件的结论并不矛盾**：一块是几何上装不下，另一块是装得下但没测时序。
 
@@ -858,12 +877,13 @@ RAM "g_chr_internal.chr_ram_reg" dissolved into registers
 | **实现 / 布局布线 / fmax** | **没跑。** Vivado 综合在 407.22 % 的 `int` 上也不报错，所以"综合通过"与"能实现"是两件事，**本节只做了前者** | `summary.txt` 只有 `synth_design` / `report_utilization` / `write_checkpoint`，没有 `opt_design` / `place_design` / `route_design` / `report_timing_summary` |
 | **`ext` 的 IOB 占用是 harness 的产物，不是 PPU 的成本** | `ext` 用掉 **159 / 125 bonded IOB = 127.20 %**，`fold` 用掉 126 / 125 = 100.80 %。原因是探针把 `obs_o[123:0]` 与 `stim_count_o[31:0]` 暴露成**顶层输出端口**（`ppu_stim.v` 的端口表），在真实板上是内部网。`ppu_fold_top.v` 只暴露 `obs_o[123:0]`，**顶层输出比 `ppu_stim` 少 33 位**（`stim_count_o` 32 位 + `rtl_reset_o` 1 位），159 − 126 = 33 与之一致 | `ppu_stim.v` / `ppu_fold_top.v` 的模块端口表；`ext.util.rpt` / `fold.util.rpt` 第 4 节 |
 | **"28,380 意味着整机装得下"** | **越界。** 本次只综合了 `nes_ppu2c02` + 3 个子单元 + 一个激励包装，**没有 CPU、没有 APU、没有 mapper、没有视频、没有音频、没有存储控制器、没有平台顶层** | 11.0 / `probe.tcl` 的 `rtlf` 列表 |
+| **"28,380 意味着 NES core 之外还剩 24,820 个 LUT 是白送的"** | **越界，而且已被同一次工具链的另一次测量直接否掉**：同一个器件上 `nes_system_v6` 整核实测 **41,624 Slice LUT = 78.24 %**，剩 11,576。**这两个数字不矛盾**——它们量的不是同一个东西 | 12.1（`D:\vivadoProject\core_zynq\out\m4.util.rpt`） |
 | **任何"Vivado 也能过 / 也能跑"的说法** | 没有实现、没有时序、没有上板 | 11.6 第一行 |
 
 ### 11.7 次要发现
 
 - 【实测】**`report_utilization -hierarchical` 在这里不可靠，不得用于任何 per-module 结论。** `ext.util_hier.rpt` 把 **18,503 LUT** 记在 `nes_ppu2c02` 名下（`(u_dut)` 那一行），并且**完全没有列出 `nes_ppu_sprite`**——而 `nes_ppu2c02.v:766` 确实例化了它（`g_chr_external` 分支里的 `u_sprite`；`g_chr_internal` 分支里是 `:609` 的 `u_sprite`）。该表的算术是自洽的（18,503 + 4,606 + 5,042 = 28,151 = `u_dut` 合计），所以**漏掉的那一行被静默并进了 18,503，读表的人看不出来**。
-  - **方法备注（这一条属于方法，不是新风险）**：这**独立复现了 10.3 节记录的 Cyclone IV E per-entity 误归因**——两个工具、两个报告、同一类错误。**任何按模块归因的资源数字，在拿到第二份独立核对之前都不得使用**；per-entity / hierarchical 表在本仓库已经**两次**被证明不可信。
+  - **方法备注（这一条属于方法，不是新风险）**：这**独立复现了 10.3 节记录的 Cyclone IV E per-entity 误归因**——两个工具、两个报告、同一类错误。**任何按模块归因的资源数字，在拿到第二份独立核对之前都不得使用**；per-entity / hierarchical 表在本仓库已经**两次**被证明不可信。**第 12.7 节在同一个工具上又给了第三次独立实例**（`m4.util_hier.rpt` 同样漏掉 `nes_ppu_sprite`，而且把 `u_mmc3` 报成 0 个触发器），**所以到第 12 节为止这个方法结论有三个独立证据**。
 - 【实测】`ext` 与 `int` 各报约 **65.9 千条 warning**（65,945 / 65,871），压倒性多数是 `WARNING: [Synth 8-5788] Register oam_ram_reg[N] in module nes_ppu2c02 is has both Set and reset with same priority. This may cause simulation mismatches. Consider rewriting code [ .../nes_ppu2c02.v:936]`，在 `oam_ram_reg[]` 上重复。**对一次资源探针来说是良性的**（不影响本节任何数字），**但它是真实的清理欠账**：工具明确说"可能造成仿真不匹配"，而仿真与综合在这类寄存器上的行为差异正是 10.4 节那类缺陷的同类。**本节不给修法，也不判断它是否影响功能。**
 - 【实测】**预期内、不算缺陷的两类消息**：
   - `WARNING: [Synth 8-3331] design nes_ppu_sprite has unconnected port chr[65535]` … 一路到 `chr[65440]`，在 `ext.synth.log` 与 `fold.synth.log` 里成片出现。这是**外部 CHR 路径**上按设计把 `chr` 绑到 `65536'd0`（内部 CHR 分支的 `.chr(65536'd0)`，`nes_ppu2c02.v:617`）留下的未连接位。
@@ -930,5 +950,264 @@ RAM "g_chr_internal.chr_ram_reg" dissolved into registers
 - 【事实】**资料里没有 NES / 6502 / 模拟器例程。** 本节能核实的部分：在**可读的 7 个 zip 的中央目录**（文件名级）与资料盘磁盘文件名里，**没有**任何 NES / 6502 / Famicom 例程。
   - **必须带上这条覆盖限制**：**32 个 `.rar` 本机读不了**，所以**"全部资料（含 rar）里都没有"这个更强的说法本节没有独立复现**——它来自测量那一轮的报告。**能作为证据的只有上面这半句。**
   - 顺带登记一个**已确认的方法陷阱**：`D:\BaiduNetdiskDownload\` 根目录下**混有与本板无关的其他资料**（做本轮普查时命中过 `AI-Shoujo` / `HS2` 等内容物的文件名）。**按文件名做关键字普查时必须把搜索根限定在资料盘目录内部**，否则 `Japanese` / `scenes` / `Bones` 之类的子串会造成成百上千个假阳性。
+
+---
+
+## 12. 整核 NES core（`nes_system_v6`）在第二个器件上的单独综合实测：Zynq-7020（2026-09-30 登记）
+
+**为什么需要这一节**：第 11 节只登记了 PPU 单独。读到 28,380 / 53.35 % 就停下的人会以为剩下 24,820 个 LUT 是白送的，**因此"整机显然装得下"**。**真正决定这个问题的数字是整核那个，而它此前没有出现在任何地方。** 本节把它登记下来，**不推荐任何架构、不给迁移建议**。
+
+### 12.0 边界声明（先读这一段，后面所有数字都受它约束）
+
+> **没有做出任何迁移决定。** 本节登记的是**一次测量**，不是一条计划。
+>
+> **仍然开着、本节不推荐其中任何一条的三条路线**（与 11.0 那张表相同，本节对每条补上它新增的那一半信息）：
+>
+> | # | 路线 | 第 12 节对它新增了什么 | 第 12 节**没有**给出什么 |
+> |---|---|---|---|
+> | 1 | **全在 PL** | `nes_system_v6` 这一个可综合顶层在 `xc7z020clg400-2` 上的**面积**（41,624 / 53,200 = 78.24 %） | 整芯片在 `xc7z020clg400-2` 上的任何数字；**整核在 `EP4CE10F17C8` 上的任何数字**（一次都没综合过）；任何时序 |
+> | 2 | **PPU 在 PL、其余在 ARM** | 一个**反面事实**：CPU + APU + bus + OAM DMA + controller + mapper 这些"其余"加进同一个 PL 之后，LUT 从 PPU 的 28,380 涨到 **41,624**（12.11） | 这条路线**真正需要的**那个数字——把 CPU/APU 放到 PS 上之后 PL 侧还剩多少，**没有测过**，本仓库也没有那个 PS↔PL 划分 |
+> | 3 | **全在 ARM、PL 只做视频** | **什么都没测。** PL 侧一个可综合的视频顶层都不存在 | 任何数字 |
+>
+> **本节的四句硬边界，缺一不可：**
+>
+> 1. **78.24 % 是一个模块的面积占一个器件的比例。** 它是 `nes_system_v6`（NES core）**加上一个激励包装**，**不是整机**。**整机里还没有的东西见 12.10，一条都不许省。**
+> 2. **面积是实测的，时序不是。** 没有 XDC、没有引脚分配、没有 SDC、没有时钟约束。**本节不给 fmax、不给 slack、不给 WNS/TNS**（12.9）。
+> 3. **什么都没有上过板。** 本仓库至今没有任何板级观测。
+> 4. **本节不改变第 10 节的 `EP4CE10F17C8` 结论，也不改变第 11 节的 PPU 结论。** 三者是三个不同规模的测量，**不是三条互相矛盾的证据**。
+>
+> **本次的 harness 交叉核对没通过判据，这一条必须先说，因为它决定了下面所有数字的可信度读法**：12.5。
+
+### 12.1 面积：三个构建（Vivado 2018.3，`xc7z020clg400-2`）
+
+【实测】来源：`D:\vivadoProject\core_zynq\out\m4.util.rpt` / `fold.util.rpt` / `m0.util.rpt` 的第 1 节（Slice Logic）、第 2 节（Memory）、第 3 节（DSP）、第 4 节（IO）、第 5 节（Clocking）、第 7 节（Primitives）。**器件容量取自每份报告自己的 `Available` 列，不是从手册抄的。**
+
+| 项 | 器件可用（`Available` 列） |
+|---|---|
+| Slice LUTs | **53,200** |
+| Slice Registers | **106,400** |
+| Block RAM Tile | **140**（`RAMB36/FIFO` 140 / `RAMB18` 280） |
+| DSP48E1 | **220** |
+| Bonded IOB | **125** |
+| BUFGCTRL | **32** |
+
+| 资源 | **整核 `m4`** | of | Util% | **对照 `fold`**（全接常量） | of | Util% |
+|---|---|---|---|---|---|---|
+| **Slice LUTs** | **41,624** | 53,200 | **78.24** | 36,506 | 53,200 | 68.62 |
+| Slice Registers | 36,888 | 106,400 | 34.67 | 36,681 | 106,400 | 34.47 |
+| F7 / F8 Muxes | 11,921 / 5,731 | 26,600 / 13,300 | 44.82 / 43.09 | 11,611 / 5,635 | 26,600 / 13,300 | 43.65 / 42.37 |
+| **Block RAM Tile** | **0** | 140 | **0.00** | 0 | 140 | 0.00 |
+| RAMB36 / RAMB18 | 0 / 0 | 140 / 280 | 0.00 / 0.00 | 0 / 0 | 140 / 280 | 0.00 / 0.00 |
+| **DSP48E1** | **0** | 220 | **0.00** | 0 | 220 | 0.00 |
+| Bonded IOB | 532 | 125 | 425.60 | 532 | 125 | 425.60 |
+| BUFGCTRL | 1 | 32 | 3.13 | 1 | 32 | 3.13 |
+
+- 【实测】`m4` 第 1 节细分：`LUT as Logic 41622`、`LUT as Memory 2`、`LUT as Distributed RAM 0`、`LUT as Shift Register 2`。**所以"分布式 RAM = 0"是真的**，`LUT as Memory` 那 2 个是移位寄存器（`SRL16E 2`）。
+- 【实测】`m4` 第 7 节 Primitives 全表：`FDRE 35803` · `LUT6 33476` · `MUXF7 11921` · `MUXF8 5731` · `LUT4 2893` · `LUT5 2864` · `LUT3 2596` · `LUT2 2544` · `FDCE 1063` · `CARRY4 676` · `OBUF 530` · `LUT1 170` · `FDPE 22` · `SRL16E 2` · `IBUF 2` · `BUFG 1`。
+  - 【实测】**寄存器对得上**：35,803 + 1,063 + 22 = **36,888**，与第 1 节的 `Slice Registers` 完全一致（第 1.1 节的分类表同样给 22 / 1063 / 35803）。
+  - 【实测】**这张表里没有任何 `RAMB*` 单元**。`out\m4.census.txt` 另外用 `get_cells` 查过 `RAMB36E1` / `RAMB18E1` / `RAMB16E1` / `RAMB128E1` / `RAMB*(glob)` / `RAM32X1S` / `RAM64X1S` / `RAM32M` / `RAM64M` / `RAM128X1S` / `RAM256X1S` / `RAM*X1S`，**全部是 0**（`m4.census.txt:8-10,31-38`）。**这是"报告里连一行都没有"与"查出来是 0"两种呈现都对得上**——与 `toolchains.md` 第 6 节第 5 条登记的那个陷阱一致。
+  - 【推断】**和第 11 节同一条口径提醒**：第 7 节的 LUT 原语数（LUT6+LUT5+LUT4+LUT3+LUT2+LUT1 = **44,543**）**不等于**第 1 节的 `Slice LUTs 41,624`，因为被当作 `MUXF7`/`MUXF8` 使用的 LUT 不单独计进 `Slice LUTs`。**引用面积一律用第 1 节的 41,624。**
+- 【实测】**一处没有对上、并且不予调和的数**：一次 `get_cells` 普查（`out\m4.census.txt`，`summary.txt:32` 的 `census_total_LUTs : 44543`）返回 **44,543 个 LUT 单元**，与报告的 41,624 差 2,919。
+  - 【推断】**原因已定位、但两个口径的差没有逐项核过**：cell 级查询跑在**未打包（un-packed）网表**上，而 `report_utilization` 数的是**打包后的 site**。**`report_utilization` 的 41,624 才是回答"装不装得下"的那个数**，因为它是 Vivado 拿去和 53,200 比的那个。
+  - **所以本节不把 44,543 当成一个竞争数字对外引用**，也不假装两者已经核对过。**能说的是：两个口径都存在，报告口径是判定口径，差 2,919 的逐项构成没有被测量。**
+- 【实测】`m4` 第 1 节脚注原文：`The Final LUT count, after physical optimizations and full implementation, is typically lower. Run opt_design after synthesis, if not already completed, for a more realistic count.`（`fold.util.rpt:44` 同一行）
+  - 【推断】**所以 41,624 是实现后用量的上界，不是实现后用量。** 本节**没有跑** `opt_design` / `place_design` / `route_design` / `report_timing_summary`。
+- 【实测】构建状态：三个构建都是 `run_status : synth_design Complete!`（`summary.txt:10` / `:105` / `:197`）、`run_progress : 100%`。合成耗时 `elapsed_seconds`：`m4` **4282.582 s**、`fold` **4315.801 s**、`m0` **4320.715 s**（`summary.txt:12` / `:107` / `:198`）。`tcl_start : Wed Sep 30 13:26:04 +0800 2026`（`summary.txt:3`）；**`summary.txt` 里没有 `tcl_end`**，因为跑在第四个变体里被中止（12.6）。
+- 【事实】器件接受行与 license 原文（`m4.synth.log`）：`Loading part: xc7z020clg400-2`（`:660`）、`Attempting to get a license for feature 'Synthesis' and/or device 'xc7z020'`（`:14`）、`INFO: [Common 17-349] Got license for feature 'Synthesis' and/or device 'xc7z020'`（`:15`）、`INFO: [Common 17-83] Releasing license: Synthesis`（`:1969`）。`summary.txt:1` 的 `part` 字段是完整形式 `xc7z020clg400-2`，报告头写的是缩写 `7z020clg400-2`。
+- 【事实】`probe.tcl` 每次变体都记了同一行良性 Tcl 错误：`run_top_set_err : ERROR: [Common 17-54] The object 'run' does not have a property 'top'.`（`summary.txt:8` / `:103` / `:194`）——与 11.1 那条同源，**不影响结果**，登记是因为它出现在 `summary.txt` 里。
+
+### 12.2 模块闭包：21 个文件，双向机器证明
+
+【事实】`probe.tcl:30-51` 显式列出 21 个文件，`summary.txt:4` 的 `closure_files : 21` 与之一致：
+
+`system\nes_system_v6.v`、`cpu\nes_cpu6502.v`、`bus\nes_cpu_bus.v`、`ppu\nes_ppu2c02.v`、`ppu\nes_ppu_sprite.v`、`ppu\nes_sprite_chr_fetch.v`、`ppu\nes_chr_fetch_unit.v`、`ppu\nes_oam_dma.v`、`apu\nes_apu2a03.v`、`apu\nes_apu_pulse.v`、`apu\nes_apu_triangle.v`、`apu\nes_apu_noise.v`、`apu\nes_apu_dmc.v`、`apu\nes_apu_length_lut.v`、`controller\nes_controller.v`、`mapper\nes_mapper.v`、`mapper\nes_mapper_nrom.v`、`mapper\nes_mapper_mmc1.v`、`mapper\nes_mapper_uxrom.v`、`mapper\nes_mapper_cnrom.v`、`mapper\nes_mapper_mmc3.v`
+
+- 【事实】**`nes_system_v5.v` 不在闭包里，而且这是对的。** 仓库的 `tools/sim_all.ps1:146` 的 `$systemV6Sources` 确实把 `@($systemV5Rtl)` 也列了进去，但**当前 `rtl/nes_core/system/nes_system_v6.v` 里没有任何 `nes_system_v5` 字样**（全文检索 0 命中），`nes_system_v6` 并不例化它。**所以那一条是 sim_all 侧的冗余，不是闭包缺失。**
+- 【实测】**完整性**：`iverilog -g2001 -t null -s nes_system_v6`（`C:\iverilog\bin\iverilog.exe`，`-o NUL`）对这 21 个文件返回 **rc=0 且没有任何输出**。
+- 【实测】**最小性（drop-one）**：逐个去掉 21 个文件里的任意一个再编译，**20 个可去掉的全部失败并给出 `Unknown module type`**（`nes_cpu6502` rc=2、`nes_cpu_bus` rc=2、`nes_ppu2c02` rc=2、`nes_ppu_sprite` rc=1、`nes_sprite_chr_fetch` rc=1、`nes_chr_fetch_unit` rc=1、`nes_oam_dma` rc=2、`nes_apu2a03` rc=2、`nes_apu_pulse` rc=3、`nes_apu_triangle` rc=2、`nes_apu_noise` rc=2、`nes_apu_dmc` rc=2、`nes_apu_length_lut` rc=5、`nes_controller` rc=2、`nes_mapper` rc=2、`nes_mapper_nrom` rc=2、`nes_mapper_mmc1` rc=2、`nes_mapper_uxrom` rc=2、`nes_mapper_cnrom` rc=2、`nes_mapper_mmc3` rc=2）。**第 21 个（`nes_system_v6.v` 本身）是顶层，本来就不可去掉，它失败的方式不同，不计入这 20 个。** **所以这个集合既完整又最小。**
+- 【实测】**实例化总数 24 个**（逐文件重新定位构造，不是行号平移）：`nes_system_v6` 7 个（`:406` `u_cpu`、`:435` `u_bus`、`:505` `u_ppu`、`:541` `u_apu`、`:603` `u_controller`、`:625` `u_oam_dma`、`:652` `u_mapper`）、`nes_ppu2c02` 4 个（`:609`、`:752`、`:766`、`:789`）、`nes_apu2a03` 5 个（`:235`、`:260`、`:285`、`:306`、`:332`）、`nes_mapper` 5 个（`:228`、`:246`、`:272`、`:296`、`:320`）、`nes_apu_pulse` / `nes_apu_triangle` / `nes_apu_noise` 各 1 个（`:84` / `:52` / `:78`）。
+  - **一条必须写准的更正**：这 24 个**不是全部参数式例化**。实测是 **13 个参数式（`MOD #(...) INST (`）+ 11 个普通式（`MOD INST (`）**。`nes_ppu2c02` 那 4 个里 `:609` 与 `:766` 是参数式、`:752` 与 `:789` 是普通式。
+  - 【事实】**4 个 PPU 子模块实例全部在 `generate` 块里**：`nes_ppu2c02.v:585`–`:592`（`g_oam_flatten`）与 `:594`–`:844`（`g_chr_internal` / `g_chr_external`）两个 `generate`，那 4 个实例在第二个里面。
+  - 【事实】**方法备注（与 11.9 那条同类，但数字要改）**：一条朴素的 `\bnes_\w+\s+\w+\s*\(` 正则**只找到 `nes_ppu2c02.v` 里 4 个实例中的 2 个**（`:752` 与 `:789`），**漏掉了两个 `nes_ppu_sprite`，因为它们是参数式**。**所以"朴素正则能找到 3 个"是错的，实测是 2 个。** 用正则自动闭包会漏模块——**这一点本仓库在第 11 节的 PPU 探针上已经踩过一次（11.9 末条）**，这里再确认一次。
+- 【实测】**这 21 个文件与仓库 HEAD 的关系（必须一起读）**：`D:\vivadoProject\core_zynq\rtlf\` 下的 21 个副本与 `rtl/nes_core/` 下的同名文件做 SHA-256 比对，**20 个逐字节相同**；**只有 `nes_system_v6.v` 不同，差 1 行**——`D:\vivadoProject\core_zynq\rtlf\nes_system_v6.v:453` 是 `.cpu_fire(cpu_bus_fire)`，仓库 HEAD 的 `rtl/nes_core/system/nes_system_v6.v:453` 是 `.cpu_fire()`。**那正是 `bcfe595` 修的那一处（12.8）。**
+  - 【推断】**因此 41,624 这个数是在修复前的源码上综合出来的，修复之后没有重新综合。** 这个差不可能让面积变大（一个输出改成不连接），**但"41,624 是当前 HEAD 的实测数"这句话是不准确的**，本节不这样写。
+
+### 12.3 顶层接口，以及 IOB 425.60 % 为什么不是设计成本
+
+- 【事实】**顶层端口表（`rtl/nes_core/system/nes_system_v6.v:59`–`:164`，714 行文件）**：**5 个输入、26 位**——`clk`（1）、`reset`（1）、`buttons1[7:0]`（8）、`buttons2[7:0]`（8）、`chr_rdata[7:0]`（8）。
+- 【事实】**101 个输出、497 位**（按端口表逐条加位宽求和实测；`PRG_ADDR_BITS = $clog2(131072) = 17`，`CHR_ADDR_BITS = 17`）。激励包装 `D:\vivadoProject\core_zynq\src\nes_stim.v` 的 `localparam OBSW = 497`（`:39`）、`output wire [496:0] obs_o`（`:35`）、`assign obs_bus = { … }` 的**拼接项实测正好 101 个**（`:277`–`:377`）——**与端口表逐项对上**。
+- 【推断】**没有外部 VRAM。** `nametable_ram` 与 `palette_ram` 在 `nes_ppu2c02` 内部（`nes_ppu2c02.v:416` / `:419` 的 `reg [7:0] nametable_ram [0:2047]` / `reg [7:0] palette_ram [0:31]`），**它们的成本在 41,624 里面**；**只有 CHR 在片外**（顶层 `chr_req` / `chr_final_addr` 出、`chr_rdata` 入）。**外部 VRAM 的带宽与仲裁不在这个数字里**（12.10）。
+- 【实测】**IOB 425.60 % 是 harness 产物，不是设计成本，引用时不得当头条。** 第 4 节 `Bonded IOB 532 / 125`；第 7 节 `OBUF 530` + `IBUF 2`。逐项对得上：
+  - `OBUF 530` = `obs_o` **497** 位 + `stim_count_o` **32** 位 + `rtl_reset_o` **1** 位 = **530**（`nes_stim.v:34-36` 的端口表）。
+  - `IBUF 2` = `clk` + `rst_in`（`nes_stim.v:32-33`）。
+  - **DUT 本身只需要 26 个输入**（上一条）。**在真实板子上 `obs_o` / `stim_count_o` / `rtl_reset_o` 是内部网，不是引脚。**
+  - **这与 11.6 登记的 PPU 探针那一行是同一类产物**（PPU 那边是 159 / 125 = 127.20 %，那边的原因是 `obs_o[123:0]` + `stim_count_o[31:0]` + `rtl_reset_o`）。**两边的 IOB 行都不可用作设计成本。**
+
+### 12.4 存储器：三条**互不相同**的理由，全部是 0
+
+【实测】**块 RAM tile 0 / 140、RAMB18 0 / 280、分布式 RAM 0、分布式移位寄存器 2、DSP48E1 0**（12.1 的表 + `m4.census.txt`）。**工具自己给出的原因有三条，每条对应不同的数组：**
+
+1. **`cpu_ram`（`ram_array`，`nes_cpu_bus.v:104` 的 `reg [7:0] ram_array [0:(1<<RAM_ADDR_BITS)-1];`，2048×8）——本次新增的数组，**此前从未经过任何一条工具链。`m4.synth.log:194-197` 原文：
+
+   ```
+   WARNING: [Synth 8-4767] Trying to implement RAM 'ram_array_reg' in registers. Block RAM or DRAM implementation is not possible; see log for reasons.
+   Reason is one or more of the following :
+   	1: RAM is sensitive to asynchronous reset signal. this RTL style is not supported.
+   RAM "ram_array_reg" dissolved into registers
+   ```
+
+   - 【实测】**它的大小已被层级表量化**：`m4.util_hier.rpt` 的 `u_bus` 行是 **8,761 LUT / 16,426 FF**。**16,384 就是这个 RAM 的位数（2048×8）**，占 16,426 的 99.7 %——**整个设计里最大的单个寄存器消费者**。
+2. **`prg_rom`（`nes_system_v6.v:189` 的 `reg [7:0] prg_rom [0:PRG_SIZE_BYTES-1];`，`PRG_SIZE_BYTES` 默认 **131072** = 128 KiB）——它根本没有驱动源。** `m4.synth.log:442-446` 原文：
+
+   ```
+   Warning: Trying to implement RAM in registers. Block RAM or DRAM implementation is not possible for one or more of the following reasons :
+   	1: Unable to determine number of words or word size in RAM.
+   	2: No valid read/write found for RAM.
+   RAM dissolved into registers
+   WARNING: [Synth 8-3848] Net prg_rom in module/entity nes_system_v6 does not have driver. [D:/vivadoProject/core_zynq/rtlf/nes_system_v6.v:189]
+   ```
+
+   - 【推断】**所以 128 KiB 在 41,624 这个数里贡献为 0。** 这不是"推不出 BRAM"，是"这张 ROM 什么都没有"。**在真实目标上 ROM 必须落在片外 flash、BRAM 或板载 ROM 里**——而这个器件有 **140 块 BRAM tile，在这里一块都没被碰过。**
+3. **PPU 侧的 `nametable_ram` 与 `palette_ram` 走的是与 `cpu_ram` 同一条理由**（异步复位，`m4.synth.log:325-332`），**OAM 走另一条**：`INFO: [Synth 8-5546] ROM "oam_ram_reg[N]" won't be mapped to RAM because it is too sparse`，**逐位打印**，随后 `INFO: [Common 17-14] Message 'Synth 8-5546' appears 100 times and further instances of the messages will be disabled.`（`m4.synth.log:869`）。**所以 OAM 的总条数在这份日志里读不出来，不要写成大于 100 的数字**（与 11.3 同一条纪律）。
+
+- 【实测】**一个不要读错的数字**：`m4.synth.log` 里有一行汇总 `BRAMs: 280 (col length: RAMB18 60 RAMB36 30)`。**那是器件的容量，不是推断出来的数量。** **推断数是 0。**
+- 【推断】**这与第 10、11 节是同一个架构事实的第三次确认，但理由清单变长了**：PPU 那两次的理由是"多异步组合读 + 一个写"（端口数、异步复位、稀疏、无有效读写对）；**整核这一次多出一条 CPU 侧独有的理由——"这个 ROM 根本没有写源"**，而 `cpu_ram` 补上了"整个 2 KiB 工作 RAM 全部摊成触发器"这一条。**所以 R-04 估算表里 `prg_rom` 的 16 / 32 块 M9K 与 `cpu_ram` 的 2 块，在两个器件上都没有落到任何一块 BRAM 上。** **这是现状描述，不是"应该改成 BRAM"的任何结论**——任何改法一次都没被测过。
+
+### 12.5 anti-constant-folding 交叉核对：**没有通过判据**（这一节决定 41,624 该怎么读）
+
+**先说结论：这一次的对照实验没有达到 PPU 那一次的标准，所以 harness 没有被这次实验验证。** 这一点必须写在数字旁边，不能藏在脚注里。
+
+- 【实测】`fold` 对照组（`D:\vivadoProject\core_zynq\src\nes_fold_top.v`，**469 行**）：**顶层端口表与 `nes_stim`（408 行）逐项相同**——`:11-19` 是同一组 `clk` / `rst_in` / `stim_count_o[31:0]` / `obs_o[496:0]` / `rtl_reset_o`，`:21` 同一个 `localparam OBSW = 497`，`:25-27` 同一个自由运行计数器；**区别只有 `:36-38` 把 `buttons1` / `buttons2` / `chr_rdata` 三个输入接成常量、`:39` 起把全部输出接空**。实测：**36,506 Slice LUT / 53,200 = 68.62 %**、36,681 寄存器、0 BRAM、0 DSP。`m4` 是 **41,624 / 78.24 %**。
+  - 【实测】**分离度 = 41,624 ÷ 36,506 = 1.14×。**
+  - 【实测】**对照基准：PPU 那一次是 21.5×（28,380 → 1,319，11.5），Quartus 那一次是 338×（63,127 → 187，10.3）。**
+  - 【推断】**1.14× 远达不到 11.5 那一档，所以不能像第 11.5 节那样说"harness 被这个对照实验验证了"。** **PPU 那次的逻辑在这次不成立。**
+- 【事实】**能说的另一半：`nes_stim.v` 按构造满足每一条 harness 性质**（该文件头注释 `:5-18` 把设计意图逐条写出来，代码与之一致）：输入全部来自寄存器、其 D 端是自由运行 32 bit 计数器与观测寄存器的函数（`:41-53` 的 `stim_count` / `rst_cnt`，`:389-403` 的 `st_buttons1` / `st_buttons2` / `st_chr_rdata`）；输出全部拼进 `obs_bus`、锁存进 `obs_q`、并把 `obs_q` 的位混回激励寄存器（`:275-378`、`:380-387`、`:395-401`）；`obs_q` 与 `stim_count` 是**顶层输出端口**（`:34-35`）所以整个观测锥可见；复位是计数器产生的、由 `rst_in` 门控的上电复位（`:48-56`），**不是常量**；**`chr_rdata` 像其他输入一样由寄存器驱动**（`:399-401`），所以不存在"某个存储器输入悬空、工具把下游整个删掉"这条路；所有反馈都跨寄存器边界，没有组合环。
+- 【实测】**机制确实动过，不是完全没跑**：`fold.synth.log` 里 `INFO: [Synth 8-3333] propagating constant` 出现 **71** 次；`INFO: [Synth 8-223] decloning instance 'u_dut' (nes_system_v6) to 'u_dut2'` 出现 **1** 次（去重了一份实例）。`fold` 还多出一条 `m4` 没有的 `WARNING: [Synth 8-4446] all outputs are unconnected for this instance and logic may be removed [D:/vivadoProject/core_zynq/src/nes_fold_top.v:33]`（`:33` 就是 `) u_dut (`）——**对照组确实把输出全接空了**。
+- 【推断】**为什么对照组塌不下去，原因是结构性的，值得单独记一条**：**整核自己产生活动。** `div_phase` 是一个自由运行的 4 bit 异步复位计数器（`nes_system_v6.v:180-187`，`div_phase == 4'd11` 归零），它派生出 `ce_ppu` / `ce_cpu`（`:176-177`）；CPU 一直从 `prg_rom` 取指并**一直往 PPU 寄存器写**，所以**即使 `chr_rdata` 是常量，CHR 的地址线仍然在变**。**把外部输入接常量让 CHR 的"数据"变成常量，没有让它的"寻址"变成常量。**
+  - 【实测】**PPU 那一次之所以能塌到 1,319，是因为 `nes_ppu2c02` 内部没有自主状态源**：把 `reg_cs` / `reg_we` 接掉之后它根本出不了复位态。**整核没有这个性质**——`nes_system_v6` 里有一个自由运行的时钟分频器在驱动一个不停取指、不停写 PPU 的 CPU。
+- 【推断】**因此本节登记的两个数字是这样用的**：
+  - **36,506 是"把所有输入接成常量之后"的不可再压缩下限**——不是 41,624 的可信下界，也不是折算系数。
+  - **活的激励大约值 5,118 个 LUT**（41,624 − 36,506）。
+  - **41,624 是一个塌不掉的核的上界。** 引用它时要记得两件事：harness 没被这次对照实验验证（上一段），以及它是实现后用量的上界（12.1 脚注）。
+  - **一个能真正验证 harness 的对照实验必须压掉内部时钟状态**（例如把 `div_phase` 的时钟接掉、或从综合网表里排除 `u_dut` 的时序元件）。**那样的对照没有跑过。**
+
+### 12.6 mapper 扫描：**作废**（只测到了 MMC3 一条）
+
+- 【事实】`probe.tcl:323-328` 排了 6 个变体：`m4`（`MAPPER_SELECT = 4`）、`fold`、然后 `m0`、`m1`、`m2`、`m3`。**实际完成 3 个**（`summary.txt` 里有 `m4` / `fold` / `m0` 三段完整记录），**第四个 `m1` 只写下了段头三行就被中止**（`summary.txt:287-289`：`m1 (top = nes_stim  MAPPER_SELECT = 1)` + `set_generic_err` + `run_top_set_err`，**没有 `run_status`**），后面三个没有开始。**每次变体约 71–72 分钟，所以是在花掉约 3.6 小时去产出相同的无效数字之前停掉的。**
+- 【实测】**根因：generic 绑错了类型。** `probe.tcl:238` 用的是 `set_property generic {MAPPER=$param} [get_filesets sources_1]`，Vivado 2018.3 把整数 `4` 当成字符串绑了，**三个构建的日志里同一行**：`Parameter MAPPER_SELECT bound to: m - type: string`（`m4.synth.log` / `m0.synth.log` / `fold.synth.log` 各 1 次）。
+- 【事实】**为什么这个 generic 绑不进去**：`nes_system_v6` 的 `MAPPER_SELECT` 是 `parameter [7:0] MAPPER_SELECT = 8'd0`（`nes_system_v6.v:45`），`nes_mapper.v:139-143` 直接由它派生出 `select_nrom` / `select_mmc1` / `select_uxrom` / `select_cnrom` / `select_mmc3`，而**顶层没有一个端口能驱动它**。四个低位 select 全为假，于是 `nes_mapper.v:165-212` 那个 `always @*` 的 `if / else if × 3 / else` 链全部落空，**落进最后那个 `else`**，即 `:203-210` 的 MMC3 分支。
+- 【实测】**这是证明，不是推断**：
+  - `m4` 与 `m0` 在**每一行**上数值相同——Slice LUT **41,624 / 78.24**、Slice Register **36,888**、Block RAM tile **0**、DSP **0**、Bonded IOB **532**、`summary.txt` 的 `log_errors` / `log_crit_warnings` / `log_warnings` 全部相同，`census` 逐项相同。
+  - `m4.util_hier.rpt` 与 `m0.util_hier.rpt` 里 mapper 那一段**只有 `u_mmc3`（`nes_mapper_mmc3`）一行，没有 `u_nrom` 行**。
+- 【事实】**一条必须一起读的结构事实，它比"扫描作废"本身更重要**：`nes_mapper.v` **没有 `generate`**，`:228`–`:354` 把 `nes_mapper_nrom` / `nes_mapper_mmc1` / `nes_mapper_uxrom` / `nes_mapper_cnrom` / `nes_mapper_mmc3` **五个子模块无条件全部例化在模块作用域上**。`MAPPER_SELECT` 只做两件事：门控写选通（`:147-150` 的 `we_mmc1` / `we_uxrom` / `we_cnrom` / `we_mmc3`；NROM 没有写口）与选择哪一组偏移量被送出去（`:165-212`）。**所以 41,624 这个数里已经包含了五个 mapper 的逻辑。**
+- 【推断】**因此本节的结论按两句话读，缺一句就错**：
+  - **只测了 MMC3 这一个被选中的配置。** 换一个 `MAPPER_SELECT` 之后那 41,624 会是多少，**没有测过，本节不给任何方向的猜测**（变的是哪一组写选通变活、哪一组偏移量被观测，不是"换掉一份逻辑"）。
+  - **但"五个 mapper 的逻辑都在里面"是结构事实，与选中了谁无关。** 所以**也不要把这次作废说成"另外四个 mapper 的成本完全没被计入"**——它们被计入的是**逻辑**，没被计入的是**被驱动与被观测的那一组**。
+
+### 12.7 per-entity / hierarchical 归因：**第三次不可信，本节因此不给 per-module LUT 表**
+
+- 【实测】`m4.util_hier.rpt` 有四个互相独立的毛病：
+  1. **`nes_ppu_sprite` 整行缺失**，而 `nes_ppu2c02.v:766` 确实例化了它（外部 CHR 分支的 `u_sprite`）。表里 `u_ppu` 那一行是 **27,948 LUT / 19,205 FF**。
+  2. **`u_mmc3` 报成 1 LUT / 0 FF**。**0 个触发器在算术上不可能**：`nes_mapper_mmc3.v:43-61` 有 19 个寄存器声明、`:63-64` 还有 2 个，其中 `bank_select_r` / `prg_mode_r` / `chr_inversion_r` / `ram_protect_r` / `chr_bank0..5_r` / `prg_bank6_r` / `prg_bank7_r` / `irq_latch_r` / `irq_counter_r` / `mirroring_r` 全部由 `we_mmc3`（`nes_mapper.v:150`）驱动写，而写选通是活的，输出又送到顶层被观测。
+  3. **mapper 那几行在 `m4` 与 `m0` 之间逐字节相同**——两份报告声称的 `MAPPER_SELECT` 不同（12.6），**归因表却不跟随 elaboration 变化**。
+  4. **`u_apu` 的子项加起来是 610，表上写的是 609**——`106 + 124 + 78 + 123 + 112 + 67 = 610`。
+- 【实测】**这一轮自己的 `get_cells` 兜底也失败了**：`out\m4.byinst.txt` 只会返回 `u_dut` 与 `<outside:u_dut>` 两个桶（例如 `REF_NAME=LUT6 total=33476` → `3 <outside:u_dut>` + `33473 u_dut`），**因为 Vivado 把 cell 名展平了**。**两个来源都不可用。**
+- 【实测】**唯一被验证过的那一次拆分**（记录它是为了说明"总数可信、归因不可信"这个区分，不是为了发布一张模块表）：`nes_stim` 顶层 **41,624 LUT** 与第 1 节的 `Slice LUTs` **完全一致**；`u_dut` = **41,600**、harness 自身 = **24**，**24 + 41,600 = 41,624 精确对上**；`u_dut` 的子项也自洽（`18 + 609 + 8761 + 11 + 3763 + 1 + 489 + 27948 = 41,600`）；`u_ppu` 的子项也自洽（`18297 + 4649 + 5002 = 27948`）。**注意这只能证明"表的加减法自洽"，不能证明"每一行归到了对的模块上"**——`nes_ppu_sprite` 缺失那一行正是被静默并进了 27,948，读表的人看不出来。
+- 【推断】**结论（方法约束，不是新风险）**：**隔离的单模块综合是唯一可信的归因方法，而它超出预算。** **所以本节只登记总量 41,624，不发布任何 per-module LUT 表。** 这已经是本仓库**第三次**独立证实 per-entity / hierarchical 归因不可信（10.3 的 Quartus `final_ext.map.rpt`、11.7 的 `ext.util_hier.rpt`、12.7 的 `m4.util_hier.rpt`），**两个工具、三份报告、同一类错误**。
+
+### 12.8 error / warning：0 error、2 critical warning，以及一个已修的真实 RTL 缺陷
+
+- 【实测】**三个构建都是 0 error、2 critical warning**（`summary.txt` 的 `log_errors : 0`、`log_crit_warnings : 2`，三个变体都一样；`m4.synth.log` 结尾原文 `Synthesis finished with 0 errors, 2 critical warnings and 197067 warnings.`）。
+- 【实测】**那 2 条 critical warning 是一个真实的 RTL 缺陷**，`out\m4.errors.txt` 全文：
+
+  ```
+  CRITICAL WARNING: [Synth 8-6859] multi-driven net on pin obs_bus[374] with 1st driver pin 'i_60837/O' [D:/vivadoProject/core_zynq/rtlf/nes_cpu6502.v:216]
+  CRITICAL WARNING: [Synth 8-6859] multi-driven net on pin obs_bus[374] with 2nd driver pin 'i_15819/O' [D:/vivadoProject/core_zynq/rtlf/nes_cpu_bus.v:155]
+  ```
+
+  - 【实测】**`obs_bus[374]` 到底是哪一根网，是可以算出来的**：按 `nes_stim.v:277-377` 的拼接顺序从最低位往回数位偏移，**第 374 位正好是 `d_bus_fire`**（邻位：`d_bus_addr -> 358..373`、`d_bus_stall -> 375`、`d_bus_req -> 376`、`d_bus_wait_count -> 377..384`；全部偏移加起来正好 497）。**所以被短接的是 `bus_fire`，而 `bus_fire` 是这 497 位里唯一一个单独占一位的。**
+  - 【事实】**短接的位置在 `nes_system_v6` 里，不在 harness 里**：修复前的 `D:\vivadoProject\core_zynq\rtlf\nes_system_v6.v:416` 是 `.bus_fire(cpu_bus_fire)`、`:453` 是 `.cpu_fire(cpu_bus_fire)`——**`u_cpu` 的 `bus_fire` 输出与 `u_bus` 的 `cpu_fire` 输出被接到同一根网 `cpu_bus_fire` 上**。
+  - 【实测】**证明它在 DUT 内部而不是 harness 的，是 `fold` 那一次跑**：`fold.synth.log` 报的是**同样两条、同样两个源行**，但网名是**工具内部网 `n_0_54316`**，**与 harness 没有任何连接**。
+  - 【事实】**一条必须写准的限定词**：**Vivado 在这条 warning 里给的行号不可当引用。** 当前源码里 `nes_cpu6502.v:216` 是 `assign nmi_rise = nmi_i && !nmi_sync_reg;`、`nes_cpu_bus.v:155` 是 `assign dma_req_present = DMA_PRESENT && !reset && (dma_req_oam || dma_req_dmc);`——**都不是 `bus_fire` / `cpu_fire` 的赋值**（那两句在 `nes_cpu6502.v:230` 与 `nes_cpu_bus.v:233`）。**所以引用这条发现时要引日志原文，并另引当前源码里真正的驱动语句，不要把 216 / 155 当成"驱动在第几行"。**
+- 【事实】**当前状态：已修（`bcfe595`），修法是可证明行为中性的。** `nes_system_v6.v:453` 现在是 `.cpu_fire()`。行为中性的根据（逐条重新定位，不是行号平移）：
+  - `nes_cpu6502.v:230` `assign bus_fire = bus_req && bus_ready;`
+  - `nes_cpu_bus.v:233` `assign cpu_fire = cpu_req && ready_c;`、`nes_cpu_bus.v:232` `assign cpu_ready = ready_c;`
+  - `nes_system_v6.v:415` `.bus_req(cpu_bus_req)` 与 `:447` `.cpu_req(cpu_bus_req)` 是**同一根网**；`nes_system_v6.v:412` `.bus_ready(cpu_bus_ready)` 与 `:452` `.cpu_ready(cpu_bus_ready)` 是**同一根网**。
+  - 于是 `bus_fire` 与 `cpu_fire` 是**同一个乘积项**，短接它们不改变任何一个比特的行为。
+  - 【实测】回归门禁：`tools/sim_all.ps1 -Mode all` → `Result: PASS (51 of 51)`、exit 0、墙钟 **781.0 s**、51 行全 PASS。
+  - 【事实】**本节同时保留两件事，不把修复写成"缺陷不存在"**：**(a) 当前状态是已修；**(b) 这条历史发现必须留着**——它是 10.4 节"多驱动网是仿真抓不到、综合一抓就抓得到"那一类的**第二个确认实例**（第一个是 `575e191` 之前的 `read_buffer_reg[7:0]` / `v_addr[14:0]`），也是 R-05 里"仿真门禁有盲区"那条的第二个证据。
+  - 【实测】**修好之后没有重新综合过**（12.2 末条已记：`rtlf` 与仓库 HEAD 只差这一行）。**所以"综合报告里还有 2 条 critical warning"这句话描述的是修复前的源码。**
+
+- 【实测】**两条 `Synth 8-350` 端口数警告是良性的，必须这样记录，不要重复"见 warning 就是缺陷"的错误**：
+
+  | 警告原文 | 为什么良性 |
+  |---|---|
+  | `instance 'u_sprite' of module 'nes_ppu_sprite' requires 20 connections, but only 18 given [nes_ppu2c02.v:768]` | 那是**外部 CHR 分支**的实例（`nes_ppu2c02.v:766-787`），**只设了 `.EXTERNAL_CHR(1'b1)`**，`PER_SLOT_CHR` 保持默认 `0`，所以它选中 `g_chr_flat` 那一支；`chr_slots` 与 `pat_addr_cur_o` 只被 `g_chr_per_slot` 用，而那个分支在这个实例里没有被 elaborate。**这个省略是有意的。**（`nes_ppu_sprite` 确实声明 20 个端口，`nes_ppu2a03` 确实声明 65 个——都按当前源码逐条数过。） |
+  | `instance 'u_apu' of module 'nes_apu2a03' requires 65 connections, but only 59 given [nes_system_v6.v:541]` | `nes_apu2a03` 声明 65 个端口；**缺席的 6 个全是 `dbg_*` 输出**，用空括号接的，例如 `nes_system_v6.v:559` `.dbg_frame_phase()`。**具名端口关联允许合法地省略端口，而一个未连接的输出不会传播 Z。** |
+
+- 【实测】**警告普查（`out\m4.warntypes.txt`，10 行）**。**日志对每个 code 在 100 条处封顶**（`Common 17-14`），所以下面全部是封顶后的数：
+
+  | 条数 | code | 说明 |
+  |---|---|---|
+  | 100 | `Synth 8-5788` 寄存器 Set 与 reset 同优先级 | 99 条在 `oam_ram_reg`（`nes_ppu2c02.v:936`），**1 条新增在 `ram_array_reg`**（`m4.synth.log:193`） |
+  | 100 | `Synth 8-3848` 无驱动源 | **全部新增，全部是 `prg_rom`**（`nes_system_v6.v:189`） |
+  | 100 | `Synth 8-3331` 端口未连接 | 继承自 PPU |
+  | 7 | `Synth 8-3917` 端口被常量 0 驱动 | **新增**：`oam_dma_addr_wr`、`mapper_nametable_map[3]` / `[1]`、`mapper_prg_bank_number[7]` / `[6]` / `[5]` / `[4]`（`m4.synth.log:1657-1663`） |
+  | 3 | `Synth 8-4767` RAM 摊成寄存器 | 2 条继承（`nametable_ram_reg` / `palette_ram_reg`）+ **1 条新增 `ram_array`** |
+  | 2 | `Synth 8-350` 端口数 | **两条都良性**，理由见上一张表 |
+  | 2 | `Synth 8-6014` 删掉未使用的时序元件 | **新增**：`last1_q_reg` / `last2_q_reg`。**这两条是合法的常量传播，不是死代码**：`nes_controller.v:34` 的 `hold_last = (EXTRA_READ == EXTRA_HOLD)`，而 `nes_system_v6.v:603` 的实例**没有覆盖 `EXTRA_READ`**，所以它取模块默认 `2'd0`（`nes_controller.v:4`）= `EXTRA_ONE`（`:27`），`hold_last` 是常量 0，于是 `:63` 那个 `(hold_last && past8) ? sel_last : sel_sr[0]` 的 `sel_last` 那一臂不可达。工具给的行号 `:53` 是 `sel_last` 的定义行 |
+  | 2 | `CRITICAL WARNING Synth 8-6859` 多驱动网 | **已在 `bcfe595` 修掉**，见上 |
+  | 1 | `Constraints 18-5210` 没有选中任何约束 | 探针产物，见 12.9 |
+  | 1 | `fold` 独有 `Synth 8-4446` | 只有 `fold.warntypes.txt` 里有，`m4` / `m0` 没有（12.5） |
+  | 1 | 无 code | `m4` / `m0` / `fold` 各 1 条 |
+
+- 【实测】**两个"条数"要分清，混用会得出错误的严重性判断**：
+  - `m4.synth.log` 共 **1,980 行**，其中以 `WARNING` 开头的 **316** 行、以 `CRITICAL WARNING` 开头的 **2** 行，**含 `WARNING:` 字样的行合计 318**。`summary.txt:20` 记的 `log_warnings : 316`。
+  - **工具自己的内部计数器在日志结尾那一行里**：`Synthesis finished with 0 errors, 2 critical warnings and 197067 warnings.`（`fold` 是 197,068）。
+  - 【推断】**所以"日志里 318 行"与"工具说 197,067 条"量的是两件事**：前者是逐行打印的行数（每 code 100 条封顶），后者是工具内部累计（封顶只关掉打印，不关掉计数）。**两个都是真的，引用时必须说清是哪一个。**
+  - 【实测】**对照：PPU 那一次的日志**（`D:\vivadoProject\ppu_zynq\out\ext.synth.log`）共 **856 行**、以 `WARNING` 开头 **204** 行、**0 error**、**0 critical warning**，工具内部计数器 **65,945**。
+  - **一条必须纠正的流传说法**：本轮早些时候说过"上一次日志有约 65,900 条 warning"——**那说的是工具内部计数器（65,945），不是日志行数**；日志本身是 856 行、204 行 warning。**两个数都是真的，但都别被当成对方的数。**
+
+### 12.9 时序：**仍然不是结果**，两个器件都不是
+
+- 【实测】**没有任何约束**：无 XDC、无引脚分配、无 SDC、无时钟约束。`m4.synth.log` 有 `No constraint files found.` **3 次**（`:995` / `:1562` / `:1765`）与 `WARNING: [Constraints 18-5210] No constraints selected for write.` **1 次**（`:1974`）。`summary.txt` 记的 `Constraints 18-5210` 也是 1 条。
+- 【实测】**四份报告里零条时序数据**：`m4.util.rpt` / `fold.util.rpt` / `m0.util.rpt` / `m4.util_hier.rpt` 里**没有 timing summary、没有 slack、没有 WNS/TNS、没有 fmax**。**所以本节不报告 fmax，也不报告任何频率。**
+- 【实测】**没有跑实现**：三个构建只有 `synth_design` + `report_utilization` + `write_checkpoint`。**没有 `opt_design` / `place_design` / `route_design` / `report_timing_summary`。** "综合通过"与"能实现"是两件事，本节只做了前者。
+- 【事实】**给下一个人记一个已确认的 grep 陷阱**：`m4.util_hier.rpt` 里有两处会让人以为命中了时序的字符串，**它们都是子串误报**——`Met` 是 `nes_apu_pulse__parameterized0` 这个模块名里的两个字母（`:37` 与 `:38` 两行）。**做时序关键字普查必须按词边界，不要按子串。**
+
+### 12.10 这个数字**不**建立什么（一条都不许省）
+
+| 未建立项 | 依据 |
+|---|---|
+| **"整机关得下"** | **12.1 测的是 `nes_system_v6` 加一个激励包装。** 缺的东西见下面八条 |
+| **没有卡带 ROM** | `prg_rom` 128 KiB **无驱动源，贡献 0**（12.4）。**真实目标上 ROM 必须落在片外 flash / BRAM / 板载 ROM** |
+| **没有外部 CHR 存储器** | `chr_rdata` 来自一个寄存器。**CHR ROM 的成本不在这个数里** |
+| **没有外部 VRAM** | nametable 与 palette 在 `nes_ppu2c02` 内部，**在数里**；**外部 VRAM 的带宽与仲裁不在数里**（12.3） |
+| **只测了 MMC3 一条配置** | 12.6。**另外四个被选中时的数字未知，本节不给任何方向的猜测** |
+| **anti-constant-folding 交叉核对没有验证 harness** | 12.5。**分离度只有 1.14×** |
+| **`nes_system_v6` 之外的任何东西都没有被综合过** | `rtl\platform\ep4ce10\nes_ep4ce10_top.v`、`rtl\nes_core\video\` 下的 `nes_video_scaler.v` / `nes_line_buffer_vga.v` / `nes_vga_timing.v`、`rtl\nes_core\peripheral\` 下的 `sd_spi_cmd.v` / `wm8978_i2c.v` / `nes_audio_i2s.v` / `nes_cdc_fifo.v` / `nes_i2s_shifter.v` —— **这 9 个文件在两个器件上都没有被 Vivado 或 Quartus 综合过一次**（路径已逐个核对） |
+| **没有上过任何板** | 没有时序收敛、没有引脚分配、没有 I/O standard、没有硬件证据 |
+| **整核没有跨器件对照** | **只有 PPU 有跨器件对照（11.2）。整核只在 `xc7z020clg400-2` 上综合过一次**，`EP4CE10F17C8` 上一次都没有 |
+
+### 12.11 与 PPU 基线的对照（**以及为什么这个差值不是一个干净的加法**）
+
+| | PPU 单独（`ext`，第 11 节） | 整核（`m4`，本节） | 差 |
+|---|---|---|---|
+| Slice LUTs | 28,380（**53.35 %**） | **41,624（78.24 %）** | **+13,244** |
+| 剩余 LUT | 24,820（46.65 %） | **11,576（21.76 %）** | **−13,244** |
+| Slice Registers | 19,586 | 36,888 | +17,302 |
+| 块 RAM tile | 0 / 140 | 0 / 140 | 0 |
+| DSP48E1 | 0 / 220 | 0 / 220 | 0 |
+
+- 【事实】**必须一起说的限定词：+13,244 不是"除 PPU 以外所有东西"的一个干净求和。** `nes_system_v6.v:526-531` 把 PPU 的 6 个调试输出**全部接空**了：`.dbg_v()`、`.dbg_t()`、`.dbg_x()`、`.dbg_w()`、`.dbg_sprite0_hit()`、`.dbg_sprite_overflow()`。**所以核里的 PPU 比第 11 节那个孤立探针的 PPU 合法地更小。** **引用这个差值时必须带上这一句**，否则会把它读成"CPU+APU+bus+mapper+controller+OAM DMA 正好 13,244"。
+  - 【实测】**同一张不可信的层级表恰好也指向这个方向**：`m4.util_hier.rpt` 的 `u_ppu` 行是 **27,948 LUT**，小于 11.1 的 28,380。**但这张表在 12.7 已被证明不可信，所以这条只是"与限定词一致"，不作为证据。**
+- 【实测】**层级表里唯一能当作量级参考的两行**（同样带 12.7 的折扣）：`u_bus`（`nes_cpu_bus`）**8,761 LUT / 16,426 FF**——**其中 16,384 位就是 `cpu_ram` 那 2048×8**（12.4）；`u_cpu`（`nes_cpu6502`）**3,763 LUT / 221 FF**。**这两行是本节唯一引用到的 per-module 数字，引用时必须带"来自已被证明不可信的层级表"这个限定词。**
+
+### 12.12 本次的工具链与目录事实
+
+- 【事实】工程目录 `D:\vivadoProject\core_zynq\`，报告在 `out\`，探针脚本 `probe.tcl`（13,154 字节），激励包装 `src\nes_stim.v`（408 行）与 `src\nes_fold_top.v`。
+- 【事实】**Vivado 工程文件在仓库外**：`D:\vivadoProject\core_zynq\proj\core_zynq.xpr`。**仓库内仍然没有任何 `.xpr` / `.xdc`**（与 11.8 一致）。
+- 【事实】**工具链本身与第 11 节完全同一条**：Vivado **v2018.3 (win64) Build 2405991 Thu Dec 6 23:38:27 MST 2018**、`D:\Xilinx\Vivado\2018.3\bin\vivado.bat`、**不在 `PATH` 上**、**不需要用户提供 `.lic`**（三份日志都有 `Got license for feature 'Synthesis' and/or device 'xc7z020'`）、报告是 **ASCII / UTF-8**（严格 UTF-8 解码不抛异常，与 Quartus 的 cp1252 不同）、`probe.tcl` 用**原生 Vivado Synthesis 默认设置**。**详见 11.8，本节不重复。**
+- 【事实】**报告清单**（引用前请自己打开核对，全部在仓库外）：`out\m4.util.rpt`、`out\m4.util_hier.rpt`、`out\m4.synth.log`、`out\m4.errors.txt`、`out\m4.warntypes.txt`、`out\m4.memlines.txt`、`out\m4.census.txt`、`out\m4.byinst.txt`、`out\m4.meth.rpt`、`out\m4.dcp`；`fold.*` 同名一组（外加 `fold.synth.log` 里那条 `Synth 8-4446`）；`m0.*` 同名一组；`out\summary.txt`（291 行）。
 
 
