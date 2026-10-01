@@ -16,6 +16,7 @@ param(
         'video800-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
         'platform-core', 'platform-tb', 'qsf-if-core',
+        'zynq-clk-tb',
         'peripheral-core', 'peripheral-i2c', 'sd-spi-cmd-core', 'sd-spi-cmd-tb',
         'touch-input-tb',
         'cdc-fifo-core', 'cdc-fifo-tb',
@@ -117,6 +118,8 @@ $systemV4Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v4.v'
 $systemV5Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v5.v'
 $systemV6Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v6.v'
 
+$zynqClkRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_zynq_clk.v'
+
 $platformTopRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_top.v'
 $platformPllRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_pll_stub.v'
 $platformQsfIfRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_qsf_if.v'
@@ -163,6 +166,7 @@ $cdcFifoSources = @($cdcFifoRtl)
 $i2sShifterSources = @($i2sShifterRtl)
 $audioI2sSources = @($cdcFifoRtl, $i2sShifterRtl, $audioI2sRtl)
 $touchInputSources = @($touchInputRtl)
+$zynqClkSources = @($zynqClkRtl)
 
 $allTargets = @(
     [pscustomobject]@{
@@ -658,6 +662,15 @@ $allTargets = @(
         Top         = 'tb_nes_touch_input'
         Sources     = $touchInputSources + (Join-Path $repoRoot 'tb\peripheral\tb_nes_touch_input.v')
         Standard    = '2001'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'zynq-clk-tb'
+        Group       = 'platform'
+        Label       = 'Zynq-7020 MMCM clock generator tb'
+        Top         = 'tb_nes_zynq_clk'
+        Sources     = $zynqClkSources + (Join-Path $repoRoot 'tb\platform\tb_nes_zynq_clk.v')
+        Standard    = '2012'
         Run         = $true
     }
 )
