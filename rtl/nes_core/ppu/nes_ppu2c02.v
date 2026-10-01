@@ -363,6 +363,48 @@
 //   g_chr_internal: unchanged behaviour. It drives chr_waddr to 14'h0000,
 //   leaves chr_we/chr_wdata at 0, answers $2007 reads from its own chr_ram, and
 //   consumes nothing, so chr_rd_arm is left unconnected in that branch.
+//
+//   pixel_pal is the full palette byte for the pixel currently on the pin, and is
+//     the intended key for the colour LUT that lives in the platform top.  pixel_index
+//     stays a 4-bit output and is now exactly pixel_pal[3:0] on every pixel, by
+//     construction, so the two ports can never describe different colours.
+//
+//     The byte layout is the 2C02 palette RAM layout.  This PPU stores the byte the
+//     CPU wrote to $3F00-family verbatim (palette_ram[palette_index_map(v_addr[4:0])]
+//     <= reg_din, no field is ever split out), so the layout is whatever the ROM
+//     wrote and the PPU places no structure on it:
+//       bits [5:4] colour/level, bits [3:0] luminance, bits [7:6] NOT colour.
+//     The colour axis is [5:4], not [7:6].  Both in-repo references agree: cNES
+//     .slim/clonedeps/repos/caseif__cNES/src/ppu.c:94-111 tabulates exactly 64 RGB
+//     entries in 4 rows of 16 and indexes them with `palette_index % 64` at line 1125,
+//     so the key is the low 6 bits; and ObaraEmmanuel__NES/src/ppu.c:164 forms the
+//     readable byte as `palette[..] & 0x3f | (latch & 0xc0)`, naming bits 7:6 as open
+//     bus that palette RAM does not store at all.  Exporting only mixed_pixel_value[3:0]
+//     therefore dropped the colour axis (bits 5:4), halving the reachable colours from
+//     64 to 16, which is what made the previous 4-bit top-level table render the NES
+//     in only one quarter of its palette.
+//
+//     Because bits 7:6 are open bus on real hardware but this PPU stores the whole
+//     byte, a top-level LUT must treat only bits [5:0] as meaningful: either index a
+//     64-entry table with pixel_pal[5:0], or replicate the 64 canonical entries across
+//     all four values of bits 7:6 in the 256-entry image.
+//
+//     greyscale (PPUMASK[0]) masks the byte with 8'h30, which clears the luminance
+//     nibble and leaves the colour/level bits alone.  Reachable values under greyscale
+//     are therefore exactly four: 8'h00, 8'h10, 8'h20, 8'h30 -- the four grey levels,
+//     which is what the real chip does.  Same conclusion from both references:
+//     cNES ppu.c:469-471 applies `index &= 0x30` on monochrome, and
+//     ObaraEmmanuel__NES/src/ppu.c:165-167 applies `val & 0xf0`, which over a palette
+//     RAM byte contributing 6 bits is again `pal & 0x30`.  The previous
+//     `pixel_index & 4'h3` was wrong twice over: it kept only luminance bits [3:2], so
+//     it kept 4 of the wrong 16 luminance values and discarded the colour axis
+//     entirely.  Masking with 8'h3F instead would clear bits 7:6, which carry no
+//     colour, and would make greyscale a no-op on all 64 reachable bytes.
+//
+//     KNOWN DEVIATION, not implemented here: colour emphasis, PPUMASK[7].  mask_reg[7]
+//     is never read anywhere in this PPU, so emphasis is a genuine no-op.  That is
+//     correct to leave alone here, because emphasis scales the output of the LUT in
+//     the platform top and so is not a property of this byte at all.
 
 `timescale 1ns/1ps
 
@@ -382,6 +424,7 @@ module nes_ppu2c02 #(
     output reg [7:0] pixel_x,
     output reg [7:0] pixel_y,
     output reg [3:0] pixel_index,
+    output reg [7:0] pixel_pal,
     output reg frame_done,
     output reg vblank,
     output reg nmi_o,
@@ -906,16 +949,15 @@ always @* begin
     pixel_valid = !reset && (scanline < 9'd240) && (dot < 9'd256);
     pixel_x = 8'h00;
     pixel_y = 8'h00;
-    pixel_index = 4'h0;
+    pixel_pal = 8'h00;
     if (pixel_valid) begin
         pixel_x = dot[7:0];
         pixel_y = scanline[7:0];
-        pixel_index = mixed_pixel_value[3:0];
+        pixel_pal = mixed_pixel_value;
     end
     if (mask_reg[0])
-        pixel_index = pixel_index & 4'h3;
-    if (reset)
-        pixel_index = 4'h0;
+        pixel_pal = pixel_pal & 8'h30;
+    pixel_index = pixel_pal[3:0];
 end
 
 always @* begin

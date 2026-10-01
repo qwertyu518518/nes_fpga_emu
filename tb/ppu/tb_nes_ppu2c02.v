@@ -14,6 +14,7 @@ wire pixel_valid;
 wire [7:0] pixel_x;
 wire [7:0] pixel_y;
 wire [3:0] pixel_index;
+wire [7:0] pixel_pal;
 wire frame_done;
 wire vblank;
 wire nmi_o;
@@ -49,6 +50,7 @@ nes_ppu2c02 #(
     .pixel_x(pixel_x),
     .pixel_y(pixel_y),
     .pixel_index(pixel_index),
+    .pixel_pal(pixel_pal),
     .frame_done(frame_done),
     .vblank(vblank),
     .nmi_o(nmi_o),
@@ -205,6 +207,9 @@ task check_pixel;
             $fatal(1, "pixel coordinates got (%02h,%02h) expected (%02h,%02h)", pixel_x, pixel_y, x, y);
         if (pixel_index !== expected_index)
             $fatal(1, "pixel (%0d,%0d) got index %0d expected %0d", x, y, pixel_index, expected_index);
+        if (pixel_index !== pixel_pal[3:0])
+            $fatal(1, "pixel (%0d,%0d) index %0d disagrees with pixel_pal[3:0]=%0d (pixel_pal=%02h)",
+                   x, y, pixel_index, pixel_pal[3:0], pixel_pal);
     end
 endtask
 
@@ -903,10 +908,10 @@ task test_sprite_mask_gating;
         $display("SPRITE integration PPUMASK=0x00 output stays palette 0 PASS");
         apply_reset;
         write_register(3'd1, 8'h1F);
-        check_pixel(8'd4, 8'd32, 4'h2);
-        check_pixel(8'd8, 8'd32, 4'h2);
-        check_pixel(8'd56, 8'd32, 4'h1);
-        $display("SPRITE integration PPUMASK grayscale ands mixed pixel to 2 bits PASS");
+        check_pixel_pal(8'd4, 8'd32, 8'h10);
+        check_pixel_pal(8'd8, 8'd32, 8'h10);
+        check_pixel_pal(8'd56, 8'd32, 8'h00);
+        $display("SPRITE integration PPUMASK greyscale masks the byte with 8'h30: sprite palette entry 8'h16 renders as 8'h10 at x=4/8 and 8'h0D renders as 8'h00 at x=56, pixel_index 0 everywhere PASS");
     end
 endtask
 
@@ -1041,6 +1046,126 @@ task test_sprite_overflow_status;
     end
 endtask
 
+// Drives the four quadrant palette entries that load_quadrant_scene's solid tile
+// actually reads.  Measured, not assumed: with palette_ram[i] loaded with i, the
+// pixel_pal at (0,0), (16,0), (0,16) and (16,16) is 5, 9, 13 and 1.  That is
+// {attribute, 2'b01}: attribute byte $39 at $3C0 gives TL=1, TR=2, BL=3, BR=0, and
+// load_solid_scene writes chr_ram[0..7]=8'hFF against chr_ram[8..15]=8'h00, so the
+// solid tile's pattern index is 2'b01, not 2'b11.  The four entries are chosen so
+// that the expected colour axis [5:4] takes all four values while the expected
+// luminance nibble stays 4'hF.
+task set_quadrant_palette;
+    input [7:0] entry1;
+    input [7:0] entry5;
+    input [7:0] entry9;
+    input [7:0] entry13;
+    begin
+        dut.palette_ram[5'd1] = entry1;
+        dut.palette_ram[5'd5] = entry5;
+        dut.palette_ram[5'd9] = entry9;
+        dut.palette_ram[5'd13] = entry13;
+    end
+endtask
+
+// Waits on check_pixel, which also re-checks the expected luminance nibble and the
+// pixel_index === pixel_pal[3:0] invariant, then compares the whole byte through a
+// zero-extended 16-bit copy.  That copy is what proves the width: a 4-bit pixel_pal
+// could never compare equal to 8'h1F, 8'h2F, 8'h3F or 8'hCF.
+task check_pixel_pal;
+    input [7:0] x;
+    input [7:0] y;
+    input [7:0] expected_pal;
+    reg [15:0] wide_pal;
+    begin
+        check_pixel(x, y, expected_pal[3:0]);
+        wide_pal = {8'h00, pixel_pal};
+        if (wide_pal !== {8'h00, expected_pal})
+            $fatal(1, "pixel_pal at (%0d,%0d) is %02h expected %02h", x, y, pixel_pal, expected_pal);
+    end
+endtask
+
+task test_pixel_pal_byte;
+    begin
+        if ($bits(pixel_pal) != 8)
+            $fatal(1, "pixel_pal is %0d bits wide, expected 8", $bits(pixel_pal));
+        load_quadrant_scene;
+        set_quadrant_palette(8'h0F, 8'h1F, 8'h2F, 8'h3F);
+        apply_reset;
+
+        // 1. Colour only.  All four pixels are the same luminance nibble 4'hF, so
+        //    pixel_index is 4'hF at every one of them and cannot tell them apart,
+        //    while pixel_pal must carry the four colour/level values.  Any build that
+        //    still exported mixed_pixel_value[3:0] here reads 8'h0F four times and
+        //    dies on the second check below.
+        write_register(3'd1, 8'h1A);
+        check_pixel_pal(8'd0,  8'd0,  8'h1F);
+        check_pixel_pal(8'd16, 8'd0,  8'h2F);
+        check_pixel_pal(8'd0,  8'd16, 8'h3F);
+        check_pixel_pal(8'd16, 8'd16, 8'h0F);
+        $display("PAL-BYTES colour axis [5:4] exported: TL/TR/BL/BR=1F/2F/3F/0F with luminance nibble F at all four PASS");
+
+        // 2. Greyscale, PPUMASK[0].  The same four bytes mask to four DIFFERENT grey
+        //    levels, 10/20/30/00, which is reachable only with a byte mask of 8'h30.
+        //    It fails for every alternative: 8'h3F (clear [7:6]) leaves 1F/2F/3F/0F
+        //    untouched, 8'hC0 (clear [5:4]) collapses all four to 8'h00, 8'h0F keeps
+        //    luminance and loses colour, and ignoring PPUMASK[0] leaves 1F/2F/3F/0F.
+        //    It also fails for the old `pixel_index & 4'h3`, which would leave
+        //    pixel_index at 4'h3 instead of the 4'h0 asserted inside check_pixel.
+        write_register(3'd1, 8'h1B);
+        check_pixel_pal(8'd0,  8'd0,  8'h10);
+        check_pixel_pal(8'd16, 8'd0,  8'h20);
+        check_pixel_pal(8'd0,  8'd16, 8'h30);
+        check_pixel_pal(8'd16, 8'd16, 8'h00);
+        $display("PAL-BYTES greyscale PPUMASK[0]=1 masks the byte with 8'h30: TL/TR/BL/BR=10/20/30/00, pixel_index 0, four reachable grey levels PASS");
+
+        // 3. Bits 7:6 are open bus on a real 2C02 but this PPU stores the whole byte,
+        //    so they must survive export untouched and must be cleared by greyscale,
+        //    which keeps the top's LUT key canonical.  8'hEF has [5:4] = 2'b10, so
+        //    the two expectations 8'hEF and 8'h20 differ only in bits 7:6.
+        set_quadrant_palette(8'hEF, 8'hDF, 8'hCF, 8'hFF);
+        write_register(3'd1, 8'h1A);
+        check_pixel_pal(8'd16, 8'd16, 8'hEF);
+        write_register(3'd1, 8'h1B);
+        check_pixel_pal(8'd16, 8'd16, 8'h20);
+        $display("PAL-BYTES bits 7:6 exported verbatim (EF) and cleared by greyscale (EF -> 20) PASS");
+
+        // 4. KNOWN DEVIATION, measured and NOT fixed here: nes_ppu2c02.v's mixed
+        //    pixel mux drives 8'h00 for the leftmost 8 columns of every visible line
+        //    when the background is not shown there, instead of the backdrop entry
+        //    palette_ram[0].  A backdrop of 8'h2A is loaded here and is still not
+        //    rendered at x=0..7 with PPUMASK[1]=0, while x=8 does render the
+        //    background's own entry 8'h1F.  The assertions pin the observed behaviour
+        //    so a later fix to that mux cannot land silently; changing the mux is a
+        //    separate decision and is deliberately not taken in this change.
+        dut.palette_ram[5'd0] = 8'h2A;
+        set_quadrant_palette(8'h0F, 8'h1F, 8'h2F, 8'h3F);
+        write_register(3'd1, 8'h18);
+        check_pixel_pal(8'd0, 8'd0, 8'h00);
+        check_pixel_pal(8'd7, 8'd0, 8'h00);
+        check_pixel_pal(8'd8, 8'd0, 8'h1F);
+        $display("PAL-BYTES KNOWN DEVIATION left-8 columns render luminance 0, not the backdrop: palette_ram[0]=%02h is not seen at x=0/7, x=8 reads the background entry 8'h1F PASS",
+                 dut.palette_ram[5'd0]);
+
+        // 5. reset and vblank must force the key to zero so a LUT is never indexed
+        //    with a stale colour.  These two cannot go through check_pixel, which by
+        //    design requires pixel_valid to be high.
+        apply_reset;
+        write_register(3'd1, 8'h1A);
+        check_pixel_pal(8'd0, 8'd0, 8'h1F);
+        reset = 1'b1;
+        #1;
+        if ((pixel_valid !== 1'b0) || (pixel_pal !== 8'h00) || (pixel_index !== 4'h0))
+            $fatal(1, "under reset got valid=%b pal=%02h index=%0d, expected 0/8'h00/0",
+                   pixel_valid, pixel_pal, pixel_index);
+        reset = 1'b0;
+        write_register(3'd1, 8'h1A);
+        wait_for_time(9'd241, 9'd0);
+        if ((pixel_valid !== 1'b0) || (pixel_pal !== 8'h00))
+            $fatal(1, "at 241:0 got valid=%b pal=%02h, expected 0/8'h00", pixel_valid, pixel_pal);
+        $display("PAL-BYTES byte is 8'h00 under reset and in vblank, and is live again after reset PASS");
+    end
+endtask
+
 initial begin
     clk = 1'b0;
     reset = 1'b1;
@@ -1077,6 +1202,7 @@ initial begin
     test_sprite_ctrl_passthrough;
     test_sprite0_status;
     test_sprite_overflow_status;
+    test_pixel_pal_byte;
     $display("PASS nes_ppu2c02 v0");
     $finish;
 end

@@ -65,6 +65,7 @@ module nes_system_v6 #(
     output wire [7:0] pixel_x,
     output wire [7:0] pixel_y,
     output wire [3:0] pixel_index,
+    output wire [7:0] pixel_pal,
     output wire frame_done,
     output wire vblank,
     output wire nmi_o,
@@ -161,7 +162,9 @@ module nes_system_v6 #(
     output wire chr_we,
     output wire [7:0] chr_wdata,
     output wire chr_req,
-    output wire [CHR_ADDR_BITS-1:0] chr_final_addr
+    output wire [CHR_ADDR_BITS-1:0] chr_final_addr,
+    output wire ce_ppu,
+    output wire ce_cpu
 );
 
 localparam [4:0] APU_REG_OAMDMA = 5'h14;
@@ -169,10 +172,15 @@ localparam [4:0] APU_REG_CTRL1 = 5'h16;
 localparam [4:0] APU_REG_CTRL2 = 5'h17;
 
 reg [3:0] div_phase;
-wire ce_ppu;
-wire ce_cpu;
 wire ce_sample;
 
+// ce_ppu and ce_cpu are output ports, not private wires: the top must gate the CHR
+// ROM latch and the PPU register file on this module's own enable, never on a
+// regenerated div_phase.  nes_cart_rom's read path is phase sensitive, so a 1-to-3
+// beat offset between a re-derived enable and this one returns wrong tile bytes
+// without failing anything.  Both keep the existing !reset gate, which is also what
+// nes_cart_rom does with its own reset, so a top that ANDs them together still sees
+// no ce edge during reset.
 assign ce_ppu = !reset && (div_phase[1:0] == 2'b00);
 assign ce_cpu = !reset && (div_phase == 4'd0);
 assign ce_sample = 1'b1;
@@ -552,6 +560,7 @@ nes_ppu2c02 #(
     .pixel_x(pixel_x),
     .pixel_y(pixel_y),
     .pixel_index(pixel_index),
+    .pixel_pal(pixel_pal),
     .frame_done(frame_done),
     .vblank(vblank),
     .nmi_o(ppu_nmi),

@@ -79,6 +79,7 @@ reg reset;
 reg done;
 
 wire        ce_ppu;
+wire        ce_cpu;
 wire [7:0]  chr_rdata;
 
 wire [15:0] ux_bus_addr;
@@ -121,11 +122,18 @@ integer conflict_flag_err;
 integer bank_err;
 integer read_err;
 integer pulse_clk_count;
+integer ce_ppu_beat_err;
+integer ce_ppu_high_clks;
+integer ce_cpu_high_clks;
+integer ce_reset_high_clks;
 
 assign chr_rdata = chr_rdata_q;
 
-// ce_ppu is the core's own 3-of-4 enable: high at div_phase 0, 4 and 8.
-assign ce_ppu = !reset && (ux.div_phase[1:0] == 2'b00);
+// ce_ppu and ce_cpu are now output ports of the core, so the CHR responder below is
+// gated by the core's own enable and this testbench can no longer drift one to three
+// beats away from it by re-deriving div_phase locally.  The phase itself is still
+// checked, independently, against div_phase further down, so consuming the port here
+// does not make that check tautological.
 
 // UxROM decode, rebuilt here from nes_mapper_uxrom.v:42-46 so the expectation
 // does not come out of the rtl it is checking.
@@ -157,6 +165,7 @@ nes_system_v6 #(
     .pixel_x(),
     .pixel_y(),
     .pixel_index(),
+    .pixel_pal(),
     .frame_done(),
     .vblank(),
     .nmi_o(),
@@ -253,8 +262,31 @@ nes_system_v6 #(
     .chr_we(),
     .chr_wdata(),
     .chr_req(ux_chr_req),
-    .chr_final_addr(ux_chr_final_addr)
+    .chr_final_addr(ux_chr_final_addr),
+    .ce_ppu(ce_ppu),
+    .ce_cpu(ce_cpu)
 );
+
+// The two exported enables, checked against div_phase on every clk so that the port
+// a top-level design is now expected to use is proven to be the core's real signal
+// and not a lookalike: ce_ppu high at div_phase 0, 4 and 8, ce_cpu high at div_phase
+// 0 only, and both low while reset is asserted.
+always @(posedge clk) begin
+    if (reset) begin
+        if (ce_ppu === 1'b1 || ce_cpu === 1'b1)
+            ce_ppu_beat_err = ce_ppu_beat_err + 1;
+        ce_reset_high_clks = ce_reset_high_clks + 1;
+    end else begin
+        if (ce_ppu !== (ux.div_phase[1:0] == 2'b00))
+            ce_ppu_beat_err = ce_ppu_beat_err + 1;
+        if (ce_cpu !== (ux.div_phase == 4'd0))
+            ce_ppu_beat_err = ce_ppu_beat_err + 1;
+        if (ce_ppu === 1'b1)
+            ce_ppu_high_clks = ce_ppu_high_clks + 1;
+        if (ce_cpu === 1'b1)
+            ce_cpu_high_clks = ce_cpu_high_clks + 1;
+    end
+end
 
 // The external CHR responder.  Registered on the ce_ppu edge, which is the
 // contract nes_cart_rom.v documents: the address is on the bus at div_phase 8,
@@ -285,6 +317,10 @@ initial begin
     bank_err = 0;
     read_err = 0;
     pulse_clk_count = 0;
+    ce_ppu_beat_err = 0;
+    ce_ppu_high_clks = 0;
+    ce_cpu_high_clks = 0;
+    ce_reset_high_clks = 0;
     model_bank = 4'd0;
     exp_read_off = 0;
 end
@@ -340,7 +376,7 @@ always @(posedge clk) begin
 
             model_bank <= model_latched[3:0];
         end else begin
-            pulse_clk_count = 0;
+    pulse_clk_count = 0;
         end
 
         // (4) the whole offset, on every clk, not only on writes.  The effective
@@ -549,6 +585,19 @@ initial begin
     if (ram_shadow[DONE_CELL[10:0]] !== 8'h5A)
         $fatal(1, "ram[$022F] = %02h, the program never reached its done store",
                ram_shadow[DONE_CELL[10:0]]);
+
+    if (ce_ppu_beat_err !== 0)
+        $fatal(1, "%0d clk on which the exported ce_ppu/ce_cpu disagreed with div_phase or were high under reset",
+               ce_ppu_beat_err);
+    if ((ce_ppu_high_clks < 300) || (ce_cpu_high_clks < 100))
+        $fatal(1, "exported enables barely asserted: ce_ppu high on %0d clk, ce_cpu high on %0d clk",
+               ce_ppu_high_clks, ce_cpu_high_clks);
+    if (ce_ppu_high_clks > (3 * ce_cpu_high_clks))
+        $fatal(1, "ce_ppu high on %0d clk but ce_cpu only on %0d, ce_ppu cannot exceed 3 per ce_cpu",
+               ce_ppu_high_clks, ce_cpu_high_clks);
+    $display("CE-PORTS the core's own exported enables drove the CHR responder above, and were checked against div_phase on every one of the %0d clk of the run: ce_ppu high at div_phase 0/4/8 on %0d clk, ce_cpu high at div_phase 0 only on %0d clk, both low on all %0d clk under reset (err=%0d).  The 3-to-1 duty is %0d:%0d rather than exactly 3:1 because the clk on which reset is released is sampled once with the enables still low.  This testbench used to rebuild ce_ppu itself from ux.div_phase, which is the 1-to-3 beat skew the top must not reintroduce PASS",
+             ce_reset_high_clks, ce_ppu_high_clks, ce_cpu_high_clks,
+             ce_reset_high_clks, ce_ppu_beat_err, ce_ppu_high_clks, ce_cpu_high_clks);
 
     $display("PULSE-WINDOW every one of the %0d mapper write pulses was exactly 1 clk wide, and on that clk prg_readback matched the tb model's byte for the PRE-write bank (err=%0d), mapper_prg_bank_offset matched the model's offset (err=%0d), and mapper_bus_conflict matched the tb's own (model byte != write data) (err=%0d).  That clk is the one nes_mapper_uxrom evaluates latched_data and bus_conflict on, so it is exactly where a one-clk-stale prg_readback would have appeared.  %0d of the %0d writes conflicted and %0d did not, so both levels of the flag were exercised PASS",
              pulse_count, pulse_byte_err, pulse_off_err, conflict_flag_err,

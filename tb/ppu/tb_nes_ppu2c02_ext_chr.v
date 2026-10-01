@@ -28,6 +28,8 @@ module tb_nes_ppu2c02_ext_chr;
     wire [7:0]  pxy_b;
     wire [3:0]  pidx_a;
     wire [3:0]  pidx_b;
+    wire [7:0]  ppal_a;
+    wire [7:0]  ppal_b;
     wire        fd_a;
     wire        fd_b;
     wire        vb_a;
@@ -212,6 +214,7 @@ module tb_nes_ppu2c02_ext_chr;
         .pixel_x(pxx_a),
         .pixel_y(pxy_a),
         .pixel_index(pidx_a),
+        .pixel_pal(ppal_a),
         .frame_done(fd_a),
         .vblank(vb_a),
         .nmi_o(nmi_a),
@@ -247,6 +250,7 @@ module tb_nes_ppu2c02_ext_chr;
         .pixel_x(pxx_b),
         .pixel_y(pxy_b),
         .pixel_index(pidx_b),
+        .pixel_pal(ppal_b),
         .frame_done(fd_b),
         .vblank(vb_b),
         .nmi_o(nmi_b),
@@ -711,6 +715,11 @@ module tb_nes_ppu2c02_ext_chr;
                     $fatal(1, "A1 pixel coords differ at %0d:%0d", sl_a, dot_a);
                 if (pv_a !== pv_b)
                     $fatal(1, "A1 pixel_valid differs at %0d:%0d", sl_a, dot_a);
+                if (ppal_a !== ppal_b)
+                    $fatal(1, "A1 pixel_pal differs at %0d:%0d: A=%02h B=%02h", sl_a, dot_a, ppal_a, ppal_b);
+                if (pidx_a !== ppal_a[3:0])
+                    $fatal(1, "A1 pixel_index %0d is not ppal_a[3:0]=%0d at %0d:%0d",
+                           pidx_a, ppal_a[3:0], sl_a, dot_a);
                 if ((run_bg == 1'b0) && (dut_a.g_chr_internal.u_sprite.sprite_pixel[1:0] != 2'b00)) begin
                     sp_px_true = sp_px_true + 1;
                     case_sp_px = case_sp_px + 1;

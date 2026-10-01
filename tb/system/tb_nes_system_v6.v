@@ -250,6 +250,7 @@ wire        v6_pixel_valid;
 wire [7:0]  v6_pixel_x;
 wire [7:0]  v6_pixel_y;
 wire [3:0]  v6_pixel_index;
+wire [7:0]  v6_pixel_pal;
 wire        v6_frame_done;
 wire        v6_vblank;
 wire        v6_nmi_o;
@@ -418,6 +419,7 @@ wire        m_pixel_valid;
 wire [7:0]  m_pixel_x;
 wire [7:0]  m_pixel_y;
 wire [3:0]  m_pixel_index;
+wire [7:0]  m_pixel_pal;
 wire        m_frame_done;
 wire        m_vblank;
 wire        m_nmi_o;
@@ -464,6 +466,7 @@ wire        r_pixel_valid;
 wire [7:0]  r_pixel_x;
 wire [7:0]  r_pixel_y;
 wire [3:0]  r_pixel_index;
+wire [7:0]  r_pixel_pal;
 wire        r_frame_done;
 wire [8:0]  r_ppu_dot;
 wire [8:0]  r_ppu_scanline;
@@ -479,6 +482,7 @@ wire        rb_pixel_valid;
 wire [7:0]  rb_pixel_x;
 wire [7:0]  rb_pixel_y;
 wire [3:0]  rb_pixel_index;
+wire [7:0]  rb_pixel_pal;
 wire        rb_frame_done;
 wire [8:0]  rb_ppu_dot;
 wire [8:0]  rb_ppu_scanline;
@@ -803,6 +807,12 @@ integer ab_visible_div;
 integer ab_all_ce_count;
 integer ab_all_ce_div;
 
+integer pal_port_cmp;
+integer pal_port_idx_err;
+integer pal_colour_nz;
+integer pal_byte_nz;
+integer ce_port_cmp;
+integer ce_port_err;
 integer pix_index_mismatch;
 integer pix_checked;
 integer pix_cnt1;
@@ -2318,6 +2328,7 @@ nes_system_v6 #(
     .pixel_x(v6_pixel_x),
     .pixel_y(v6_pixel_y),
     .pixel_index(v6_pixel_index),
+    .pixel_pal(v6_pixel_pal),
     .frame_done(v6_frame_done),
     .vblank(v6_vblank),
     .nmi_o(v6_nmi_o),
@@ -2541,6 +2552,7 @@ nes_system_v6 #(
     .pixel_x(m_pixel_x),
     .pixel_y(m_pixel_y),
     .pixel_index(m_pixel_index),
+    .pixel_pal(m_pixel_pal),
     .frame_done(m_frame_done),
     .vblank(m_vblank),
     .nmi_o(m_nmi_o),
@@ -2661,6 +2673,7 @@ nes_system_v6 #(
     .pixel_x(r_pixel_x),
     .pixel_y(r_pixel_y),
     .pixel_index(r_pixel_index),
+    .pixel_pal(r_pixel_pal),
     .frame_done(r_frame_done),
     .vblank(),
     .nmi_o(),
@@ -2781,6 +2794,7 @@ nes_system_v6 #(
     .pixel_x(rb_pixel_x),
     .pixel_y(rb_pixel_y),
     .pixel_index(rb_pixel_index),
+    .pixel_pal(rb_pixel_pal),
     .frame_done(rb_frame_done),
     .vblank(),
     .nmi_o(),
@@ -3839,6 +3853,38 @@ always @(posedge clk) begin
         end
         prev_dot = v6_ppu_dot;
         prev_frame_done = v6_frame_done;
+    end
+end
+
+// The two ports this change adds to the core boundary, checked at the core and not
+// only inside a ppu testbench.
+//
+//   pixel_pal must be pixel_index[3:0] extended by the colour axis, so the core is
+//     re-proving that the 8-bit byte it now exports is the very byte the 4-bit port
+//     was sliced from, rather than a second and independent colour path.  The
+//     chr_rom and chr_ram_b twins are deliberately NOT compared here: they run the
+//     same program over complementary CHR images and are REQUIRED to render
+//     different pictures (W1 SELF-VALIDATING-PAIR), so a byte comparison between
+//     them would be an assertion that they agree.
+//   ce_ppu and ce_cpu are compared against the core's own div_phase on every clk, so
+//     a top-level design can consume them knowing they are the real enables.  This is
+//     checked here too because tb_nes_system_v6_uxrom_prg only exercises one instance.
+always @(posedge clk) begin
+    if (!reset) begin
+        ce_port_cmp = ce_port_cmp + 1;
+        if (ab_v6.ce_ppu !== (ab_v6.div_phase[1:0] == 2'b00))
+            ce_port_err = ce_port_err + 1;
+        if (ab_v6.ce_cpu !== (ab_v6.div_phase == 4'd0))
+            ce_port_err = ce_port_err + 1;
+    end
+    if (ab_v6.ce_ppu && v6_pixel_valid) begin
+        pal_port_cmp = pal_port_cmp + 1;
+        if (v6_pixel_index !== v6_pixel_pal[3:0])
+            pal_port_idx_err = pal_port_idx_err + 1;
+        if (v6_pixel_pal[5:4] != 2'b00)
+            pal_colour_nz = pal_colour_nz + 1;
+        if (v6_pixel_pal != 8'h00)
+            pal_byte_nz = pal_byte_nz + 1;
     end
 end
 
@@ -6322,6 +6368,12 @@ initial begin
     ab_visible_div = 0;
     ab_all_ce_count = 0;
     ab_all_ce_div = 0;
+    pal_port_cmp = 0;
+    pal_port_idx_err = 0;
+    pal_colour_nz = 0;
+    pal_byte_nz = 0;
+    ce_port_cmp = 0;
+    ce_port_err = 0;
     pix_index_mismatch = 0;
     pix_checked = 0;
     pix_cnt1 = 0;
@@ -6585,6 +6637,22 @@ initial begin
     check_w3_readback;
     check_w2_mmc3_chr_write;
     check_p1_5;
+
+    if (ce_port_err !== 0)
+        $fatal(1, "%0d of %0d clk on which the exported ce_ppu/ce_cpu disagreed with the core's own div_phase",
+               ce_port_err, ce_port_cmp);
+    if (pal_port_idx_err !== 0)
+        $fatal(1, "the exported pixel_pal is not the byte pixel_index was sliced from on %0d of %0d visible pixels",
+               pal_port_idx_err, pal_port_cmp);
+    if (pal_port_cmp < 100000)
+        $fatal(1, "only %0d visible pixels were compared through the exported byte", pal_port_cmp);
+    if (pal_colour_nz === 0)
+        $fatal(1, "pixel_pal[5:4] was zero on every one of %0d visible pixels, so the colour axis is untested",
+               pal_port_cmp);
+    $display("PAL-PORT the core exports pixel_pal as the full palette byte: on all %0d visible pixels pixel_index === pixel_pal[3:0] (err=%0d).  Non-vacuity: the byte was non-zero on %0d pixels and its colour axis [5:4] was non-zero on %0d of them, so a build that still exported only the luminance nibble would have read 0 there.  The chr_rom and chr_ram_b twins are deliberately not compared on the byte here; they are required to render different pictures PASS",
+             pal_port_cmp, pal_port_idx_err, pal_byte_nz, pal_colour_nz);
+    $display("CE-PORT the core exports ce_ppu and ce_cpu and both matched the core's own div_phase on all %0d clk outside reset (err=%0d).  A top that re-derives div_phase instead can be one to three beats off this, which nes_cart_rom would silently answer with the wrong CHR byte PASS",
+             ce_port_cmp, ce_port_err);
 
     $display("PASS tb_nes_system_v6");
     tb_live = 1'b0;

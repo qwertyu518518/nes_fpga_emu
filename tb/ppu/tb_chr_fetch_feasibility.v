@@ -18,6 +18,7 @@ wire pixel_valid;
 wire [7:0] pixel_x;
 wire [7:0] pixel_y;
 wire [3:0] pixel_index;
+wire [7:0] pixel_pal;
 wire frame_done;
 wire vblank;
 wire nmi_o;
@@ -51,6 +52,7 @@ nes_ppu2c02 #(
     .pixel_x(pixel_x),
     .pixel_y(pixel_y),
     .pixel_index(pixel_index),
+    .pixel_pal(pixel_pal),
     .frame_done(frame_done),
     .vblank(vblank),
     .nmi_o(nmi_o),
