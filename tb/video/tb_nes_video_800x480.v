@@ -106,9 +106,15 @@ module tb_nes_video_800x480;
     integer probe_hit [0:14];
     integer probe_first [0:14];
 
+    // Dual-clock DUT under test: both clocks are tied to this bench's single
+    // clock and both resets to this bench's single reset, so every assertion
+    // below runs in the single-clock regime it was written for. ce gates only
+    // the raster, as before.
     nes_video_800x480 dut (
-        .clk(clk),
-        .reset(reset),
+        .wr_clk(clk),
+        .wr_reset(reset),
+        .rd_clk(clk),
+        .rd_reset(reset),
         .ce(ce),
         .in_valid(in_valid),
         .in_x(in_x),

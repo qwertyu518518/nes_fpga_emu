@@ -1,15 +1,29 @@
 `timescale 1ns/1ps
 
 // 800x480 active image for the Zynq 4.3" RGB LCD, vendor LCD ID 16'h4384.
-// Parameter defaults are the vendor lcd_driver values for that panel, copied
-// verbatim from ZYNQ_7020_FPGA/12_lcd_rgb_char/lcd_rgb_char.srcs/sources_1/new/
-// lcd_driver.v: H_SYNC=128 H_BACK=88 H_DISP=800 H_FRONT=40 H_TOTAL=1056 (96-100),
+//
+// Dual clock. frame_mem is the clock-domain crossing: its write port is on
+// wr_clk (the NES core domain, 21.477272727 MHz) and its read port is on rd_clk
+// (the panel dot clock, 25 MHz). 25 MHz is not an integer multiple of
+// 21.477 MHz, so the panel cannot be clocked from the core with an enable; pixel
+// data must leave on real 25 MHz edges. A true simple-dual-port RAM is the
+// crossing, so there is no synchroniser, toggle or handshake anywhere in this
+// module. A read colliding with a same-cycle write to the same address returns
+// the previously stored value (BRAM read-first); the buffer is single-buffered,
+// so the image the panel shows is whatever the most recent write to that
+// address left behind.
+//
+// ce gates ONLY the raster. The write port has no enable beyond in_valid: the
+// core cannot be paused and this module adds no backpressure.
+//
+// Panel geometry, sync level and blanking level are parameters; the defaults are
+// the vendor lcd_driver values for that panel, copied verbatim from
+// ZYNQ_7020_FPGA/12_lcd_rgb_char/lcd_rgb_char.srcs/sources_1/new/lcd_driver.v:
+// H_SYNC=128 H_BACK=88 H_DISP=800 H_FRONT=40 H_TOTAL=1056 (96-100),
 // V_SYNC=2 V_BACK=33 V_DISP=480 V_FRONT=10 V_TOTAL=525 (102-106), DE window
 // [h_sync+h_back,+h_disp) x [v_sync+v_back,+v_disp) (136-138), lcd_hs/lcd_vs tied
-// 1'b1 in DE mode (127-128), blanked bus 24'd0 (150). Dot clock 25 MHz is the
-// vendor clk_div.v selection for 16'h4384 (line 60), so ce is 1 per 40 ns.
-// The bus stays RGB565; the RGB888 expansion for lcd_rgb[23:0] is a top-level
-// wiring decision and is not done here.
+// 1'b1 in DE mode (127-128), blanked bus 24'd0 (150). The bus stays RGB565; the
+// RGB888 expansion for lcd_rgb[23:0] is a top-level wiring decision.
 //
 // Scaling is exact: 800 = 256*3 + 32 and 32 = 256/8, so each input pixel emits
 // 3 output pixels and each 8th input pixel emits a 4th. 800 = 32 groups of 25
@@ -17,13 +31,18 @@
 // of every scanline and the active width is exactly 800 on every line of every
 // frame. Vertically 240 -> 480 is exactly 2:1.
 //
-// Frame buffer is written on the input side and read on the output side, the
-// same single-boundary CDC as nes_video_scaler. Read-latency contract: the data
-// for the dot being emitted is captured by the same clock edge that advances the
-// raster into that dot, because mem_read_addr is built from the same *_next
-// signals the raster counters are loaded from, so no output stage and no skew.
-// A read colliding with a same-cycle write to the same address returns the
-// previously stored value (BRAM read-first).
+// Read-latency contract on rd_clk: the data for the dot being emitted is
+// captured by the same clock edge that advances the raster into that dot,
+// because mem_read_addr is built from the same *_next signals the raster
+// counters are loaded from, so no output stage and no skew.
+//
+// in_line_ready and in_frame_ready stay in the wr_clk domain with the counters
+// that produce them. They are observation pulses only: the write is
+// unconditional on in_valid, so nothing in the pixel path depends on them, and
+// no consumer exists in the real integration because the core has no
+// backpressure. Putting them in rd_clk would mean synchronising a wr_clk counter
+// across the boundary for no functional reason, i.e. reintroducing exactly the
+// structure this dual-clock split removes.
 module nes_video_800x480 #(
     parameter integer H_TOTAL          = 1056,
     parameter integer V_TOTAL          = 525,
@@ -34,13 +53,17 @@ module nes_video_800x480 #(
     parameter integer SYNC_ACTIVE_HIGH = 1,
     parameter [15:0]  BLANK_RGB565     = 16'h0000
 ) (
-    input  wire        clk,
-    input  wire        reset,
-    input  wire        ce,
+    input  wire        wr_clk,
+    input  wire        wr_reset,
     input  wire        in_valid,
     input  wire [7:0]  in_x,
     input  wire [7:0]  in_y,
     input  wire [15:0] in_rgb565,
+    output reg         in_line_ready,
+    output reg         in_frame_ready,
+    input  wire        rd_clk,
+    input  wire        rd_reset,
+    input  wire        ce,
     output reg  [15:0] rgb565,
     output reg         de,
     output reg         hsync,
@@ -49,9 +72,7 @@ module nes_video_800x480 #(
     output reg  [10:0] vcount,
     output reg  [10:0] pixel_x,
     output reg  [10:0] pixel_y,
-    output reg         frame_pulse,
-    output reg         in_line_ready,
-    output reg         in_frame_ready
+    output reg         frame_pulse
 );
 
     localparam SRC_LAST  = 8'd255;
@@ -122,8 +143,8 @@ module nes_video_800x480 #(
     assign mem_read_addr  = {src_row, src_col_next};
     assign mem_write_addr = {in_y, in_x};
 
-    always @(posedge clk) begin
-        if (reset) begin
+    always @(posedge rd_clk) begin
+        if (rd_reset) begin
             hcount      <= 11'd0;
             vcount      <= 11'd0;
             de          <= 1'b0;
@@ -152,13 +173,13 @@ module nes_video_800x480 #(
         end
     end
 
-    always @(posedge clk) begin
-        if (reset) begin
+    always @(posedge wr_clk) begin
+        if (wr_reset) begin
             in_col_count   <= 8'd0;
             in_row_count   <= 9'd0;
             in_line_ready  <= 1'b0;
             in_frame_ready <= 1'b0;
-        end else if (ce) begin
+        end else begin
             in_line_ready  <= 1'b0;
             in_frame_ready <= 1'b0;
             if (in_valid) begin

@@ -13,7 +13,7 @@ param(
         'controller-tb',
         'cart-ines-tb', 'cart-rom-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
-        'video800-tb',
+        'video800-tb', 'video800-dc-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
         'platform-core', 'platform-tb', 'qsf-if-core',
         'zynq-clk-tb',
@@ -109,6 +109,7 @@ $videoScalerRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_video_scaler.v'
 $lineBufferVgaRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_line_buffer_vga.v'
 $vgaTimingRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_vga_timing.v'
 $video800Rtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_video_800x480.v'
+$video800DcRtl = Join-Path $repoRoot 'tb\video\tb_nes_video_800x480_dc.v'
 
 $systemV0Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v0.v'
 $systemV1Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v1.v'
@@ -147,6 +148,7 @@ $videoSources = @($videoScalerRtl)
 $lineBufferVgaSources = @($lineBufferVgaRtl)
 $vgaTimingSources = @($vgaTimingRtl)
 $video800Sources = @($video800Rtl)
+$video800DcSources = @($video800Rtl, $video800DcRtl)
 $systemV0Sources = @($systemV0Rtl) + $ppuSources + $cpuSources
 $systemV1Sources = @($systemV1Rtl) + $ppuSources + $apuSources + $cpuSources
 $systemV2Sources = @($systemV2Rtl) + $ppuSources + $apuSources + $busSources + $cpuSources
@@ -445,6 +447,15 @@ $allTargets = @(
         Label       = '800x480 LCD video output tb'
         Top         = 'tb_nes_video_800x480'
         Sources     = $video800Sources + (Join-Path $repoRoot 'tb\video\tb_nes_video_800x480.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'video800-dc-tb'
+        Group       = 'video'
+        Label       = '800x480 LCD dual-clock video output tb'
+        Top         = 'tb_nes_video_800x480_dc'
+        Sources     = $video800DcSources
         Standard    = '2012'
         Run         = $true
     },
