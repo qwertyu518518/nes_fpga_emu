@@ -16,7 +16,7 @@ param(
         'video800-tb', 'video800-dc-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
         'platform-core', 'platform-tb', 'qsf-if-core',
-        'zynq-clk-tb',
+        'zynq-clk-tb', 'zynq-top-tb',
         'peripheral-core', 'peripheral-i2c', 'sd-spi-cmd-core', 'sd-spi-cmd-tb',
         'touch-input-tb',
         'cdc-fifo-core', 'cdc-fifo-tb',
@@ -131,6 +131,9 @@ $cdcFifoRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_cdc_fifo.v'
 $i2sShifterRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_i2s_shifter.v'
 $audioI2sRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_audio_i2s.v'
 $touchInputRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_touch_input.v'
+$zynqTopRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_zynq_top.v'
+$zynqTopTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_zynq_top.v'
+$zynqClkTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_zynq_clk.v'
 
 $cpuSources = @($cpuRtl)
 $ppuSources = @($ppuSpriteRtl, $ppuRtl, $chrFetchUnitRtl, $spriteChrFetchRtl)
@@ -168,6 +171,11 @@ $cdcFifoSources = @($cdcFifoRtl)
 $i2sShifterSources = @($i2sShifterRtl)
 $audioI2sSources = @($cdcFifoRtl, $i2sShifterRtl, $audioI2sRtl)
 $touchInputSources = @($touchInputRtl)
+# The CHR fetch units are already in $systemV6Sources via $ppuSources; listing
+# them again here makes iverilog reject the whole target as a duplicate module.
+$zynqTopSources = @($zynqTopRtl, $zynqClkRtl, $touchInputRtl, $video800Rtl,
+                    $zynqClkTbRtl) + $systemV6Sources
+$zynqTopTbSources = $zynqTopSources + @($zynqTopTbRtl)
 $zynqClkSources = @($zynqClkRtl)
 
 $allTargets = @(
@@ -681,6 +689,15 @@ $allTargets = @(
         Label       = 'Zynq-7020 MMCM clock generator tb'
         Top         = 'tb_nes_zynq_clk'
         Sources     = $zynqClkSources + (Join-Path $repoRoot 'tb\platform\tb_nes_zynq_clk.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'zynq-top-tb'
+        Group       = 'platform'
+        Label       = 'Zynq-7020 platform top tb'
+        Top         = 'tb_nes_zynq_top'
+        Sources     = $zynqTopTbSources
         Standard    = '2012'
         Run         = $true
     }
