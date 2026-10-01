@@ -11,7 +11,7 @@ param(
         'bus-tb',
         'mapper-nrom', 'mapper-combined', 'mapper-mmc1', 'mapper-mmc3',
         'controller-tb',
-        'cart-ines-tb',
+        'cart-ines-tb', 'cart-rom-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
         'video800-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6',
@@ -95,6 +95,7 @@ $apuRtl = Join-Path $repoRoot 'rtl\nes_core\apu\nes_apu2a03.v'
 $busRtl = Join-Path $repoRoot 'rtl\nes_core\bus\nes_cpu_bus.v'
 $controllerRtl = Join-Path $repoRoot 'rtl\nes_core\controller\nes_controller.v'
 $cartParserRtl = Join-Path $repoRoot 'rtl\nes_core\cart\ines_header_parser.v'
+$cartRomRtl = Join-Path $repoRoot 'rtl\nes_core\cart\nes_cart_rom.v'
 
 $mapperNromRtl = Join-Path $repoRoot 'rtl\nes_core\mapper\nes_mapper_nrom.v'
 $mapperCnromRtl = Join-Path $repoRoot 'rtl\nes_core\mapper\nes_mapper_cnrom.v'
@@ -137,6 +138,7 @@ $apuSources = @($apuLengthLutRtl, $apuPulseRtl, $apuTriangleRtl, $apuNoiseRtl, $
 $busSources = @($busRtl)
 $controllerSources = @($controllerRtl)
 $cartSources = @($cartParserRtl)
+$cartRomSources = @($cartRomRtl)
 $mapperSources = @($mapperNromRtl, $mapperCnromRtl, $mapperUxromRtl, $mapperMmc1Rtl, $mapperMmc3Rtl, $mapperRtl)
 $videoSources = @($videoScalerRtl)
 $lineBufferVgaSources = @($lineBufferVgaRtl)
@@ -363,6 +365,15 @@ $allTargets = @(
         Label       = 'iNES header parser tb'
         Top         = 'tb_ines_header_parser'
         Sources     = $cartSources + (Join-Path $repoRoot 'tb\cart\tb_ines_header_parser.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'cart-rom-tb'
+        Group       = 'cart'
+        Label       = 'Cartridge PRG/CHR block RAM tb'
+        Top         = 'tb_nes_cart_rom'
+        Sources     = $cartRomSources + (Join-Path $repoRoot 'tb\cart\tb_nes_cart_rom.v')
         Standard    = '2012'
         Run         = $true
     },
@@ -672,6 +683,14 @@ Write-Output ''
 
 $results = @()
 
+# rtl\nes_core\cart\nes_cart_rom.v carries its PRG and CHR content in two hex
+# files named relative to the repository root, and both Icarus and Vivado
+# resolve a relative $readmemh path against the WORKING DIRECTORY, not against
+# the source file's own directory.  Pinning the working directory for the run is
+# what makes a clean checkout elaborate; the previous location is restored on
+# every normal exit path below.
+Push-Location -LiteralPath $repoRoot
+
 foreach ($target in $selected) {
     $outputPath = Join-Path $tempRoot ("{0}.vvp" -f $target.Id)
     if (Test-Path -LiteralPath $outputPath) {
@@ -713,6 +732,8 @@ foreach ($target in $selected) {
         Detail  = $detail
     }
 }
+
+Pop-Location
 
 Write-Output ''
 Write-Output '=== summary'
