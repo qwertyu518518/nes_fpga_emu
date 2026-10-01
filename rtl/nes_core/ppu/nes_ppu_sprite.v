@@ -9,6 +9,28 @@
 //   dot. pat_addr_o exposes the 8 per-slot pattern addresses as 8 x 13 bits
 //   for a parent that wants to prefetch them ahead of the line.
 //
+// Slot selection is a shared prefix popcount, not a per-pick serial walk
+//   in_range / nl_in_range are 64-bit vectors of "this OAM entry covers this
+//   line". The 8 slot picks used to be 8 independent 64-deep walks of each
+//   vector, instantiated 16 times in total, which made the middle of the
+//   pat_addr_o and sprite_pixel cones roughly 60 logic levels deep. On
+//   xc7z020clg400-2 at the 21.477272727 MHz core period that measured
+//   63.279 ns / 68 levels from scanline_reg to pat_q_reg, and 71.015 ns /
+//   85 levels from scanline_reg to the u_video frame memory write data, and it
+//   was the whole of the core clock domain's setup failure: 117 of 117 failing
+//   mmcm_core_clk endpoints passed through this instance, and every one of them
+//   started at scanline_reg[1] or scanline_reg[5].
+//   The set of in-range entries and the count of set bits below each entry do
+//   not depend on which slot is being picked, so they are computed once and
+//   shared. Each pick is then one 64-bit mark plus a two-level "lowest set
+//   bit" pick, so the chain is a shared 64-step popcount and a fixed 8+3
+//   levels rather than 16 independent 64-deep walks. That took the same two
+//   paths to 31 levels / 20.498 ns and 38 levels / 25.241 ns.
+//   This is an equivalence, not an approximation: see the note on the two
+//   formulations above first_nz8. Nothing about the dot-by-dot behaviour, the
+//   ce alignment, the pat_addr_o timing, or cur_slot_o changes, so the CHR
+//   non-collision windows the parent documents are unchanged and still hold.
+//
 // pat_addr_o : the pattern addresses of the NEXT scanline, not of this one
 //   pat_addr_o[g*13 +: 13] is the byte address the parent must have prefetched
 //   for slot g of the scanline that follows the one on the `scanline` port. The
@@ -29,7 +51,7 @@
 //   s_pat_addr, and s_pat_addr is what the EXTERNAL_CHR=0 path renders this dot
 //   from. retiming `scanline_sel` to the next line would move the pattern row
 //   of every internally rendered pixel, so the next-line chain is duplicated
-//   (a second 64-entry range scan, a second 8-way nth_set walk, and a second
+//   (a second 64-entry range scan, a second 8-way slot-pick walk, and a second
 //   row/tile/fine derivation) instead of being shared.
 //
 // cur_slot_o : observation-only export of which slot this dot is positioned on.
@@ -166,26 +188,61 @@ module nes_ppu_sprite #(
     output wire [3:0]     cur_slot_o
 );
 
-    function [5:0] nth_set;
-        input [63:0] vec;
-        input [2:0]  pick;
-        integer      b;
-        reg [6:0]    c;
-        reg          taken;
+    // Slot selection, reformulated from a serial walk into a shared prefix
+    // popcount plus a two-level "lowest set bit" pick.
+    //
+    // The walk this replaces asked, for each of the 16 pick values, "scan 64
+    // entries in order, counting set bits, and stop when the count equals my
+    // pick". That is a 64-deep chain of compare-and-mux per pick, and because
+    // the 16 instances sit in the cone of both pat_addr_o and sprite_pixel it
+    // was the deepest logic in the PPU. The count of set bits seen strictly
+    // before entry b is a property of the vector alone, not of the pick, so it
+    // is computed once per vector here and shared by all 8 picks.
+    //
+    // The two forms are identical, not merely similar. In the walk, c counts
+    // the set bits strictly before b, and the walk returns the first b where
+    // c == pick, defaulting to 0. Here cnt[b] is that same count and the mark
+    // selects the first b with vec[b] && (cnt[b] == pick), defaulting to 0.
+    // The walk compared c[2:0] against pick rather than the whole of c, and that
+    // cannot differ: c only exceeds 7 after pick+1 set bits have been seen, and
+    // for pick <= 7 a match has already been taken by then, so the 3-bit compare
+    // and the 7-bit compare agree on every b that can still change the result.
+    // tb_nes_ppu_sprite.v checks this directly, including the 0..255 tile range
+    // and the 8x16 tile-pair range, which fail on any off-by-one in the pick.
+    function [2:0] first_nz8;
+        input [7:0] v;
         begin
-            nth_set = 6'd0;
-            c = 7'd0;
-            taken = 1'b0;
-            for (b = 0; b < 64; b = b + 1) begin
-                if (!taken && vec[b]) begin
-                    if (c[2:0] == pick) begin
-                        nth_set = b[5:0];
-                        taken = 1'b1;
-                    end else begin
-                        c = c + 7'd1;
-                    end
-                end
-            end
+            if      (v[0]) first_nz8 = 3'd0;
+            else if (v[1]) first_nz8 = 3'd1;
+            else if (v[2]) first_nz8 = 3'd2;
+            else if (v[3]) first_nz8 = 3'd3;
+            else if (v[4]) first_nz8 = 3'd4;
+            else if (v[5]) first_nz8 = 3'd5;
+            else if (v[6]) first_nz8 = 3'd6;
+            else if (v[7]) first_nz8 = 3'd7;
+            else            first_nz8 = 3'd0;
+        end
+    endfunction
+
+    // Lowest set bit index of a 64-bit vector, 0 when empty. Two levels: pick
+    // the first non-empty byte with an 8-way priority, then the first set bit
+    // inside that byte. Both levels are 8-way, so this is a fixed 8+3 levels
+    // rather than a 64-deep chain.
+    function [5:0] first_set64;
+        input [63:0] v;
+        reg   [7:0]  nzx;
+        reg   [2:0]  sel;
+        begin
+            nzx[0] = (v[7:0]   != 8'd0);
+            nzx[1] = (v[15:8]  != 8'd0);
+            nzx[2] = (v[23:16] != 8'd0);
+            nzx[3] = (v[31:24] != 8'd0);
+            nzx[4] = (v[39:32] != 8'd0);
+            nzx[5] = (v[47:40] != 8'd0);
+            nzx[6] = (v[55:48] != 8'd0);
+            nzx[7] = (v[63:56] != 8'd0);
+            sel = first_nz8(nzx);
+            first_set64 = {sel, first_nz8(v >> {sel, 3'b000})};
         end
     endfunction
 
@@ -243,6 +300,36 @@ module nes_ppu_sprite #(
         end
     end
 
+    // Shared prefix popcount and the per-pick marks it feeds. cnt[b] is the
+    // number of set bits strictly below b, so cnt[0] is 0 and cnt[b] is
+    // cnt[b-1] plus the previous entry. One chain per vector, shared by all 8
+    // picks, instead of 8 independent walks.
+    wire [6:0] cnt_cur [0:63];
+    wire [6:0] cnt_nl  [0:63];
+    wire [63:0] cur_marks [0:7];
+    wire [63:0] nl_marks  [0:7];
+
+    genvar pc, pb;
+    generate
+        for (pc = 0; pc < 64; pc = pc + 1) begin : g_prefix
+            if (pc == 0) begin : g_prefix_zero
+                assign cnt_cur[pc] = 7'd0;
+                assign cnt_nl[pc]  = 7'd0;
+            end else begin : g_prefix_step
+                assign cnt_cur[pc] = cnt_cur[pc-1] + {6'd0, in_range[pc-1]};
+                assign cnt_nl[pc]  = cnt_nl[pc-1]  + {6'd0, nl_in_range[pc-1]};
+            end
+        end
+        for (pc = 0; pc < 8; pc = pc + 1) begin : g_pick_mark
+            for (pb = 0; pb < 64; pb = pb + 1) begin : g_mark_bit
+                assign cur_marks[pc][pb] = in_range[pb]
+                    && (cnt_cur[pb] == {4'b0000, pc[2:0]});
+                assign nl_marks[pc][pb] = nl_in_range[pb]
+                    && (cnt_nl[pb] == {4'b0000, pc[2:0]});
+            end
+        end
+    endgenerate
+
     wire [7:0] slot_index  [0:7];
     wire [7:0] slot_x      [0:7];
     wire [7:0] slot_attr   [0:7];
@@ -254,7 +341,6 @@ module nes_ppu_sprite #(
         for (g = 0; g < 8; g = g + 1) begin : g_slot
             localparam integer SLOT_N = g;
             localparam [7:0]   SLOT_U8 = SLOT_N[7:0];
-            localparam [2:0]   SLOT_PICK = SLOT_N[2:0];
 
             wire [5:0]  s_idx;
             wire [8:0]  s_addr;
@@ -283,7 +369,7 @@ module nes_ppu_sprite #(
             wire [9:0]  nl_fine;
             wire [12:0] nl_pat_addr;
 
-            assign s_idx = nth_set(in_range, SLOT_PICK);
+            assign s_idx = first_set64(cur_marks[g]);
             assign slot_index[g] = {2'b00, s_idx};
             assign s_addr = {1'b0, s_idx, 2'b00};
             assign s_bit0 = {3'b000, s_addr} << 3;
@@ -296,7 +382,7 @@ module nes_ppu_sprite #(
             assign s_tile = ctrl[5] ? {s_tile_byte[7:1], s_row[3]} : s_tile_byte[7:0];
             assign s_fine = slot_attr[g][7] ? ({1'b0, sprite_height} - 10'd1 - s_row) : s_row;
             assign s_pat_addr = {s_table, s_tile, 1'b0, s_fine[2:0]};
-            assign nl_idx = nth_set(nl_in_range, SLOT_PICK);
+            assign nl_idx = first_set64(nl_marks[g]);
             assign nl_addr = {1'b0, nl_idx, 2'b00};
             assign nl_bit0 = {3'b000, nl_addr} << 3;
             assign nl_y = (nl_addr > 9'd255) ? 8'h00 : oam[nl_bit0 +: 8];
