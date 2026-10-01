@@ -14,7 +14,7 @@ param(
         'cart-ines-tb', 'cart-rom-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
         'video800-tb',
-        'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6',
+        'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
         'platform-core', 'platform-tb', 'qsf-if-core',
         'peripheral-core', 'peripheral-i2c', 'sd-spi-cmd-core', 'sd-spi-cmd-tb',
         'touch-input-tb',
@@ -150,7 +150,11 @@ $systemV2Sources = @($systemV2Rtl) + $ppuSources + $apuSources + $busSources + $
 $systemV3Sources = @($systemV3Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $cpuSources
 $systemV4Sources = @($systemV4Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $cpuSources
 $systemV5Sources = @($systemV5Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources
-$systemV6Sources = @($systemV6Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources + @($systemV5Rtl)
+# nes_system_v6 instantiates nes_cart_rom for its PRG half, so the cart module is
+# a compile dependency of every target that elaborates the v6 core.  CHR_ENABLE is
+# 0 in that instance, so only the PRG hex is read and only the 8-bit PRG port
+# reaches this target's source list.
+$systemV6Sources = @($systemV6Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources + @($cartRomRtl, $systemV5Rtl)
 $platformSources = @($platformTopRtl, $platformPllRtl, $platformQsfIfRtl)
 $platformElabSources = $platformSources + $systemV4Sources + $lineBufferVgaSources + $vgaTimingSources
 $peripheralSources = @($wm8978I2cRtl)
@@ -518,6 +522,15 @@ $allTargets = @(
         Label       = 'System v6 external CHR tb'
         Top         = 'tb_nes_system_v6'
         Sources     = $systemV6Sources + (Join-Path $repoRoot 'tb\system\tb_nes_system_v6.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'system-v6-uxrom-prg'
+        Group       = 'system'
+        Label       = 'System v6 UxROM bus-conflict vs registered PRG tb'
+        Top         = 'tb_nes_system_v6_uxrom_prg'
+        Sources     = $systemV6Sources + (Join-Path $repoRoot 'tb\system\tb_nes_system_v6_uxrom_prg.v')
         Standard    = '2012'
         Run         = $true
     },

@@ -186,8 +186,6 @@ always @(posedge clk or posedge reset) begin
         div_phase <= div_phase + 4'd1;
 end
 
-reg [7:0] prg_rom [0:PRG_SIZE_BYTES-1];
-
 wire [15:0] cpu_addr;
 wire cpu_we;
 wire [7:0] cpu_dout;
@@ -307,11 +305,47 @@ assign chr_wdata = ppu_chr_wdata;
 
 assign chr_final_addr = mapper_chr_bank_offset;
 
-wire [PRG_ADDR_BITS-1:0] prg_index;
+// The PRG ROM lives in nes_cart_rom, not in this module.  It used to be declared
+// here as prg_rom with no driver anywhere, which Vivado dissolved with Synth
+// 8-3848, and a hierarchical reference only points downward so no parent could
+// have supplied it either.  The core's own instance is the only way in.  CHR is
+// NOT here: it is a board-level instance above the core, because the five CHR
+// ports of this module are already inputs and outputs of the right shape, so
+// CHR_ENABLE is 0 here and the 8 KiB CHR array is not built a second time.
+//
+// The read is registered, one clk behind mapper_prg_bank_offset, and that is the
+// right byte rather than a stale one because mapper_prg_bank_offset is an
+// always @* function of nes_cpu6502's bus_addr, which is itself always @* and
+// only moves on the single posedge per 12 clk where ce_cpu is high.  The address
+// is therefore identical across the whole div_phase 1..11 + div_phase 0 window,
+// which spans the clk that latched prg_rdata and the clk that latched bus_din.
+// nes_cart_rom.v states the same argument for the mapper's bus-conflict compare.
+wire [7:0] prg_rdata;
+wire [7:0] prg_chr_rdata_unused;
 
-assign prg_index = mapper_prg_bank_offset;
-assign prg_readback = prg_rom[prg_index];
-assign cart_din = (cart_addr[15] == 1'b1) ? prg_rom[prg_index] : 8'h00;
+nes_cart_rom #(
+    .PRG_SIZE_BYTES(PRG_SIZE_BYTES),
+    .PRG_ADDR_BITS(PRG_ADDR_BITS),
+    .PRG_ENABLE(1),
+    .CHR_ENABLE(0)
+) u_prg_rom (
+    .clk(clk),
+    .reset(reset),
+    .prg_en(1'b1),
+    .prg_addr(mapper_prg_bank_offset),
+    .prg_rdata(prg_rdata),
+    .ce_ppu(1'b0),
+    .chr_req(1'b0),
+    .chr_addr({CHR_ADDR_BITS{1'b0}}),
+    .chr_rdata(prg_chr_rdata_unused),
+    .chr_waddr(14'h0000),
+    .chr_we(1'b0),
+    .chr_wdata(8'h00),
+    .chr_ram_enable(1'b0)
+);
+
+assign prg_readback = prg_rdata;
+assign cart_din = (cart_addr[15] == 1'b1) ? prg_rdata : 8'h00;
 
 assign bus_req = cpu_bus_req;
 assign bus_stall = cpu_bus_stall;

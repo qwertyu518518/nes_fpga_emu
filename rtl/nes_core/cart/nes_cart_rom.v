@@ -24,13 +24,25 @@
 //   The port is one master-multiplexed bus, so whoever won chr_req is exactly
 //   who put its address on chr_addr that beat, and there is nothing to arbitrate
 //   here.
-//   PRG does need a change to nes_system_v6, which is NOT made in this change
-//   and is reported instead.  prg_rom is declared INSIDE nes_system_v6 and has
-//   no driver anywhere, so Vivado dissolves it (Synth 8-3848) and it contributes
-//   zero logic and zero memory.  Backing it from outside the module is not
-//   possible in Verilog: a hierarchical reference only points downward.  See the
-//   PRG LATENCY section for the timing consequence of the two ports the core
-//   would have to change.
+// PRG connects INSIDE nes_system_v6
+//   prg_rom used to be declared inside nes_system_v6 with no driver anywhere, so
+//   Vivado dissolved it (Synth 8-3848) and it contributed zero logic and zero
+//   memory, and backing it from a parent is not possible in Verilog because a
+//   hierarchical reference only points downward.  nes_system_v6 therefore
+//   instantiates this module with PRG_ENABLE=1 and CHR_ENABLE=0 and reads
+//   prg_rdata.  See the PRG LATENCY section for why the registered read is the
+//   correct byte for the core's bus.
+//
+// PRG_ENABLE / CHR_ENABLE
+//   The board instantiates this module once, above the core, with both halves
+//   enabled.  The core instantiates it a second time with PRG_ENABLE=1 and
+//   CHR_ENABLE=0, because the core may only reach its PRG.  Without these the
+//   core's instance would build and $readmemh a second copy of the 8 KiB CHR
+//   array, i.e. the CHR hex would be read twice and eight more KiB of content
+//   would be inferred than the board needs.  When a half is disabled its array
+//   is not declared at all -- it is inside the generate -- so nothing can infer
+//   it, and the corresponding output register is still driven, from reset only,
+//   so no output is ever left undriven.
 //
 // SIZES
 //   PRG_SIZE_BYTES/PRG_ADDR_BITS honour nes_system_v6's own parameters: its
@@ -98,21 +110,27 @@
 //   a CHR ROM cannot be written by a $2007 store and its contents stay whatever
 //   $readmemh put there.
 //
-// PRG LATENCY (why backing prg_rom is not a drop-in)
+// PRG LATENCY (why the registered read returns the right byte)
 //   The core reads prg_rom combinationally, in the same clk:
 //     assign prg_readback = prg_rom[prg_index];
 //     assign cart_din = (cart_addr[15] == 1'b1) ? prg_rom[prg_index] : 8'h00;
-//   A block RAM has a one-clk read latency, so it cannot answer a combinational
-//   read.  It does not need to: the CPU latches bus_din on the posedge whose
-//   pre-edge div_phase is 0, nes_cpu6502's bus_addr is a registered output, and
-//   nes_mapper's prg_bank_offset_r is an always @* function of it, so
-//   mapper_prg_bank_offset is stable for the whole 12-clk CPU cycle.  A free
-//   running read, latching the address on every clk, therefore presents the
-//   address at the end of div_phase 0 and holds the byte across div_phase
-//   1..11, which the CPU latches at the end of div_phase 0 with a full clk of
-//   address setup.  prg_en exists for power only: with it low prg_rdata HOLDS
-//   the last byte rather than returning zero, so gating it is only safe where
-//   the address is also being held.
+//   where prg_index is mapper_prg_bank_offset.  A block RAM has a one-clk read
+//   latency, so it cannot answer a combinational read.  It does not need to.
+//   mapper_prg_bank_offset is an always @* function of nes_cpu6502's bus_addr,
+//   which is itself always @*, and bus_addr only moves when the CPU's state_reg
+//   moves, i.e. on the one posedge per 12 clk where ce_cpu is high.  So the PRG
+//   address is stable for div_phase 1..11 and for the following div_phase 0 --
+//   twelve clk in which it does not move at all.  The CPU latches bus_din on
+//   the posedge whose pre-edge div_phase is 0, so it samples the byte this
+//   module latched at the posedge one clk earlier, when the address was the
+//   same value.  The mapper's bus-conflict compare is safe for the same reason:
+//   mapper_we is the registered cart_wr_pending_q, so it is high on one clk
+//   while mapper_cpu_addr is the latched cart_wr_addr_q, and the write itself
+//   only reaches bank_select on the NEXT posedge, one clk after the compare.
+//   The address therefore has not moved between the compare and the read that
+//   fed it.  prg_en exists for power only: with it low prg_rdata HOLDS the last
+//   byte rather than returning zero, so gating it is only safe where the
+//   address is also being held.
 //
 // RESET
 //   Synchronous, and it clears only the two output registers.  It does not and
@@ -124,6 +142,8 @@
 module nes_cart_rom #(
     parameter integer PRG_SIZE_BYTES = 131072,
     parameter integer PRG_ADDR_BITS  = 17,
+    parameter integer PRG_ENABLE     = 1,
+    parameter integer CHR_ENABLE     = 1,
     parameter integer CHR_SIZE_BYTES = 8192,
     parameter integer CHR_LOCAL_BITS = 13,
     parameter integer CHR_ADDR_BITS  = 17,
@@ -147,34 +167,55 @@ module nes_cart_rom #(
     input  wire                     chr_ram_enable
 );
 
-    reg [7:0] prg_rom [0:PRG_SIZE_BYTES-1];
-    reg [7:0] chr_rom [0:CHR_SIZE_BYTES-1];
+    generate
 
-    initial begin
-        $readmemh(PRG_INIT_FILE, prg_rom);
-        $readmemh(CHR_INIT_FILE, chr_rom);
-    end
+    if (PRG_ENABLE != 0) begin : g_prg
+        reg [7:0] prg_rom [0:PRG_SIZE_BYTES-1];
 
-    wire [CHR_LOCAL_BITS-1:0] chr_rindex;
-    wire [CHR_LOCAL_BITS-1:0] chr_windex;
-    wire                       chr_write;
+        initial
+            $readmemh(PRG_INIT_FILE, prg_rom);
 
-    assign chr_rindex  = chr_addr[CHR_LOCAL_BITS-1:0];
-    assign chr_windex  = chr_waddr[CHR_LOCAL_BITS-1:0];
-    assign chr_write   = chr_ram_enable && chr_we;
-
-    always @(posedge clk) begin
-        if (reset) begin
-            prg_rdata <= 8'h00;
-            chr_rdata <= 8'h00;
-        end else begin
-            if (prg_en)
+        always @(posedge clk) begin
+            if (reset)
+                prg_rdata <= 8'h00;
+            else if (prg_en)
                 prg_rdata <= prg_rom[prg_addr];
-            if (ce_ppu && chr_req)
-                chr_rdata <= chr_rom[chr_rindex];
-            if (chr_write)
-                chr_rom[chr_windex] <= chr_wdata;
+        end
+    end else begin : g_prg_off
+        always @(posedge clk) begin
+            if (reset)
+                prg_rdata <= 8'h00;
         end
     end
+
+    if (CHR_ENABLE != 0) begin : g_chr
+        reg [7:0] chr_rom [0:CHR_SIZE_BYTES-1];
+        wire [CHR_LOCAL_BITS-1:0] chr_rindex;
+        wire [CHR_LOCAL_BITS-1:0] chr_windex;
+
+        assign chr_rindex = chr_addr[CHR_LOCAL_BITS-1:0];
+        assign chr_windex = chr_waddr[CHR_LOCAL_BITS-1:0];
+
+        initial
+            $readmemh(CHR_INIT_FILE, chr_rom);
+
+        always @(posedge clk) begin
+            if (reset)
+                chr_rdata <= 8'h00;
+            else begin
+                if (ce_ppu && chr_req)
+                    chr_rdata <= chr_rom[chr_rindex];
+                if (chr_ram_enable && chr_we)
+                    chr_rom[chr_windex] <= chr_wdata;
+            end
+        end
+    end else begin : g_chr_off
+        always @(posedge clk) begin
+            if (reset)
+                chr_rdata <= 8'h00;
+        end
+    end
+
+endgenerate
 
 endmodule

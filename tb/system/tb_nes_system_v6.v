@@ -6448,11 +6448,17 @@ initial begin
     for (i = 0; i < CHR_MEM_BYTES; i = i + 1)
         m_chr_pre[i] = m_chr_mem[i];
 
+    // prg_rom now lives one level down, inside the nes_cart_rom instance that
+    // nes_system_v6 owns, so every one of these hierarchical writes just gains
+    // ".u_prg_rom.g_prg".  Nothing about the injection changes: same array,
+    // same depth, same bytes, same time, and the DUT still has no other way to
+    // be given a program.  ab_v5 is a nes_system_v5 instance, which was not
+    // touched, so its path is unchanged.
     for (i = 0; i < TB_WINDOW_BYTES; i = i + 1) begin
-        ab_v6.prg_rom[i] = tb_prg[i];
+        ab_v6.u_prg_rom.g_prg.prg_rom[i] = tb_prg[i];
         ab_v5.prg_rom[i] = tb_prg[i];
-        chr_rom.prg_rom[i] = tb_prg[i];
-        chr_ram_b.prg_rom[i] = tb_prg_b[i];
+        chr_rom.u_prg_rom.g_prg.prg_rom[i] = tb_prg[i];
+        chr_ram_b.u_prg_rom.g_prg.prg_rom[i] = tb_prg_b[i];
     end
     // MMC3 splits PRG into four 8 KiB windows: $8000 through r6 (=0), $A000
     // through r7 (=1), $C000 through the fixed second-last 8 KiB bank
@@ -6462,12 +6468,12 @@ initial begin
     // copies are the ones the $FFFC reset vector and the $FFFE irq vector are
     // actually read from.  Without them the mmc3 cpu would never start.
     for (i = 0; i < DUT_PRG_SIZE_BYTES; i = i + 1)
-        chr_mmc3.prg_rom[i] = 8'h00;
+        chr_mmc3.u_prg_rom.g_prg.prg_rom[i] = 8'h00;
     for (i = 0; i < 8192; i = i + 1) begin
-        chr_mmc3.prg_rom[0 * 8192 + i] = m_prg[0 * 8192 + i];
-        chr_mmc3.prg_rom[1 * 8192 + i] = m_prg[1 * 8192 + i];
-        chr_mmc3.prg_rom[14 * 8192 + i] = m_prg[2 * 8192 + i];
-        chr_mmc3.prg_rom[15 * 8192 + i] = m_prg[3 * 8192 + i];
+        chr_mmc3.u_prg_rom.g_prg.prg_rom[0 * 8192 + i] = m_prg[0 * 8192 + i];
+        chr_mmc3.u_prg_rom.g_prg.prg_rom[1 * 8192 + i] = m_prg[1 * 8192 + i];
+        chr_mmc3.u_prg_rom.g_prg.prg_rom[14 * 8192 + i] = m_prg[2 * 8192 + i];
+        chr_mmc3.u_prg_rom.g_prg.prg_rom[15 * 8192 + i] = m_prg[3 * 8192 + i];
     end
     for (i = 0; i < 2048; i = i + 1) begin
         ab_v6.u_ppu.nametable_ram[i] = 8'h00;
