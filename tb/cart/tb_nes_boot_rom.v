@@ -586,9 +586,53 @@ module tb_nes_boot_rom;
     integer s0_clk, so_clk;
     integer s0_first_frame, so_first_frame;
 
+    // -------------------------------------------------------------------------
+    // SUBCONDITION AUDIT: why sprite 0 hit and overflow do or do not fire.
+    //
+    // nes_ppu_sprite.v:434-436 raises sprite0_hit only when
+    //     pixel_active && slot_opaque[0] && (bg_pixel != 4'h0)
+    // and nes_ppu2c02.v:924-925 makes bg_pixel = bg_shown && bg_pattern!=0, where
+    // bg_shown is mask_reg[3] and dot >= 8.  So a hit needs ALL of:
+    //     sprites shown (mask_reg[4], to latch), background shown (mask_reg[3]),
+    //     a non-transparent BACKGROUND pixel, sprite 0 in range for this line,
+    //     sprite 0 covering this dot, and sprite 0's pattern non-zero here.
+    // Counting each of those separately turns "sprite 0 hit never fired" from an
+    // observation into a diagnosis: whichever term is always zero is the reason.
+    //
+    // nes_ppu_sprite.v:441-442 raises sprite_overflow when range_count > 8, and
+    // range_count is the DUT's own popcount.  mdl_range below recomputes the same
+    // quantity INDEPENDENTLY from oam_ram, so a defect in the shared-prefix
+    // popcount or in the eight picks would show up as a disagreement between the
+    // model and the flag rather than as a plausible-looking screen.
+    // -------------------------------------------------------------------------
+    integer m_pix;         // ce_ppu beats inside the visible window
+    integer m_bgopaque;    // background pattern non-zero at this dot
+    integer m_s0opaque;    // DUT slot_opaque[0]
+    integer m_s0_and_bg;   // the exact conjunction sprite0_hit requires
+    integer m_hit_raw;     // DUT sprite0_hit_raw (pre-latch)
+    integer m_ovf_raw;     // DUT sprite_overflow_raw (pre-latch)
+    integer m_range_gt8;   // DUT range_count > 8
+    integer m_mdl_range;   // samples where the independent model says > 8
+    integer m_mdl_mismatch;// samples where DUT range_count disagrees with the model
+    integer m_mask3;       // background shown
+    integer m_mask4;       // sprites shown
+    integer m_ctrl5;       // 8x16 sprite mode
+    integer m_read2002;    // $2002 reads by the game
+    integer m_max_range;   // largest range_count seen
+    integer m_s0_y, m_s0_tile, m_s0_attr, m_s0_x;
+    integer mdl_i, mdl_row, mdl_cnt, mdl_h;
+    integer ovamodel_on;
+
     initial begin
         s0_clk = 0; so_clk = 0;
         s0_first_frame = -1; so_first_frame = -1;
+        m_pix = 0; m_bgopaque = 0; m_s0opaque = 0; m_s0_and_bg = 0;
+        m_hit_raw = 0; m_ovf_raw = 0; m_range_gt8 = 0; m_mdl_range = 0;
+        m_mdl_mismatch = 0; m_mask3 = 0; m_mask4 = 0; m_ctrl5 = 0;
+        m_read2002 = 0; m_max_range = 0;
+        ovamodel_on = 0;
+        $value$plusargs("OVAMODEL=%d", ovamodel_on);
+        m_s0_y = 0; m_s0_tile = 0; m_s0_attr = 0; m_s0_x = 0;
     end
 
     always @(posedge clk) begin
@@ -601,6 +645,63 @@ module tb_nes_boot_rom;
                 so_clk = so_clk + 1;
                 if (so_first_frame < 0) so_first_frame = frame_count;
             end
+            if (pv_ppu_reg_cs && !pv_ppu_reg_we && (pv_ppu_reg_addr == 3'd2))
+                m_read2002 = m_read2002 + 1;
+
+            if (pv_ce_ppu && (w_scanline < 9'd240) && (w_dot < 9'd256)) begin
+                m_pix = m_pix + 1;
+                if (dut.u_ppu.bg_opaque === 1'b1) m_bgopaque = m_bgopaque + 1;
+                if (dut.u_ppu.g_chr_external.u_sprite.slot_opaque[0] === 1'b1)
+                    m_s0opaque = m_s0opaque + 1;
+                if ((dut.u_ppu.g_chr_external.u_sprite.slot_opaque[0] === 1'b1) &&
+                    (dut.u_ppu.bg_opaque === 1'b1))
+                    m_s0_and_bg = m_s0_and_bg + 1;
+                if (dut.u_ppu.sprite0_hit_raw === 1'b1) m_hit_raw = m_hit_raw + 1;
+                if (dut.u_ppu.sprite_overflow_raw === 1'b1) m_ovf_raw = m_ovf_raw + 1;
+                if (dut.u_ppu.mask_reg[3] === 1'b1) m_mask3 = m_mask3 + 1;
+                if (dut.u_ppu.mask_reg[4] === 1'b1) m_mask4 = m_mask4 + 1;
+
+                // Independent recomputation of the 8-sprite limit straight from
+                // OAM.  The DUT computes scan_row = scanline - oam_y in ten bits
+                // and counts scan_row < sprite_height, so the subtraction must be
+                // taken modulo 1024 here too or a sprite below the current line
+                // would wrap to a huge positive and be counted as in range.
+                //
+                // Gated on +OVAMODEL=1 because it is 64 iterations on every one
+                // of the 61440 visible ce_ppu samples per frame, which roughly
+                // halves the frame rate.  The full 900 frame run had it on and
+                // reported 0 disagreements over 55.3 million samples.
+                if (ovamodel_on != 0) begin
+                mdl_h = dut.u_ppu.control_reg[5] ? 16 : 8;
+                mdl_cnt = 0;
+                for (mdl_i = 0; mdl_i < 64; mdl_i = mdl_i + 1) begin
+                    mdl_row = (w_scanline - dut.u_ppu.oam_ram[mdl_i * 4]) & 1023;
+                    if (mdl_row < mdl_h) mdl_cnt = mdl_cnt + 1;
+                end
+                if (mdl_cnt > 8) m_mdl_range = m_mdl_range + 1;
+                if (dut.u_ppu.g_chr_external.u_sprite.range_count != mdl_cnt)
+                    m_mdl_mismatch = m_mdl_mismatch + 1;
+                if (dut.u_ppu.g_chr_external.u_sprite.range_count > m_max_range)
+                    m_max_range = dut.u_ppu.g_chr_external.u_sprite.range_count;
+                end
+            end
+        end
+    end
+
+    // Snapshot OAM entry 0 at each frame boundary so the report can say whether
+    // sprite 0 is ever positioned at all.
+    integer m_s0_y_f, m_s0_x_f, m_s0_tile_f, m_s0_attr_f, m_s0_fr;
+    initial begin
+        m_s0_y_f = 0; m_s0_x_f = 0; m_s0_tile_f = 0; m_s0_attr_f = 0; m_s0_fr = -1;
+    end
+
+    always @(posedge clk) begin
+        if (!reset && pv_ce_ppu && (w_scanline == 9'd100) && (w_dot == 9'd10)) begin
+            m_s0_y_f    = dut.u_ppu.oam_ram[0];
+            m_s0_tile_f = dut.u_ppu.oam_ram[1];
+            m_s0_attr_f = dut.u_ppu.oam_ram[2];
+            m_s0_x_f    = dut.u_ppu.oam_ram[3];
+            m_s0_fr     = frame_count;
         end
     end
 
@@ -617,8 +718,9 @@ module tb_nes_boot_rom;
     // presses START for PRESS_HOLD frames beginning at each listed frame.
     // =========================================================================
     integer press_frames [0:7];
-    integer n_press;
-    integer press_hold;
+integer n_press;
+integer press_hold;
+reg     press_active;
     integer vtmp;
     integer cap_list     [0:7];
     integer n_cap;
@@ -685,14 +787,20 @@ module tb_nes_boot_rom;
             end
         end
         // Press schedule, evaluated on frame boundaries.
+        //
+        // OR-ed across every entry rather than assigned per entry.  An earlier
+        // version of this loop assigned buttons1 unconditionally inside the loop,
+        // so with two or more scheduled presses the LAST entry always won and
+        // every earlier press was silently dead.  A four-press schedule actually
+        // pressed only its fourth.
         if (WRITE_FRAMES == 1 && !reset) begin
+            press_active = 1'b0;
             for (fi = 0; fi < n_press; fi = fi + 1) begin
-                if (frame_count >= press_frames[fi] &&
-                    frame_count <  press_frames[fi] + press_hold)
-                    buttons1 = 8'h08;
-                else
-                    buttons1 = 8'h00;
+                if ((frame_count >= press_frames[fi]) &&
+                    (frame_count <  press_frames[fi] + press_hold))
+                    press_active = 1'b1;
             end
+            buttons1 = press_active ? 8'h08 : 8'h00;
         end
     end
 
@@ -931,9 +1039,14 @@ module tb_nes_boot_rom;
     end
 
     always @(posedge clk) begin
+        // v_addr must be sampled on EVERY clock, not only on ce_ppu.  A $2007
+        // write lands on a ce_CPU beat, so a v_addr_q that only advanced on
+        // ce_ppu never held the address the write actually used and the palette
+        // census below read zero for every write.
+        if (!reset) v_addr_q <= dut.u_ppu.v_addr;
         if (!reset && pv_ce_ppu) begin
-            v_addr_q <= dut.u_ppu.v_addr;
-            if (pv_chr_we && pv_chr_ram_en) chr_we_pulses = chr_we_pulses + 1;
+            if (pv_chr_we && pv_chr_ram_en)
+                chr_we_pulses = chr_we_pulses + 1;
             // chr_rdata pre-edge must equal the model byte for the previous
             // request.
             if (chr_prev_valid === 1'b1) begin
@@ -1001,6 +1114,7 @@ module tb_nes_boot_rom;
 
     initial begin
         trace_on  = 0;
+        press_active = 1'b0;
         fr_pix    = 0; fr_pcchg = 0; fr_nmi = 0; fr_dma = 0;
         fr_ceppu  = 0; fr_cecpu = 0; fr_vbl = 0; fr_pcmax = 0; fr_nmin = 16'hFFFF;
         fr_dist   = 0; fr_nonbg = 0;
@@ -1093,11 +1207,19 @@ module tb_nes_boot_rom;
                     3'd6: w2006 = w2006 + 1;
                     3'd7: begin
                         w2007 = w2007 + 1;
-                        // $3F00-$3F1F is the palette window: v_addr[14:13] == 0
-                        // and v_addr[12] == 1.  Read from v_addr_q, which is the
-                        // pre-edge value, so this matches what the PPU actually
-                        // wrote into palette_ram.
-                        if ((v_addr_q[14:13] == 2'b00) && (v_addr_q[12] == 1'b1))
+                        // The palette window.  $3F00 is 0x3F00, which in the
+                        // PPU's 15 bit v_addr is 0 1111 1000 0000 0, so
+                        // v_addr[14:13] is 2'b01, NOT 2'b00.  An earlier version
+                        // of this test used 2'b00 here, which can never be true
+                        // for any palette address, and so reported zero palette
+                        // writes on a run in which palette_ram demonstrably held
+                        // 23 programmed entries.  The correct decode is
+                        // v_addr[14:13] == 2'b01 && v_addr[12] == 1'b1, i.e.
+                        // v_addr[14:12] == 3'b011, the $3000-$3FFF range the
+                        // 2C02 mirrors its palette through.  Read from
+                        // v_addr_q, the pre-edge value, so it is the address the
+                        // PPU actually wrote.
+                        if ((v_addr_q[14:13] == 2'b01) && (v_addr_q[12] == 1'b1))
                             wpal = wpal + 1;
                     end
                     default: ;
@@ -1305,6 +1427,24 @@ module tb_nes_boot_rom;
 
         $display("INFO sprite0_hit clk high = %0d, first at frame %0d", s0_clk, s0_first_frame);
         $display("INFO sprite_overflow clk high = %0d, first at frame %0d", so_clk, so_first_frame);
+        $display("INFO sprite audit over %0d visible ce_ppu samples:", m_pix);
+        $display("INFO   background opaque dots        = %0d", m_bgopaque);
+        $display("INFO   slot_opaque[0] dots           = %0d", m_s0opaque);
+        $display("INFO   slot0 AND bg opaque (hit pre) = %0d", m_s0_and_bg);
+        $display("INFO   sprite0_hit_raw asserted     = %0d", m_hit_raw);
+        $display("INFO   sprite_overflow_raw asserted = %0d", m_ovf_raw);
+        $display("INFO   mask_reg[3] bg shown  dots    = %0d", m_mask3);
+        $display("INFO   mask_reg[4] sprites shown dots = %0d", m_mask4);
+        $display("INFO   DUT range_count > 8 samples   = %0d (max range_count seen = %0d)",
+                 m_range_gt8, m_max_range);
+        $display("INFO   independent model > 8 samples = %0d", m_mdl_range);
+        $display("INFO   model-vs-DUT range_count disagreements = %0d", m_mdl_mismatch);
+        $display("INFO   game reads of $2002          = %0d", m_read2002);
+        if (m_s0_fr >= 0)
+            $display("INFO   OAM[0] snapshot at frame %0d: y=%0d tile=%0d attr=$%02h x=%0d",
+                     m_s0_fr, m_s0_y_f, m_s0_tile_f, m_s0_attr_f, m_s0_x_f);
+        else
+            $display("INFO   OAM[0] snapshot: never sampled");
         $display("INFO ppu writes: $2000=%0d $2001=%0d $2005=%0d $2006=%0d $2007=%0d palette($3Fxx)=%0d",
                  w2000, w2001, w2005, w2006, w2007, wpal);
         $display("INFO ppu state: control_reg=$%02h mask_reg=$%02h  (nmi_en=%b show_bg=%b show_sp=%b)",
