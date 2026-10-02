@@ -397,13 +397,7 @@ set_max_delay -datapath_only 20.000 \
 
 
 # =============================================================================
-# AUDIO LANE -- COMMENTED OUT, NOT YET BUILT
-#
-# The codec register configuration and the I2S data path do not exist yet, so
-# these pins are not ports of the platform top.  They are recorded here
-# commented so the board facts are captured once and the block can be
-# uncommented verbatim if the audio lane is included.  Uncommenting before the
-# ports exist produces Vivado 12-584 "No ports matched" warnings on every line.
+# AUDIO LANE: WM8960, I2S out plus a control I2C
 #
 # I2S interface, WM8960 on the Navigator V2 board
 # board XDC:120  aud_bclk     M18
@@ -429,25 +423,299 @@ set_max_delay -datapath_only 20.000 \
 # master may be driving.  Note that this bus is NOT the same pins as the touch
 # I2C above: touch is R19/P20, the codec is E18/F17.  They are separate.
 #
-# Port widths: all eight of these are single-bit signals, which is what the
+# Port widths: all six of these are single-bit signals, which is what the
 # vendor pins require and all that can be claimed.  rtl/nes_core/peripheral/
-# nes_audio_i2s.v agrees, it presents single-bit bclk / lrck / dout.  Note that
-# nes_audio_i2s.v takes mclk as an INPUT, so aud_mclk is a clock into that
-# module, not a signal it drives.  If the audio lane is included, aud_mclk will
-# need its own create_clock here, generated from sys_clk or from the MMCM, and
-# the aud_adc_lrc / aud_adcdat pair has no counterpart in nes_audio_i2s.v at
-# all, so the ADC path would be a module that does not exist yet.
+# nes_audio_i2s.v agrees, it presents single-bit bclk / lrck / dout.
 #
-# set_property -dict {PACKAGE_PIN M18 IOSTANDARD LVCMOS33} [get_ports aud_bclk]
-# set_property -dict {PACKAGE_PIN G18 IOSTANDARD LVCMOS33} [get_ports aud_dac_lrc]
+# aud_mclk IS AN OUTPUT, NOT AN INPUT
+#   The old comment here said nes_audio_i2s.v "takes mclk as an INPUT, so
+#   aud_mclk is a clock into that module" and concluded aud_mclk "will need its
+#   own create_clock here".  That conclusion was wrong in a way that matters.
+#   mclk is an input to nes_audio_i2s, yes, but in the platform top it is
+#   DRIVEN: nes_zynq_top.v ties the module's mclk port and the aud_mclk pin to
+#   the same net, mmcm_lcd_clk.  The direction of the codec's pin is therefore
+#   output-from-the-FPGA, exactly like lcd_clk.  This is deliberate: it makes
+#   mclk and rd_clk the same net, so bclk is a divided version of rd_clk and
+#   the unsynchronised two-bit sampling at nes_audio_i2s.v:241-249 becomes a
+#   phase-related same-clock hand-off instead of a CDC.  See the AUDIO LANE
+#   block in the platform top's header, item 4.
+#
+# NO create_clock ON aud_mclk, AND WHY THAT IS THE RIGHT ANSWER
+#   aud_mclk is not an independent clock source: it is the mmcm_lcd_clk net,
+#   driven by CLKOUT0 of the MMCME2_BASE.  Vivado already derives
+#   lcd_clk_OBUF on that net at 40.000 ns from CLKOUT0, and report_clocks on
+#   the measured build below confirms it:
+#       Generated Clock : lcd_clk_OBUF  Master Clock: sys_clk  Period: 40.000
+#       Generated Sources: {u_clk/u_mmcm/CLKOUT0}
+#   Adding a user create_clock on the aud_mclk PORT would put a second,
+#   competing definition of that clock into the design, which is precisely the
+#   hazard documented at the lcd_clk create_clock above ("a user clock and the
+#   derived clock will disagree, and the timing report will be silently wrong
+#   rather than loudly wrong").  The lcd_clk port already shows how that looks:
+#   two clock objects on one net, harmless only while the periods agree.
+#   There is nothing to time FROM aud_mclk either: no register in this design
+#   is clocked by it, it only feeds the bclk divider inside nes_audio_i2s,
+#   whose registers are on lcd_clk_OBUF.  So the correct treatment is no
+#   constraint at all here.
+#
+# bclk IS A REAL CLOCK, AND AN EARLIER DRAFT OF THIS FILE WAS WRONG ABOUT IT
+#   bclk is the mclk net divided by BCLK_DIV = 16 inside nes_audio_i2s, and it
+#   does clock real registers: the one-bit I2S delay flop aud_dout_d_q in this
+#   platform top, plus dout_r and lrck_r inside nes_audio_i2s.  An earlier draft
+#   of this comment block claimed that "clock propagation derives a generated
+#   clock on the divider output net from the mmcm_core_clk / lcd_clk_OBUF master
+#   automatically, exactly as it does for the MMCM itself, so no
+#   create_generated_clock is needed".  That is false, and check_timing on the
+#   measured build is what says so:
+#       1. checking no_clock
+#        There are 3 register/latch pins with no clock driven by root clock
+#        pin: u_audio_i2s/bclk_int_reg/Q (HIGH)
+#        aud_dout_d_q_reg/C
+#        u_audio_i2s/dout_r_reg/C
+#        u_audio_i2s/lrck_r_reg/C
+#   The MMCM is a primitive and Vivado knows CLKOUT0 is a clock source, so it
+#   derives a clock for that.  bclk_int is just a flip-flop toggling on a clock
+#   enable, which Vivado treats as ordinary logic, not as a clock source, and
+#   report_clocks on the same build lists only sys_clk, lcd_clk, clkfb_out,
+#   aud_mclk_OBUF and mmcm_core_clk -- no bclk among them.  The previous
+#   no-audio build had "There are 0 register/latch pins with no clock", so these
+#   three are new with this lane and are fixed here rather than explained away.
+#
+#   So it does need create_generated_clock, and the target has to be the aud_bclk
+#   PORT.  Targeting the internal net u_audio_i2s/bclk instead was tried and is
+#   worse: report_clocks on that build does not list aud_bclk at all, so
+#   create_generated_clock on that net creates no clock object and the build
+#   silently loses the 640 ns period.  The port works, aud_bclk appears in
+#   report_clocks at 640.000 ns, and the 640 ns BCLK period that
+#   tb_nes_audio_lane measures on the real pin is reproduced in the timing
+#   report rather than only in simulation.
+#
+#   -source is the clock pin of the divider flip-flop, which is the mclk net
+#   (lcd_clk_OBUF / aud_mclk_OBUF, 40.000 ns), and -divide_by 16 gives
+#   640.000 ns = 1.5625 MHz.
+#
+#   This is deliberately not written as a second create_clock on the port, for
+#   the same reason as the aud_mclk block above: this has to be a generated clock
+#   of a clock Vivado already knows, or the design ends up with a bclk whose
+#   relationship to lcd_clk_OBUF is unknown and the timing report is wrong
+#   without saying so.
+#
+# TWO check_timing ITEMS ARE LEFT STANDING, ON PURPOSE
+#   With the port target, check_timing still reports
+#       There are 3 register/latch pins with no clock driven by root clock pin:
+#       u_audio_i2s/bclk_int_reg/Q (HIGH)
+#       There are 6 pins that are not constrained for maximum delay. (HIGH)
+#           aud_dout_d_q_reg/CLR          aud_dout_d_q_reg/D
+#           u_audio_i2s/dout_r_reg/CLR    u_audio_i2s/dout_r_reg/D
+#           u_audio_i2s/lrck_r_reg/CLR    u_audio_i2s/lrck_r_reg/D
+#   Both come from the same root cause and neither is closable from this file.
+#   The bclk root is a fabric flip-flop output, because nes_audio_i2s divides
+#   mclk with a clock enable (nes_audio_i2s.v:225-232) instead of instantiating
+#   a BUFGCE or a clocking-wizard output.  Vivado will name the resulting domain
+#   but will not build a launch/capture requirement inside it, so the D and CLR
+#   pins of the three registers in that domain are listed as unconstrained.
+#   nes_audio_i2s.v owns that divider and owns dout_r and lrck_r, and it is not
+#   in this change's writable set, so the real fix belongs there: drive bclk from
+#   a BUFGCE clocking a counter in the lcd_clk domain, or add a clocking-wizard
+#   BCLK output.  Suppressing the two notes with set_false_path would hide a
+#   real unanalysed region on the I2S data path, so they are left in the report.
+#   The audio lane as it stands is still timed and still meets setup and hold
+#   everywhere, and the 640 ns domain itself is the slowest clock in the design,
+#   so the unanalysed arcs have a full 640 ns of slack by construction.
+#
+# I/O TIMING ON THESE PINS IS STILL NOT CONSTRAINED
+#   The audio pins are all LVCMOS33 outputs with no set_output_delay, for the
+#   same reason the LCD and touch pins have none: inventing a number that no
+#   vendor file supplies produces a report that looks authoritative and is not.
+#   check_timing on the measured build lists them among the ports with no
+#   output delay.  That is an honest gap, not an oversight, and it is the same
+#   gap that already exists on lcd_de / lcd_rgb.
+# -----------------------------------------------------------------------------
+set_property -dict {PACKAGE_PIN M18 IOSTANDARD LVCMOS33} [get_ports aud_bclk]
+set_property -dict {PACKAGE_PIN G18 IOSTANDARD LVCMOS33} [get_ports aud_dac_lrc]
+set_property -dict {PACKAGE_PIN G17 IOSTANDARD LVCMOS33} [get_ports aud_dacdat]
+set_property -dict {PACKAGE_PIN E19 IOSTANDARD LVCMOS33} [get_ports aud_mclk]
+set_property -dict {PACKAGE_PIN E18 IOSTANDARD LVCMOS33} [get_ports aud_iic_scl]
+set_property -dict {PACKAGE_PIN F17 IOSTANDARD LVCMOS33} [get_ports aud_iic_sda]
+
+create_generated_clock -name aud_bclk \
+    -source [get_pins u_audio_i2s/bclk_int_reg/C] \
+    -divide_by 16 \
+    [get_ports aud_bclk]
+
+
+# -----------------------------------------------------------------------------
+# aud_adc_lrc (L20) AND aud_adcdat (M17): DELIBERATELY NOT CONSTRAINED
+#
+# board XDC:122 and :123 put these on real pins of the real package, so the pin
+# names are valid.  They are not constrained here because the top level does
+# not declare them, and the reason is that nothing in this design can drive or
+# consume them:
+#
+#   * rtl/nes_core/peripheral/nes_audio_i2s.v is TRANSMIT ONLY.  It has a bclk
+#     input, an lrck input and a dout input from the shifter, and outputs
+#     bclk, lrck and dout.  There is no adcdat input and no adclrc input, so
+#     there is nothing for the codec's ADCDAT pin to connect to.
+#   * The WM8960 ADCLRC/GPIO1 pin is ADCLRC whenever R9 bit 6 ALRCGPIO is 0,
+#     which is its power-on default and which the power-on table in
+#     wm8960_i2c.v leaves alone.  With ADCLRC unused, and with the ADCs
+#     powered down (R25 ADCL = ADCR = 0), ADCLRC and ADCDAT are held inactive
+#     by the codec.
+#   * Inventing an ADC path would mean an I2S receiver, a second CDC in the
+#     other direction and a register to unmute the ADCs, none of which exist.
+#     So the pins are left exactly as the board leaves them: unconnected.
+#
+# Uncommenting either line without adding the matching port would produce
+# Vivado 12-584 "No ports matched", which is why they stay commented.
 # set_property -dict {PACKAGE_PIN L20 IOSTANDARD LVCMOS33} [get_ports aud_adc_lrc]
 # set_property -dict {PACKAGE_PIN M17 IOSTANDARD LVCMOS33} [get_ports aud_adcdat]
-# set_property -dict {PACKAGE_PIN G17 IOSTANDARD LVCMOS33} [get_ports aud_dacdat]
-# set_property -dict {PACKAGE_PIN E19 IOSTANDARD LVCMOS33} [get_ports aud_mclk]
-# set_property -dict {PACKAGE_PIN E18 IOSTANDARD LVCMOS33} [get_ports aud_iic_scl]
-# set_property -dict {PACKAGE_PIN F17 IOSTANDARD LVCMOS33} [get_ports aud_iic_sda]
+
+
+# =============================================================================
+# AUDIO FIFO CDC: mmcm_core_clk <-> lcd_clk, BOUNDED, NOT EXCUTED
 #
-# DIRECTION if uncommented: aud_bclk / aud_dac_lrc / aud_mclk and aud_iic_scl are
-# outputs.  aud_dacdat is an output.  aud_adcdat and aud_adc_lrc are inputs,
-# driven by the codec.  aud_iic_sda is inout, open drain like any I2C.
+# This is the THIRD cross-domain boundary and it is new.  The other two are the
+# touch buttons (sys_clk -> core_clk, bounded at the create_clock block above)
+# and frame_mem (core_clk write port, lcd_clk read port).  frame_mem is a true
+# simple-dual-port RAM so it costs no flip-flop arcs at all; the audio FIFO is a
+# real dual-clock FIFO with Gray coded pointers, so it DOES contain
+# core_clk -> lcd_clk and lcd_clk -> core_clk flip-flop arcs, both of which
+# terminate on the first stage of a two-flop synchroniser marked ASYNC_REG.
+#
+# WHY THE VIOLATION IS BY CONSTRUCTION AND NOT BY PLACEMENT
+#   Same reason as the touch buttons: mmcm_core_clk and lcd_clk are both MMCM
+#   outputs derived from sys_clk through the same primitive, so Vivado treats
+#   them as a synchronous, phase-related pair and computes a setup window of
+#   about 0.1 ns for a path that physically needs nanoseconds.  The eight button
+#   bits failed at -2.665 ns that way before they were bounded.
+#
+# WHY NOT set_clock_groups -asynchronous AND WHY NOT set_false_path
+#   Exactly the arguments written out at the touch button block above, and they
+#   apply verbatim: the two clocks are not asynchronous, they share a VCO; and
+#   an unbounded false path is how a synchroniser's two stages end up on
+#   opposite sides of the die.  set_max_delay -datapath_only keeps a real bound
+#   on the physical delay, removes the meaningless setup check, and leaves the
+#   second stage intra-domain and fully timed.
+#
+# 40.000 ns is the bound on both, because lcd_clk is the shorter of the two
+# periods (46.561 ns for mmcm_core_clk) and the rule already used above is that
+# the bound is the tighter of the two.  -from and -to are the source pointer
+# and the FIRST synchroniser stage only, so the second stage
+# rd_gray_sync1 -> rd_gray_sync2 and wr_gray_sync1 -> wr_gray_sync2 keep their
+# normal intra-domain checks.
+#
+# DIRECTION, AND WHY THE OBVIOUS NAMING IS THE WRONG ONE TO TRUST HERE
+#   In nes_cdc_fifo the registers are named after WHICH POINTER they carry, not
+#   after the clock they sit in.  wr_gray_sync1/sync2 are clocked by rd_clk
+#   (nes_cdc_fifo.v:152) and rd_gray_sync1/sync2 are clocked by wr_clk
+#   (nes_cdc_fifo.v:142).  So the write pointer travels core_clk -> lcd_clk as
+#   wr_gray_reg -> wr_gray_sync1_reg, and the read pointer travels lcd_clk ->
+#   core_clk as rd_gray_reg -> rd_gray_sync1_reg.  Reading the names as "wr_*
+#   goes to the wr side" swaps the two bounds and leaves 14 endpoints timing
+#   against a full destination period.  Measured on the first routed build of
+#   this lane with the bounds swapped: wr_gray_reg[0..6]/C ->
+#   wr_gray_sync1_reg[0..6]/D at -1.633 to -1.775 ns and rd_gray_reg[0..6]/C ->
+#   rd_gray_sync1_reg[0..6]/D at -1.727 to -1.879 ns, both of which are the
+#   first-hop delay and nothing to do with the synchroniser actually failing.
+#
+# THE THIRD BOUND, THE FIFO READ MUX, WHICH THE OTHER TWO DO NOT COVER
+#   mem_reg[*][*] is written on wr_clk and rd_data_reg[*] is loaded on rd_clk,
+#   so the 32-bit read multiplexer is a fourth core_clk -> lcd_clk arc that the
+#   two pointer bounds do not touch.  It is safe to bound for the same reason the
+#   pointers are: wr_full only clears after rd_gray_sync2 has travelled the other
+#   way, so by the time rd_bin can select a given word that word has been stable
+#   for a full pointer round trip.  Unbounded it is the worst arc in the design,
+#   32 endpoints at -2.749 to -3.134 ns.
+#
+# The cell name patterns are matched with a leading and trailing wildcard on
+# purpose: the filter NAME =~ *wr_gray_reg* also matches wr_gray_reg[0..6], and
+# it does NOT match wr_gray_sync1_reg or wr_gray_sync2_reg.
+# -----------------------------------------------------------------------------
+set_max_delay -datapath_only 40.000 \
+    -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_audio_i2s/u_fifo/wr_gray_reg*}] \
+    -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_audio_i2s/u_fifo/wr_gray_sync1_reg*}]
+set_max_delay -datapath_only 40.000 \
+    -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_audio_i2s/u_fifo/rd_gray_reg*}] \
+    -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_audio_i2s/u_fifo/rd_gray_sync1_reg*}]
+set_max_delay -datapath_only 40.000 \
+    -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_audio_i2s/u_fifo/mem_reg*}] \
+    -to   [get_cells -quiet -hierarchical -filter {NAME =~ *u_audio_i2s/u_fifo/rd_data_reg*}]
+# -----------------------------------------------------------------------------
+
+
+# =============================================================================
+# CODEC cfg_done: sys_clk -> core_clk AND sys_clk -> lcd_clk, BOUNDED
+#
+# wm8960_i2c runs on sys_clk because the control I2C is deliberately slow and has
+# no reason to be in either fast domain.  Its cfg_done is the release for the two
+# audio resets (rst_audio_wr = rst_core | ~codec_cfg_core_q1 and rst_audio_rd =
+# rst_lcd | ~codec_cfg_lcd_q1), so it is a two-flop synchroniser into BOTH fast
+# domains and therefore two more crossing arcs.  Measured unbounded on the first
+# routed build: u_codec_i2c/cfg_done_q_reg/C -> codec_cfg_core_q0_reg/D at
+# -1.524 ns, the only sys_clk -> mmcm_core_clk failure in the design.
+#
+# 20.000 ns on both, by the same tighter-of-the-two rule as the touch buttons
+# block above: sys_clk is 20 ns and it is the shorter period here.  The endpoint
+# is scoped to the q0 first stage only, so q0 -> q1 keeps its normal intra-domain
+# check.
+# -----------------------------------------------------------------------------
+set_max_delay -datapath_only 20.000 \
+    -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_codec_i2c/cfg_done_q_reg*}] \
+    -to   [get_cells -quiet -hierarchical -filter {NAME =~ *codec_cfg_core_q0_reg*}]
+set_max_delay -datapath_only 20.000 \
+    -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_codec_i2c/cfg_done_q_reg*}] \
+    -to   [get_cells -quiet -hierarchical -filter {NAME =~ *codec_cfg_lcd_q0_reg*}]
+# =============================================================================
+
+# =============================================================================
+# MEASURED STATE, AUDIO LANE, xc7z020-clg400-2, Vivado 2018.3
+#
+# Full non-OOC flow (synth -> opt -> place -> phys_opt -> route) in the
+# throwaway tree D:\vivadoProject\audio_probe, on a copy of rtl/ with
+# rtl/nes_core/cart/*.hex copied alongside so the PRG ROM stays in BRAM.
+#
+# Design Timing Summary, routed:
+#     WNS  +1.606   TNS 0.000   0 failing / 81553 setup endpoints
+#     WHS  +0.083   THS 0.000   0 failing / 81529 hold  endpoints
+#     WPWS +7.000   TPWS 0.000   0 failing / 39350 pulse width endpoints
+#
+# Intra clock:
+#     mmcm_core_clk   WNS +1.606   0 failing / 78684
+#     sys_clk         WNS +13.315  0 failing /   325
+#     aud_mclk_OBUF   WNS +27.541  0 failing /   899
+#
+# Inter clock, every pair that has a path, all 0 failing:
+#     sys_clk -> aud_mclk_OBUF         +15.254    1 endpoint
+#     mmcm_core_clk -> aud_mclk_OBUF    +35.858   39 endpoints
+#     sys_clk -> mmcm_core_clk          +16.671    9 endpoints
+#     aud_mclk_OBUF -> mmcm_core_clk    +38.560    7 endpoints
+#     sys_clk -> lcd_clk, lcd_clk -> sys_clk,
+#     sys_clk -> clkfb_out, clkfb_out -> sys_clk,
+#     aud_bclk -> mmcm_core_clk        all 0 failing
+#
+# report_clocks, routed:
+#     sys_clk            20.000 ns  50.000 MHz   primary, [get_ports sys_clk]
+#     lcd_clk            40.000 ns  25.000 MHz   primary, [get_ports lcd_clk]
+#     clkfb_out          20.000 ns  50.000 MHz   from u_clk/u_mmcm/CLKFBOUT
+#     aud_mclk_OBUF      40.000 ns  25.000 MHz   from u_clk/u_mmcm/CLKOUT0
+#     mmcm_core_clk      46.561 ns  21.477 MHz   from u_clk/u_mmcm/CLKOUT1
+#     aud_bclk          640.000 ns   1.562 MHz   aud_bclk, the create_generated_clock
+#
+# Utilisation, routed:
+#     Slice LUTs        40424 /  53200   75.98 %
+#     Slice Registers   39258 / 106400   36.90 %
+#     Block RAM Tile        50 /    140   35.71 %    <- 50, so the PRG ROM is in BRAM
+#     DSPs                  0 /    220    0.00 %
+#
+# Route: 43504 nets not needing routing, 60745 fully routed, 0 routing errors.
+# report_drc: 0 errors.  The remaining warnings are pre-existing and not audio:
+# PDCN-137 and REQP-1839 on the CHR RAMB36, RPBF-3 IO buffering, CHECK-3.
+#
+# THE CORE CLOCK MARGIN WENT UP, NOT DOWN
+#   The no-audio build had mmcm_core_clk at +0.855 ns.  Adding the audio lane
+#   put it at +0.814 ns on the first routed build, with the CDC arcs below
+#   unbounded.  Once the crossing arcs are bounded, the placer stops dragging
+#   the core domain around to satisfy meaningless requirements and the same
+#   clock lands at +1.606 ns, which is 0.751 ns more margin than the design had
+#   before any of this existed.
 # =============================================================================

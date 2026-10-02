@@ -19,6 +19,7 @@ param(
         'zynq-clk-tb', 'zynq-top-tb',
         'peripheral-core', 'peripheral-i2c', 'sd-spi-cmd-core', 'sd-spi-cmd-tb',
         'touch-input-tb',
+        'audio-lane-tb',
         'cdc-fifo-core', 'cdc-fifo-tb',
         'i2s-shifter-core', 'i2s-shifter-tb',
         'audio-i2s-core', 'audio-i2s-tb'
@@ -125,7 +126,7 @@ $platformTopRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_top.v'
 $platformPllRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_pll_stub.v'
 $platformQsfIfRtl = Join-Path $repoRoot 'rtl\platform\ep4ce10\nes_ep4ce10_qsf_if.v'
 
-$wm8978I2cRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\wm8978_i2c.v'
+$wm8960I2cRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\wm8960_i2c.v'
 $sdSpiCmdRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\sd_spi_cmd.v'
 $cdcFifoRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_cdc_fifo.v'
 $i2sShifterRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_i2s_shifter.v'
@@ -165,7 +166,7 @@ $systemV5Sources = @($systemV5Rtl) + $ppuSources + $apuSources + $busSources + $
 $systemV6Sources = @($systemV6Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources + @($cartRomRtl, $systemV5Rtl)
 $platformSources = @($platformTopRtl, $platformPllRtl, $platformQsfIfRtl)
 $platformElabSources = $platformSources + $systemV4Sources + $lineBufferVgaSources + $vgaTimingSources
-$peripheralSources = @($wm8978I2cRtl)
+$peripheralSources = @($wm8960I2cRtl)
 $sdSpiCmdSources = @($sdSpiCmdRtl)
 $cdcFifoSources = @($cdcFifoRtl)
 $i2sShifterSources = @($i2sShifterRtl)
@@ -174,9 +175,15 @@ $touchInputSources = @($touchInputRtl)
 # The CHR fetch units are already in $systemV6Sources via $ppuSources; listing
 # them again here makes iverilog reject the whole target as a duplicate module.
 $zynqTopSources = @($zynqTopRtl, $zynqClkRtl, $touchInputRtl, $video800Rtl,
-                    $zynqClkTbRtl) + $systemV6Sources
+                    $zynqClkTbRtl) + $systemV6Sources + $audioI2sSources +
+                   @($wm8960I2cRtl)
 $zynqTopTbSources = $zynqTopSources + @($zynqTopTbRtl)
 $zynqClkSources = @($zynqClkRtl)
+# The audio lane lives inside nes_zynq_top.v: the decimator, the I2S wiring, the
+# one bit I2S delay and the codec I2C master are all top-level wiring, so the
+# lane bench has to elaborate the whole top plus the two submodules the top now
+# instantiates for the first time (nes_audio_i2s and wm8960_i2c).
+$audioLaneTbSources = $zynqTopSources + @(Join-Path $repoRoot 'tb\peripheral\tb_nes_audio_lane.v')
 
 $allTargets = @(
     [pscustomobject]@{
@@ -587,8 +594,8 @@ $allTargets = @(
     [pscustomobject]@{
         Id          = 'peripheral-core'
         Group       = 'peripheral'
-        Label       = 'WM8978 I2C master (elaboration)'
-        Top         = 'wm8978_i2c'
+        Label       = 'WM8960 I2C master (elaboration)'
+        Top         = 'wm8960_i2c'
         Sources     = $peripheralSources
         Standard    = '2001'
         Run         = $false
@@ -596,9 +603,9 @@ $allTargets = @(
     [pscustomobject]@{
         Id          = 'peripheral-i2c'
         Group       = 'peripheral'
-        Label       = 'WM8978 I2C master tb'
-        Top         = 'tb_wm8978_i2c'
-        Sources     = $peripheralSources + (Join-Path $repoRoot 'tb\peripheral\tb_wm8978_i2c.v')
+        Label       = 'WM8960 I2C master tb'
+        Top         = 'tb_wm8960_i2c'
+        Sources     = $peripheralSources + (Join-Path $repoRoot 'tb\peripheral\tb_wm8960_i2c.v')
         Standard    = '2012'
         Run         = $true
     },
@@ -698,6 +705,15 @@ $allTargets = @(
         Label       = 'Zynq-7020 platform top tb'
         Top         = 'tb_nes_zynq_top'
         Sources     = $zynqTopTbSources
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'audio-lane-tb'
+        Group       = 'peripheral'
+        Label       = 'Zynq-7020 audio lane tb (decimator + I2S + WM8960 I2C)'
+        Top         = 'tb_nes_audio_lane'
+        Sources     = $audioLaneTbSources
         Standard    = '2012'
         Run         = $true
     }
