@@ -39,3 +39,4 @@ output_files/
 *.hw
 *.runs/
 *.gen/
+build/

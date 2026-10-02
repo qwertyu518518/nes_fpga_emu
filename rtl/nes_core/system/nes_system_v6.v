@@ -41,6 +41,19 @@
 module nes_system_v6 #(
     parameter PRG_SIZE_BYTES = 131072,
     parameter integer PRG_ADDR_BITS = $clog2(PRG_SIZE_BYTES),
+    // Which hex image the internal PRG half of nes_cart_rom is loaded from.  The
+    // default is nes_cart_rom's own default, so every existing instance, and the
+    // committed gate, is byte-for-byte unaffected: the placeholder is still what
+    // $readmemh reads.  Only a caller that deliberately wants a different
+    // cartridge image overrides it.
+    //
+    // NOTE THIS IS NOT RELOCATABLE AND CANNOT BE.  $readmemh resolves a relative
+    // path against the SIMULATOR'S WORKING DIRECTORY, not against this source
+    // file's directory, so an override is only meaningful to whoever sets that
+    // working directory.  tools/sim_all.ps1 therefore does Push-Location to the
+    // repository root before compiling, which is what makes the default path
+    // resolve at all.
+    parameter PRG_INIT_FILE = "rtl/nes_core/cart/prg_placeholder.hex",
     parameter integer CHR_ADDR_BITS = 17,
     parameter [7:0] MAPPER_SELECT = 8'd0,
     parameter [2:0] HEADER_MIRRORING = 3'd0,
@@ -335,7 +348,8 @@ nes_cart_rom #(
     .PRG_SIZE_BYTES(PRG_SIZE_BYTES),
     .PRG_ADDR_BITS(PRG_ADDR_BITS),
     .PRG_ENABLE(1),
-    .CHR_ENABLE(0)
+    .CHR_ENABLE(0),
+    .PRG_INIT_FILE(PRG_INIT_FILE)
 ) u_prg_rom (
     .clk(clk),
     .reset(reset),

@@ -11,7 +11,7 @@ param(
         'bus-tb',
         'mapper-nrom', 'mapper-combined', 'mapper-mmc1', 'mapper-mmc3',
         'controller-tb',
-        'cart-ines-tb', 'cart-rom-tb',
+        'cart-ines-tb', 'cart-rom-tb', 'cart-boot-rom-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
         'video800-tb', 'video800-dc-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
@@ -135,6 +135,7 @@ $touchInputRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_touch_input.v'
 $zynqTopRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_zynq_top.v'
 $zynqTopTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_zynq_top.v'
 $zynqClkTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_zynq_clk.v'
+$cartBootRomTbRtl = Join-Path $repoRoot 'tb\cart\tb_nes_boot_rom.v'
 
 $cpuSources = @($cpuRtl)
 $ppuSources = @($ppuSpriteRtl, $ppuRtl, $chrFetchUnitRtl, $spriteChrFetchRtl)
@@ -164,6 +165,13 @@ $systemV5Sources = @($systemV5Rtl) + $ppuSources + $apuSources + $busSources + $
 # 0 in that instance, so only the PRG hex is read and only the 8-bit PRG port
 # reaches this target's source list.
 $systemV6Sources = @($systemV6Rtl) + $ppuSources + $apuSources + $busSources + $oamDmaSources + $controllerSources + $mapperSources + $cpuSources + @($cartRomRtl, $systemV5Rtl)
+# tb_nes_boot_rom boots a cartridge image on nes_system_v6.  It elaborates the
+# whole v6 core, so it reuses $systemV6Sources; nes_cart_rom is already in that
+# list and the bench instantiates its own CHR-only copy on top, so no extra RTL
+# is needed.  Its PRG and CHR hex paths are module parameters that DEFAULT to
+# the committed placeholders, which is what lets this target run from committed
+# files alone; a real .nes run overrides them from a wrapper outside the gate.
+$cartBootRomTbSources = $systemV6Sources + @($cartBootRomTbRtl)
 $platformSources = @($platformTopRtl, $platformPllRtl, $platformQsfIfRtl)
 $platformElabSources = $platformSources + $systemV4Sources + $lineBufferVgaSources + $vgaTimingSources
 $peripheralSources = @($wm8960I2cRtl)
@@ -399,6 +407,15 @@ $allTargets = @(
         Label       = 'Cartridge PRG/CHR block RAM tb'
         Top         = 'tb_nes_cart_rom'
         Sources     = $cartRomSources + (Join-Path $repoRoot 'tb\cart\tb_nes_cart_rom.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'cart-boot-rom-tb'
+        Group       = 'cart'
+        Label       = 'Cartridge boot tb (nes_system_v6, placeholder PRG/CHR)'
+        Top         = 'tb_nes_boot_rom'
+        Sources     = $cartBootRomTbSources
         Standard    = '2012'
         Run         = $true
     },

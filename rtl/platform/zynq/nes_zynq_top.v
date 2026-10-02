@@ -242,15 +242,14 @@ module nes_zynq_top #(
     // array uninitialised and Vivado then optimises it away silently, so
     // tb_nes_zynq_top.v asserts that the array holds non-constant content.
     //
-    // The PRG path is NOT a parameter here and cannot be: nes_system_v6 has no
-    // such parameter and instantiates nes_cart_rom with PRG_ENABLE(1) using
-    // nes_cart_rom's own default, so the PRG hex path is fixed at
-    // "rtl/nes_core/cart/prg_placeholder.hex" relative to whatever directory
-    // the simulator or Vivado was started in.  Every consumer of this design,
-    // including the throwaway synthesis tree, must therefore replicate
-    // rtl/nes_core/cart/*.hex at that relative path.  Making the PRG path
-    // relocatable needs a parameter added to nes_system_v6, which is a change to
-    // a gated module and therefore out of scope for the platform top.
+    // The PRG path is NOT a parameter of this top: nes_system_v6 instantiates
+    // nes_cart_rom with PRG_ENABLE(1) internally, so the PRG hex path comes from
+    // nes_system_v6's own PRG_INIT_FILE, which defaults to
+    // "rtl/nes_core/cart/prg_placeholder.hex" relative to whatever directory the
+    // simulator or Vivado was started in.  To build a real cartridge instead,
+    // override PRG_INIT_FILE on the u_core instance below and replicate the hex
+    // at that path; the CHR half here is separately relocatable via
+    // CHR_INIT_FILE.
     parameter         CHR_INIT_FILE       = "rtl/nes_core/cart/chr_placeholder.hex"
 ) (
     input  wire        sys_clk,
