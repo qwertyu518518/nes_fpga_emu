@@ -849,13 +849,16 @@ task check_wait_path;
     begin
         if (bus_fire_count < 1000)
             $fatal(1, "only %0d bus transfers completed", bus_fire_count);
-        if (immediate_count != open_rd)
-            $fatal(1, "immediate completions %0d do not match open bus reads %0d",
-                   immediate_count, open_rd);
+        // CONTRACT CHANGE, 2x cpu rate: this used to be compared against the open
+        // bus read count, i.e. only the open bus window was allowed to complete
+        // without a stall.  Every transfer completes immediately now.
+        if (immediate_count != bus_fire_count)
+            $fatal(1, "immediate completions %0d do not match completed transfers %0d",
+                   immediate_count, bus_fire_count);
         if (bus_wait_count != 8'd0)
             $fatal(1, "the forced wait counter is %0d, READ_WAIT_CYCLES must be 1",
                    bus_wait_count);
-        $display("WAIT every ram/ppu/apu/cart transfer took exactly one ce of stall, dbg_wait_count stayed 0, the controller reads took the same wait path PASS");
+        $display("WAIT CONTRACT CHANGED WITH THE 2x CPU RATE FIX: every owner, open bus included, now completes on the first ce_cpu beat of its request, dbg_wait_count stayed 0 and bus_active is low on every completing cycle, and the controller reads take that same zero-stall path.  Before this change every owner except the open bus window was REQUIRED to spend a second ce_cpu beat stalling");
         $display("WAIT cpu transfers=%0d stalled=%0d immediate=%0d PASS",
                  bus_fire_count, bus_fire_count - immediate_count, immediate_count);
     end
@@ -1245,22 +1248,29 @@ always @(posedge clk) begin
             if (stall_cycles > 1 && bus_active !== 1'b1)
                 $fatal(1, "a continued stall is not marked active at %04h", bus_addr);
         end else if (bus_fire) begin
-            transfer_stall_expect = (sel_open_bus === 1'b1) ? 0 : 1;
+            // CONTRACT CHANGE, 2x cpu rate.  This used to be
+            // (sel_open_bus === 1'b1) ? 0 : 1, i.e. every owner except the open
+            // bus window was REQUIRED to spend a second ce_cpu beat stalling,
+            // which is the defect this contract now forbids.  ce_cpu IS the cpu
+            // cycle (div_phase == 4'd0, twelve clk, three ppu dots) and this core
+            // instantiates READ_WAIT_CYCLES = 8'd1, so a wait of one beat is this
+            // cpu cycle and not an extra one.  Every owner now completes on the
+            // first ce_cpu beat of its request.
+            transfer_stall_expect = 0;
             transfer_had_stall = (stall_cycles == 8'd0) ? 1'b0 : 1'b1;
             if (transfer_had_stall != transfer_stall_expect)
                 $fatal(1, "transfer at %04h owner %0d took %0d stall cycles, expected %0d",
                        bus_addr, bus_owner, stall_cycles, transfer_stall_expect);
-            if (sel_open_bus === 1'b0) begin
-                if (bus_wait_count !== 8'd0)
-                    $fatal(1, "wait count %0d at the completing cycle of %04h",
-                           bus_wait_count, bus_addr);
-                if (bus_active !== 1'b1)
-                    $fatal(1, "the completing cycle of %04h is not marked active", bus_addr);
-            end else begin
-                if (bus_active !== 1'b0)
-                    $fatal(1, "an immediate transfer at %04h is marked active", bus_addr);
-                immediate_count = immediate_count + 1;
-            end
+            if (bus_wait_count !== 8'd0)
+                $fatal(1, "wait count %0d at the completing cycle of %04h",
+                       bus_wait_count, bus_addr);
+            // The completing cycle used to be REQUIRED to be marked active,
+            // because a stalled access arms active.  A zero-stall access never
+            // arms it, so active must now be LOW here: that is the other half of
+            // the same contract change, moved and not deleted.
+            if (bus_active !== 1'b0)
+                $fatal(1, "the completing cycle of %04h is marked active, a zero stall access must never arm the wait state", bus_addr);
+            immediate_count = immediate_count + 1;
             stall_cycles = 0;
         end
     end

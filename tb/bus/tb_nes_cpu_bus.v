@@ -619,6 +619,129 @@ always @(posedge clk) begin
     end
 end
 
+// ------------------------------------------------ zero-stall invariant, all 3
+//
+// ce IS the cpu cycle on the cpu port, so a wait of zero or one beat is free:
+// on any clk where the cpu has a request up, the bus is not held, and the
+// owner's wait_need is 8'd0 or 8'd1, ready must ALREADY be high.  The only other
+// term in ready_c is owner_ack, so a modelled slave that is still withholding
+// its ack is left out of the antecedent rather than being charged to the wait.
+//
+// This is the check the old suite could not make.  Every other wait check here
+// counts how LONG a stall lasted, which a design that stalls one beat too many
+// passes unchanged.  This one is a bound on the stall length of zero.
+//
+// It is NOT vacuous on any of the three instances and it is not weakened to make
+// it so.  dut (READ_WAIT_CYCLES=0, RAM_READ_SYNC=0) has wait_need 0 for every
+// owner, so ready has to be high on the very first clk of every request.  dut_v
+// (READ_WAIT_CYCLES=1, RAM_READ_SYNC=1) has wait_need 1 for RAM, PPU, APU-IO,
+// CART-RAM and CART-ROM, which is exactly the configuration the v2..v6 cores
+// instantiate, and there ready has to be high on the first clk as well.
+// dut_w (READ_WAIT_CYCLES=3, RAM_READ_SYNC=1) is above the threshold for every
+// owner except RAM, which carries the same 8'd1 as on dut_v, so it is monitored
+// on that owner and is expected to stay silent -- if it does not, the counter
+// says so.  opp/err are counted per instance so a silent monitor can be told
+// apart from a passing one.
+integer zs_opp;
+integer zs_err;
+integer zs_opp_w;
+integer zs_err_w;
+integer zs_opp_v;
+integer zs_err_v;
+
+always @(posedge clk) begin
+    if (reset === 1'b0) begin
+        if ((req0 !== 1'b0) && (bus_hold === 1'b0) && (dut.wait_need <= 8'd1)) begin
+            zs_opp = zs_opp + 1;
+            if ((cpu_ready === 1'b0) && (dut.owner_ack !== 1'b0))
+                zs_err = zs_err + 1;
+        end
+        if ((req1 !== 1'b0) && (bus_hold === 1'b0) && (dut_w.wait_need <= 8'd1)) begin
+            zs_opp_w = zs_opp_w + 1;
+            if ((cpu_ready_w === 1'b0) && (dut_w.owner_ack !== 1'b0))
+                zs_err_w = zs_err_w + 1;
+        end
+        if ((req2 !== 1'b0) && (bus_hold === 1'b0) && (dut_v.wait_need <= 8'd1)) begin
+            zs_opp_v = zs_opp_v + 1;
+            if ((cpu_ready_v === 1'b0) && (dut_v.owner_ack !== 1'b0))
+                zs_err_v = zs_err_v + 1;
+        end
+    end
+end
+
+task check_zero_stall;
+    begin
+        $display("ZERO-STALL opportunities/errors: zero-wait %0d/%0d  forced-wait %0d/%0d  READ_WAIT_CYCLES=1 %0d/%0d",
+                 zs_opp, zs_err, zs_opp_w, zs_err_w, zs_opp_v, zs_err_v);
+        if (zs_opp < 50)
+            $fatal(1, "zero-stall: only %0d clk qualified on the zero wait config, the invariant was never exercised", zs_opp);
+        if (zs_opp_v < 100)
+            $fatal(1, "zero-stall: only %0d clk qualified on the READ_WAIT_CYCLES=1 config, the invariant was never exercised", zs_opp_v);
+        if (zs_err != 0)
+            $fatal(1, "zero-stall: the zero wait config held ready low on %0d of %0d clk where wait_need<=1 with a request up", zs_err, zs_opp);
+        if (zs_err_v != 0)
+            $fatal(1, "zero-stall: the READ_WAIT_CYCLES=1 config held ready low on %0d of %0d clk where wait_need<=1 with a request up", zs_err_v, zs_opp_v);
+        if (zs_err_w != 0)
+            $fatal(1, "zero-stall: the forced wait config held ready low on %0d of %0d clk where wait_need<=1 with a request up", zs_err_w, zs_opp_w);
+        $display("ZERO-STALL on every clk with a request up, no bus_hold and wait_need<=1, ready was already high: zero-wait %0d/%0d clk, READ_WAIT_CYCLES=1 %0d/%0d clk, forced-wait (RAM owner only) %0d/%0d clk PASS",
+                 zs_opp - zs_err, zs_opp, zs_opp_v - zs_err_v, zs_opp_v,
+                 zs_opp_w - zs_err_w, zs_opp_w);
+    end
+endtask
+
+// A dedicated sweep so the READ_WAIT_CYCLES=1 invariant above is exercised on
+// every owner class hundreds of times rather than a handful of times by
+// accident.  It asserts only req2, so the other two instances stay idle and no
+// aggregate counter in this file moves.  The per-transfer beat count is NOT
+// asserted here -- that is check_zero_stall's job, and asserting it twice would
+// make one of the two assertions unreachable.
+task test_zero_stall_owners;
+    integer zs_iter;
+    integer zs_guard;
+    reg zs_done;
+    begin
+        ppu_ack_delay = 8'd0;
+        tick;
+        apu_ack_delay = 8'd0;
+        tick;
+        cart_ack_delay = 8'd0;
+        tick;
+        cpu_we = 1'b0;
+        cpu_dout = 8'h00;
+        bus_hold = 1'b0;
+        ce = 1'b1;
+        for (zs_iter = 0; zs_iter < 320; zs_iter = zs_iter + 1) begin
+            case (zs_iter % 5)
+                0: cpu_addr = 16'h0100 + zs_iter[7:0];
+                1: cpu_addr = 16'h2002;
+                2: cpu_addr = 16'h4015;
+                3: cpu_addr = 16'hC000 + zs_iter[7:0];
+                default: cpu_addr = 16'h4020;
+            endcase
+            req0 = 1'b0;
+            req1 = 1'b0;
+            req2 = 1'b1;
+            zs_guard = 0;
+            zs_done = 1'b0;
+            while ((zs_done === 1'b0) && (zs_guard < 24)) begin
+                tick;
+                zs_guard = zs_guard + 1;
+                if (cpu_fire_v !== 1'b0)
+                    zs_done = 1'b1;
+            end
+            if (zs_done === 1'b0)
+                $fatal(1, "zero stall probe: the transfer at %04h never completed", cpu_addr);
+            req2 = 1'b0;
+            tick;
+        end
+        req0 = 1'b0;
+        req1 = 1'b0;
+        req2 = 1'b0;
+        cpu_addr = 16'h0000;
+        tick;
+    end
+endtask
+
 function [7:0] rom_sig;
     input [15:0] address;
     begin
@@ -675,7 +798,12 @@ function [7:0] expect_delayed;
     begin
         case (access_class)
             CLASS_OPEN: expect_delayed = 8'd1;
-            CLASS_RAM: expect_delayed = 8'd2;
+            // CONTRACT CHANGE, 2x cpu rate: this used to be 2.  The forced wait
+            // config's RAM owner carries wait_need 1 (RAM_READ_SYNC=1), and one
+            // ce_cpu beat IS the cpu cycle on this port, so a RAM transfer costs
+            // one beat on every configuration.  The four-beat ext-owner path is
+            // untouched and is still checked by the default arm below.
+            CLASS_RAM: expect_delayed = 8'd1;
             CLASS_NONE: expect_delayed = 8'd0;
             default: expect_delayed = 8'd1 + ((ack_extra > 8'd3) ? ack_extra : 8'd3);
         endcase
@@ -904,12 +1032,21 @@ task test_reset_state;
         cpu_addr = 16'h0000;
         tick;
         check1("ram is ready before any request", cpu_ready, 1'b1);
-        check1("delayed ram is not ready before the request starts", cpu_ready_w, 1'b0);
+        // CONTRACT CHANGE, 2x cpu rate.  This used to read 1'b0: the forced wait
+        // config's RAM owner carries wait_need 1 (RAM_READ_SYNC=1) and a wait of
+        // one ce_cpu beat is this cpu cycle, not an extra one, so ready is
+        // already high.  The forced wait config's FOUR-beat behaviour is not
+        // weakened: that comes from the ext owners, whose wait_need is
+        // READ_WAIT_CYCLES=3, and expect_delayed still charges them 4.
+        check1("delayed ram is ready before any request starts", cpu_ready_w, 1'b1);
+        cpu_addr = 16'h2002;
+        tick;
+        check1("delayed ppu region is not ready before the request starts", cpu_ready_w, 1'b0);
         cpu_addr = 16'h4020;
         tick;
         check1("open bus region is ready before any request", cpu_ready, 1'b1);
         check1("delayed open bus region is ready before any request", cpu_ready_w, 1'b1);
-        $display("reset state and default zero wait ready PASS");
+        $display("reset state, and ready before any request: zero wait high on every owner, forced wait high on RAM and open bus and low on the ext owners (wait_need 3), READ_WAIT_CYCLES=1 high everywhere PASS");
     end
 endtask
 
@@ -1735,7 +1872,7 @@ task test_ce_gated_progress;
         saved_ram_we = ram_we_events;
         saved_ram_we_w = ram_we_events_w;
         saved_ram_we_v = ram_we_events_v;
-        ce_transfer(16'h0100, 1'b1, 8'h6E, "ce gated ram write", 5, 0, 1, 2, 2);
+        ce_transfer(16'h0100, 1'b1, 8'h6E, "ce gated ram write", 5, 0, 1, 1, 1);
         check8("ce gated ram write lands on the open bus", dbg_open_bus, 8'h6E);
         check8("ce gated ram write lands on the forced wait open bus", dbg_open_bus_w, 8'h6E);
         check8("ce gated ram write lands on the READ_WAIT_CYCLES=1 open bus", dbg_open_bus_v, 8'h6E);
@@ -1745,13 +1882,13 @@ task test_ce_gated_progress;
         check1("ce gated ram write strobes on the completing cycle", cap0_ram_we, 1'b1);
         check1("ce gated ram write strobes on the completing cycle on the forced wait config", cap1_ram_we, 1'b1);
         check1("ce gated ram write strobes on the completing cycle on the READ_WAIT_CYCLES=1 config", ce_v_ram_we, 1'b1);
-        ce_transfer(16'h0100, 1'b0, 8'h00, "ce gated ram read back", 7, 0, 1, 2, 2);
+        ce_transfer(16'h0100, 1'b0, 8'h00, "ce gated ram read back", 7, 0, 1, 1, 1);
         check8("ce gated ram read back on the zero wait config", ce_data0, 8'h6E);
         check8("ce gated ram read back on the forced wait config", ce_data1, 8'h6E);
         check8("ce gated ram read back on the READ_WAIT_CYCLES=1 config", ce_data2, 8'h6E);
         cpu_write(16'h2000, 8'h3C, "ce gated ppu seed write", CLASS_EXT, 8'd0);
         saved_ppu_reads = ppu_read_xfers;
-        ce_transfer(16'h2000, 1'b0, 8'h00, "ce gated ppu read", 11, 0, 1, 4, 2);
+        ce_transfer(16'h2000, 1'b0, 8'h00, "ce gated ppu read", 11, 0, 1, 4, 1);
         check8("ce gated ppu read data on the zero wait config", ce_data0, 8'h3C);
         check8("ce gated ppu read data on the forced wait config", ce_data1, 8'h3C);
         check8("ce gated ppu read data on the READ_WAIT_CYCLES=1 config", ce_data2, 8'h3C);
@@ -1760,7 +1897,7 @@ task test_ce_gated_progress;
         check1("ce gated ppu read keeps ppu_wr low", cap0_ppu_wr, 1'b0);
         check1("ce gated ppu read keeps ppu_wr low on the forced wait config", cap1_ppu_wr, 1'b0);
         check1("ce gated ppu read keeps ppu_wr low on the READ_WAIT_CYCLES=1 config", ce_v_ppu_wr, 1'b0);
-        ce_transfer(16'hC000, 1'b0, 8'h00, "ce gated rom read", 1, 0, 1, 4, 2);
+        ce_transfer(16'hC000, 1'b0, 8'h00, "ce gated rom read", 1, 0, 1, 4, 1);
         check8("ce gated rom read data on the zero wait config", ce_data0, rom_sig(16'hC000));
         check8("ce gated rom read data on the forced wait config", ce_data1, rom_sig(16'hC000));
         check8("ce gated rom read data on the READ_WAIT_CYCLES=1 config", ce_data2, rom_sig(16'hC000));
@@ -1783,7 +1920,7 @@ task test_ce_hold;
         ppu_ack_delay = 8'd0;
         tick;
         cpu_write(16'h2001, 8'h5D, "ce gated hold seed write", CLASS_EXT, 8'd0);
-        ce_transfer(16'h2001, 1'b0, 8'h00, "ce gated read with a three cycle hold", 4, 3, 4, 7, 5);
+        ce_transfer(16'h2001, 1'b0, 8'h00, "ce gated read with a three cycle hold", 4, 3, 4, 7, 4);
         check8("held then released ce transfer data on the zero wait config", ce_data0, 8'h5D);
         check8("held then released ce transfer data on the forced wait config", ce_data1, 8'h5D);
         check8("held then released ce transfer data on the READ_WAIT_CYCLES=1 config", ce_data2, 8'h5D);
@@ -1928,7 +2065,7 @@ task test_dma_ram_read;
         tick;
         cart_ack_delay = 8'd0;
         tick;
-        ce_transfer(16'h07F0, 1'b1, 8'h3C, "dma ram seed write", 0, 0, 1, 2, 2);
+        ce_transfer(16'h07F0, 1'b1, 8'h3C, "dma ram seed write", 0, 0, 1, 1, 1);
         dma_read(16'h07F0, 1'b1, 1'b0, "dma ram read 07F0");
         check8("dma ram data on the zero wait config", dma_data, 8'h3C);
         check8("dma ram data on the forced wait config", dma_data_w, 8'h3C);
@@ -1938,6 +2075,16 @@ task test_dma_ram_read;
         check8("dma ram mirror data on the zero wait config", dma_data, 8'h3C);
         check8("dma ram mirror data on the forced wait config", dma_data_w, 8'h3C);
         check8("dma ram mirror data on the READ_WAIT_CYCLES=1 config", dma_data_v, 8'h3C);
+        // DMC SLOT COST, new contract.  Real hardware holds the cpu off the bus
+        // for 4 cpu cycles per DMC byte -- 1 for the grant plus 3 for the fetch
+        // -- and NESdev's DMC rate table counts those 4 in APU cycles.  Before
+        // DMC_READ_WAIT_CYCLES existed the dmc request inherited the cpu path's
+        // READ_WAIT_CYCLES, so it cost 1 cycle on the zero-wait config, 4 on the
+        // forced one and 2 on the READ_WAIT_CYCLES=1 one: the same fetch cost
+        // three different amounts on the three configurations.  It is now 4 on
+        // all three, on the ram owner as well as on the cart owners, because the
+        // number belongs to the request source and not to the address decode.
+        dma_cycles_expect("dmc slot cost on the ram owner is 1 grant + 3", 4, 4, 4);
         dma_read(16'h00F0, 1'b1, 1'b0, "dma ram read of an untouched cell");
         check8("untouched dma ram cell on the zero wait config", dma_data, 8'h00);
         check8("untouched dma ram cell on the forced wait config", dma_data_w, 8'h00);
@@ -1963,6 +2110,7 @@ task test_dma_prg_read;
         check8("dma prg rom data on the forced wait config", dma_data_w, rom_sig(16'hC123));
         check8("dma prg rom data on the READ_WAIT_CYCLES=1 config", dma_data_v, rom_sig(16'hC123));
         check16("dma prg rom read drives the full cart address", dma_seen_cart_addr, 16'hC123);
+        dma_cycles_expect("dmc slot cost on the prg owner is 1 grant + 3", 4, 4, 4);
         dma_read(16'hFFFF, 1'b1, 1'b0, "dma prg rom read FFFF");
         check8("dma prg rom top byte on the zero wait config", dma_data, rom_sig(16'hFFFF));
         dma_cycles_expect("dma prg read with an immediate cart ack", 1, 4, 2);
@@ -2461,6 +2609,12 @@ initial begin
     dma_mon_sel = 6'b000000;
     dma_mon_ram_addr = 11'h000;
     dma_mon_dma_addr = 16'h0000;
+    zs_opp = 0;
+    zs_err = 0;
+    zs_opp_w = 0;
+    zs_err_w = 0;
+    zs_opp_v = 0;
+    zs_err_v = 0;
 
     for (init_index = 0; init_index < 8; init_index = init_index + 1)
         ppu_regs[init_index] = 8'h00;
@@ -2502,6 +2656,10 @@ initial begin
     test_dma_priority;
     test_dma_withdraw;
     test_dma_reset;
+
+    test_zero_stall_owners;
+
+    check_zero_stall;
 
     $display("CHECKS %0d", check_count);
     $display("PASS tb_nes_cpu_bus ram-mirror/owner/wait/stall/hold/ce/dma");

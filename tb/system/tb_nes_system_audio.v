@@ -143,6 +143,19 @@ integer vblank_rise_count;
 integer vblank_fall_count;
 integer clear_index;
 integer have_frame_mark;
+integer rate_frames;
+integer rate_bad;
+integer rate_ce_frame;
+integer rate_fire_frame;
+integer rate_ce_mark;
+integer rate_fire_mark;
+integer rate_ce_min;
+integer rate_ce_max;
+integer rate_fire_min;
+integer rate_fire_max;
+integer rate_bad_ce;
+integer rate_bad_fire;
+reg     rate_warm;
 integer have_frame_irq_mark;
 
 nes_system_v1 dut (
@@ -722,6 +735,42 @@ always @(posedge clk) begin
             else
                 have_frame_mark = 1;
             frame_mark = clk_count;
+            // RATE-CPU, the apu cross-check.  The apu's frame sequencer is
+            // clocked by the SAME ce_cpu the cpu uses (nes_system_v1.v's APU
+            // .ce(ce_cpu)), and the frame irq above proves that ce_cpu is 29829
+            // long.  So ce_cpu is the wall-time base both halves share, and in
+            // this version the cpu has no bus arbiter at all, which makes it the
+            // reference that says what a correct cpu access rate looks like: one
+            // completed access per ce_cpu, one to one.  A frame is 357368 clk, so
+            // ce_cpu fires 357368/12 = 29780 or 29781 times in it.  v2..v6 add the
+            // arbiter and have to MEASURE the same ratio; this is the number they
+            // are measured against, and it is why the apu is not separated from
+            // ce_cpu.
+            if (rate_warm === 1'b1) begin
+                rate_ce_frame = apu_ce_count - rate_ce_mark;
+                rate_fire_frame = cpu_bus_count - rate_fire_mark;
+                rate_frames = rate_frames + 1;
+                if (rate_ce_frame < rate_ce_min)
+                    rate_ce_min = rate_ce_frame;
+                if (rate_ce_frame > rate_ce_max)
+                    rate_ce_max = rate_ce_frame;
+                if (rate_fire_frame < rate_fire_min)
+                    rate_fire_min = rate_fire_frame;
+                if (rate_fire_frame > rate_fire_max)
+                    rate_fire_max = rate_fire_frame;
+                if ((rate_ce_frame != rate_fire_frame) ||
+                    (rate_ce_frame < 29780) || (rate_ce_frame > 29781)) begin
+                    rate_bad = rate_bad + 1;
+                    if (rate_bad == 1) begin
+                        rate_bad_ce = rate_ce_frame;
+                        rate_bad_fire = rate_fire_frame;
+                    end
+                end
+            end else begin
+                rate_warm = 1'b1;
+            end
+            rate_ce_mark = apu_ce_count;
+            rate_fire_mark = cpu_bus_count;
         end
         prev_frame_done = frame_done;
 
@@ -852,6 +901,19 @@ initial begin
     vblank_rise_count = 0;
     vblank_fall_count = 0;
     have_frame_mark = 0;
+    rate_frames = 0;
+    rate_bad = 0;
+    rate_ce_frame = 0;
+    rate_fire_frame = 0;
+    rate_ce_mark = 0;
+    rate_fire_mark = 0;
+    rate_ce_min = 1000000;
+    rate_ce_max = -1;
+    rate_fire_min = 1000000;
+    rate_fire_max = -1;
+    rate_bad_ce = 0;
+    rate_bad_fire = 0;
+    rate_warm = 1'b0;
     have_frame_irq_mark = 0;
     load_prg_rom;
     load_video_ram;
@@ -1101,6 +1163,15 @@ initial begin
         $fatal(1, "frame period got %0d clk expected %0d", frame_clk_delta, FRAME_PERIOD_CLK);
     $display("TIMING frame period=%0dclk over %0d frames, apu ce pulses=%0d, cpu bus cycles=%0d PASS",
              frame_clk_delta, frame_count, apu_ce_count, cpu_bus_count);
+
+    if (rate_frames < 1)
+        $fatal(1, "RATE-CPU no full frame window was measured");
+    if (rate_bad != 0)
+        $fatal(1, "RATE-CPU %0d of %0d frames broke the identity; FIRST: ce_cpu=%0d completed cpu bus cycles=%0d, required one for one and 29780/29781",
+               rate_bad, rate_frames, rate_bad_ce, rate_bad_fire);
+    $display("RATE-CPU one ce_cpu IS one cpu cycle and the apu frame sequencer is clocked by it, so this is the reference ratio the bus-arbitrated cores are measured against.  Over %0d full frame windows of %0d clk: ce_cpu per frame %0d..%0d, completed cpu bus cycles per frame %0d..%0d, and on every one of them the two counts are EQUAL (violations=%0d).  A frame is 357368/12 = 29780 or 29781 ce_cpu PASS",
+             rate_frames, FRAME_PERIOD_CLK, rate_ce_min, rate_ce_max,
+             rate_fire_min, rate_fire_max, rate_bad);
 
     if (cpu_cycle !== cpu_bus_count[31:0])
         $fatal(1, "cpu_cycle %0d does not match bus fire count %0d", cpu_cycle, cpu_bus_count);

@@ -6,7 +6,8 @@ module nes_cpu_bus #(
     parameter RAM_READ_SYNC = 1'b0,
     parameter [7:0] RAM_INIT = 8'h00,
     parameter DMA_PRESENT = 1'b0,
-    parameter [7:0] DMA_MMIO_VALUE = 8'h00
+    parameter [7:0] DMA_MMIO_VALUE = 8'h00,
+    parameter [7:0] DMC_READ_WAIT_CYCLES = 8'd3
 )(
     input wire clk,
     input wire reset,
@@ -162,10 +163,29 @@ assign dma_ext = (dma_owner == OWNER_CART_RAM) || (dma_owner == OWNER_CART_ROM);
 assign dma_cart_sel = dma_grant && dma_ext;
 assign dma_ack_src = dma_ext ? cart_ack : 1'b1;
 
-assign dma_wait_need = (dma_owner == OWNER_OPEN) ? 8'd0 :
+// The dma read port's wait is PER REQUEST SOURCE, not per address decode.  An
+// oam dma read is a plain read of whatever the page points at, so it keeps the
+// decode's wait.  A dmc sample fetch is not a plain read: real hardware holds
+// the cpu off the bus for 4 cpu cycles per DMC byte, 1 for the grant plus 3 for
+// the fetch, and NESdev's DMC rate table counts those 4 in APU cycles.  Left on
+// the shared READ_WAIT_CYCLES it inherits whatever the cpu path happens to be
+// configured for, which is a coupling between two different contracts.  The
+// number is a parameter so a core can change it without editing this file.
+assign dma_wait_need = dma_pick_dmc ? DMC_READ_WAIT_CYCLES :
+                       (dma_owner == OWNER_OPEN) ? 8'd0 :
                        (dma_owner == OWNER_RAM) ? (RAM_READ_SYNC ? 8'd1 : 8'd0) :
                        dma_ext ? READ_WAIT_CYCLES : 8'd0;
 
+// NOTE, and this is the reason the cpu port's zero-stall rule is NOT repeated
+// here.  That rule (ready_c, below) rests on the cpu presenting its address for
+// eleven clk before the edge that completes the access, which is what buys a
+// registered read its one clk of lead.  The dma port has no such window: dma_addr
+// is muxed against dma_req_oam/dma_req_dmc, so the address and the request
+// become valid on the SAME clk, and dma_grant can therefore be true on the very
+// first clk the address is up.  A wait of one ce here is therefore the read's
+// lead, not a wasted cpu cycle, and dropping it hands the requester the previous
+// cell's byte: tb_nes_cpu_bus's "dma ram data on the forced wait config" is what
+// catches that.  So this stays at a hard zero.
 assign dma_ready = dma_grant &&
                    (dma_active_r ? (dma_wait_cnt == 8'd0) : (dma_wait_need == 8'd0)) &&
                    (!dma_ext || dma_ack_src);
@@ -212,6 +232,25 @@ wire [7:0] ram_data;
 
 assign ram_data = RAM_READ_SYNC ? ram_q : ram_array[ram_addr];
 
+// The work RAM's read port is FREE RUNNING.  ram_addr is cpu_addr[RAM_ADDR_BITS-1:0]
+// and cpu_addr is combinational off the cpu's state register, which only moves on
+// bus_fire, so the address is stable for the whole eleven-clk window between the
+// edge that created the state and the edge that completes the access.  Issuing
+// the read on every clk therefore latches the right byte one clk before it is
+// needed, which is exactly the lead a registered read wants, and it costs no cpu
+// cycle: the alternative -- arming the read once per request -- is what made
+// every access take two ce_cpu beats.  One write port plus one free-running read
+// port is the canonical simple-dual-port template, so this is not a new
+// inference pattern.  dma_ram_q is deliberately NOT free running: the dma port
+// is a separate contract, it has no such eleven-clk guarantee on dma_addr, and
+// nothing above depends on it.
+always @(posedge clk or posedge reset) begin
+    if (reset)
+        ram_q <= RAM_INIT;
+    else if (RAM_READ_SYNC)
+        ram_q <= ram_array[ram_addr];
+end
+
 always @* begin
     case (owner_r)
         OWNER_RAM: bus_data_r = ram_data;
@@ -225,8 +264,16 @@ end
 assign cpu_din = bus_data_r;
 
 wire ready_c;
+// ce IS the cpu cycle on this port: the v2..v6 cores drive it from a twelve-clk
+// div_phase window, three PPU dots wide, so a wait is expressed in ce_cpu units
+// and a wait of one beat is NOT a second cpu cycle -- it is this one, already in
+// progress.  ready_c therefore treats wait_need <= 1 as free, and the one clk of
+// lead a registered read needs comes from the read port below being free
+// running rather than from an extra slot.  active/wait_cnt still carry
+// wait_need >= 2, so a configuration that really asks for three beats still gets
+// three, and one that asks for none still gets none.
 assign ready_c = !bus_hold &&
-                 ((active ? (wait_cnt == 8'd0) : (wait_need == 8'd0)) &&
+                 ((active ? (wait_cnt == 8'd0) : (wait_need <= 8'd1)) &&
                   (!owner_ext || owner_ack));
 
 assign cpu_ready = ready_c;
@@ -257,7 +304,6 @@ always @(posedge clk or posedge reset) begin
     if (reset) begin
         active <= 1'b0;
         wait_cnt <= 8'd0;
-        ram_q <= RAM_INIT;
         open_bus_q <= 8'h00;
         dma_active_r <= 1'b0;
         dma_wait_cnt <= 8'd0;
@@ -275,9 +321,7 @@ always @(posedge clk or posedge reset) begin
             end
         end else if (cpu_req && !active) begin
             active <= 1'b1;
-            wait_cnt <= (wait_need == 8'd0) ? 8'd0 : (wait_need - 8'd1);
-            if (RAM_READ_SYNC && (owner_r == OWNER_RAM))
-                ram_q <= ram_array[ram_addr];
+            wait_cnt <= (wait_need <= 8'd1) ? 8'd0 : (wait_need - 8'd1);
         end else if (!cpu_req && active) begin
             active <= 1'b0;
             wait_cnt <= 8'd0;

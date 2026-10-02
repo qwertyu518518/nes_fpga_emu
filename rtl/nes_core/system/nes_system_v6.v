@@ -274,15 +274,29 @@ wire [7:0]  ppu_chr_wdata;
 wire        ppu_chr_rd_arm;
 
 // One $2007 CHR read is armed on the single clk whose pre-edge div_phase is
-// 8: the external CHR memory registers chr_rdata on every ce_ppu edge, so a
-// request presented on that clk is captured at edge 8 and is valid across
-// div_phase 0 -- which is exactly when the CPU latches bus_din.  cpu_bus_ready
-// is the "this access fires on the next ce_cpu beat" predicate, so exactly one
-// arm is raised per $2007 read: the PPU access costs two CPU cycles and is low
-// on its first, and READ_WAIT_CYCLES is 8'd1 here, so nes_cpu_bus.v:278 leaves
-// active high with wait_cnt at 0 on that first beat and ready_c high for the
-// whole div_phase 1..11 window that contains the arm.
+// 8.  The durable reason is the shape of the window, not a cost: the external
+// CHR memory registers chr_rdata on every ce_ppu edge, the arm is raised on the
+// clk whose div_phase is 8, and div_phase 8 is the LAST ce_ppu beat of the
+// eleven-clk window in which the cpu has already presented the address.  The
+// consume edge is the next ce_ppu edge, which is the one ending div_phase 0, and
+// NO ce_ppu edge exists strictly between the two: the sequence after 8 is 9, 10,
+// 11, 0.  So nothing can re-latch chr_rdata between the arm and the consume and
+// the byte the cpu latches is the byte the arm asked for.  That argument holds
+// identically whether the access took one ce_cpu beat or two.
 //
+// WHAT CHANGED HERE, and the claim that had to be retired: this comment used to
+// justify div_phase 8 by saying that "a PPU access costs two CPU cycles" and
+// that the arm had to sit one ce_cpu beat inside the resulting wait window,
+// because READ_WAIT_CYCLES was 8'd1 here so nes_cpu_bus.v armed active with
+// wait_cnt 0 on the first beat and only then raised ready_c.  That was true of
+// the old bus and is false of this one: ce_cpu IS the cpu cycle, so a wait of
+// one ce_cpu beat is not a second cycle, ready_c is now high for the whole
+// window that contains the arm, and a PPU access costs exactly one CPU cycle.
+// The arm's POSITION is unchanged and the phase-selecting logic below is
+// unchanged; only the reason is restated, because the reason it gave was the
+// thing the fix removed.
+//
+// The rest of the argument is unchanged and still load bearing:
 // BUG BEING FIXED HERE, do not reintroduce it: this condition used to require
 // ppu_req, and ppu_req is structurally zero at div_phase 8.  ppu_req needs
 // cpu_req (nes_cpu_bus.v:238), cpu_req is u_cpu.bus_req, and nes_cpu6502.v:755
@@ -291,7 +305,7 @@ wire        ppu_chr_rd_arm;
 // therefore high on the div_phase 0 clk ONLY, so ppu_req && (div_phase == 4'd8)
 // was a self-contradiction: the arm never fired and every $2007 CHR read
 // returned the fail-safe 8'h00.  Every term of this predicate must HOLD across
-// the eleven clk of the wait, and only these kinds do:
+// the eleven clk of the window, and only these kinds do:
 //   sel_ppu and ppu_addr are pure functions of cpu_addr (nes_cpu_bus.v:124 is an
 //     ungated always @* and :189 is a bare slice of the same wire), and
 //     nes_cpu6502.v:755 clears only bus_req, never bus_addr or bus_we, so the
@@ -299,8 +313,10 @@ wire        ppu_chr_rd_arm;
 //     through the completing one.  sel_ppu is load bearing rather than
 //     decorative: ppu_addr is cpu_addr[2:0] on its own, so without it an APU-IO
 //     read of $4007 would decode as $2007 and put v_addr on the CHR bus.
-//   cpu_bus_ready is the ready described above, the "will fire" predicate.
-//   div_phase == 4'd8 is the one clk inside that window, so one access, one arm.
+//   cpu_bus_ready is the ready described above, the "will fire" predicate.  It
+//     is high across the whole window and low only on the clk that carries the
+//     request, so div_phase == 4'd8 is the one clk inside that window that
+//     satisfies both terms: one access, one arm.
 // The read direction is !cpu_we, NOT !ppu_we: ppu_we is ppu_req && cpu_we
 // (nes_cpu_bus.v:239), so at div_phase 8 it is 0 for a read AND for a write and
 // would qualify nothing.  The write strobe chr_we needs reg_cs, which is

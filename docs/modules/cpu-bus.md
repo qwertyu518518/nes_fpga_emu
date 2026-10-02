@@ -4,7 +4,9 @@
 
 > 一个用 C 写的软件模拟器（`switch (address)` + `uint8_t *ptr` + 数组）和一个用 Verilog 写的硬件总线（`req/ready` + 完成脉冲 + 同步 RAM），是在实现同一件事的两种写法，还是在解决两个不同的问题？
 
-结论先行：**地址译码部分是同一件事，时序部分不是。** 软件模拟器把“访问一次内存”当成一次函数调用，函数返回时数据已经在手上，因此它天然是零延迟模型；硬件总线必须把“访问”拆成一次**跨越若干拍的事务**，因为 BRAM 要 1 拍、SDRAM 要 3-5 拍、复位后的 RAM 读和刚写过的字节行为还不一样。本模块的全部信号设计，都是为了让“软件的一次函数调用”在硬件上有一个可综合、且副作用只发生一次的表达。
+结论先行：**地址译码部分是同一件事，时序部分不是。** 软件模拟器把“访问一次内存”当成一次函数调用，函数返回时数据已经在手上，因此它天然是零延迟模型；硬件总线必须把“访问”拆成一次**跨越若干拍的事务**，因为 BRAM 的输出只能在时钟沿之后才有效、SDRAM 要 3-5 拍、复位后的 RAM 读和刚写过的字节行为还不一样。本模块的全部信号设计，都是为了让“软件的一次函数调用”在硬件上有一个可综合、且副作用只发生一次的表达。
+
+需要强调的一点是：**“BRAM 要 1 拍”说的是那一个 `clk` 的引线，不是要占掉一个 CPU 周期。** 只要请求方在完成沿之前就把地址摆出来了（`nes_cpu6502` 有 11 个 `clk` 的窗口），这一拍引线是可以白拿的；见 4.1。2026-10-03 之前的实现把它误算成了额外的一个 `ce_cpu` 拍，于是 CPU 跑在真实速率的一半上，这正是那次修正的内容。
 
 行为权威是 NESdev 的 CPU 地址图与 2A03 的 RDY 语义。cNES（`caseif__cNES`，commit `7c8c252`）和 Obara（`ObaraEmmanuel__NES`，commit `aa880b9`）只作为“别人怎么写”的观察，用来提示 RTL 容易漏掉的边界，不代表规格。
 
@@ -145,12 +147,13 @@ case 0x2002: return ppu_read_status();   // 读 + 副作用，一次函数调用
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `READ_WAIT_CYCLES` | 0 | 外部 owner（PPU/APU/卡带）的**最小**额外等待拍数。0 = 零等待，兼容 `nes_system_v0` 现在的接法。对 CPU 与 DMA 两条路径同时生效 |
+| `READ_WAIT_CYCLES` | 0 | 外部 owner（PPU/APU/卡带）的**最小**额外等待拍数。0 = 零等待，兼容 `nes_system_v0` 现在的接法。作用于 CPU 路径；DMA 路径对外部 owner 仍用它，但 CPU 与 DMA 的**零等待阈值不同**，见 4.1 |
 | `RAM_ADDR_BITS` | 11 | 片上 RAM 地址位宽，11 = 2 KiB（NES 工作 RAM 的真实大小） |
-| `RAM_READ_SYNC` | 0 | 0 = 组合读（分布式 RAM/LUTRAM，0 等待）；1 = 同步读（1 拍，映射到 BRAM）。CPU 读走 `ram_q`，DMA 读走独立的 `dma_ram_q` |
+| `RAM_READ_SYNC` | 0 | 0 = 组合读（分布式 RAM/LUTRAM，0 等待）；1 = 同步读（BRAM，**不额外花 CPU 拍**，见 4.1）。CPU 读走自由运行的 `ram_q`，DMA 读走独立的、仍在 `ce` 上装载的 `dma_ram_q` |
 | `RAM_INIT` | 0 | 上电内容。放在参数里是因为 TB 需要确定性初值，而综合流程也用得上。复位**不清** RAM |
 | `DMA_PRESENT` | 0 | 是否存在通用 DMA 读端口。为 0 时 `dma_grant` 是常量 0，全部 DMA 输出是常量，模块与加端口之前逐位相同 |
 | `DMA_MMIO_VALUE` | `8'h00` | DMA 读命中 PPU/APU MMIO 时返回的稳定占位值（第 7 节） |
+| `DMC_READ_WAIT_CYCLES` | 3 | **DMC 采样取数专用**的等待拍数，与 `READ_WAIT_CYCLES` 解耦。真机每个 DMC 字节占用 4 个 CPU 周期（1 个让出 + 3 个取数），NESdev 的 DMC 速率表就是按这 4 个 APU 周期写的；早先它复用 `READ_WAIT_CYCLES`，于是同一个取数在三种配置下分别要 1、4、2 拍 |
 
 `DMA_PRESENT` 默认 0 而不是 1，是为了让现有三个顶层（`nes_system_v0`/`nes_system_v1`/`nes_system_v2`）**一行都不用改**就继续工作：它们不接这三个输入，端口在 RTL 里被常量旁路，编译时 `iverilog` 会对每个实例报 3 条 “dangling input port floating” 警告，行为与加端口之前完全一致（这三个顶层的回归输出没有变化，见 `tb/bus/README.md` 的“运行”一节）。接 DMA 的顶层必须显式写 `.DMA_PRESENT(1'b1)`。
 
@@ -179,20 +182,28 @@ case 0x2002: return ppu_read_status();   // 读 + 副作用，一次函数调用
 
 ### 4.1 完成拍数
 
-一次访问从“请求被提出”到“传输完成”经过的时钟沿数：
+**先说清楚 `ce` 是什么。** 在 `nes_system_v2` 及其后的核心里，总线的 `ce` 就是 **CPU 周期本身**：`nes_system_v2.v` 的 `div_phase` 是 12 相计数器，`ce_cpu = (div_phase == 4'd0)`，一拍 `ce` 占 12 个 `clk`、正好 3 个 PPU 点。因此在这条路径上，“一个 `ce` 拍”与“一个 CPU 周期”是同一个东西，等待是用 `ce_cpu` 为单位表达的。
 
-| 区域 | `RAM_READ_SYNC=0, READ_WAIT_CYCLES=0` | `RAM_READ_SYNC=1, READ_WAIT_CYCLES=3` |
-|---|---|---|
-| RAM | 1 | 2 |
-| OPEN | 1 | 1 |
-| 外部 owner（ack 立即来） | 1 | 4 |
-| 外部 owner（ack 要 N 拍） | 1+N | 1+max(3, N) |
+于是**一次等待等于 0 或 1 个 `ce` 拍是免费的**：`wait_need <= 1` 不再额外花掉一个 CPU 周期。同步 BRAM 需要的那一拍提前量，不是靠加一个槽位换来的，而是靠**早一个 `clk` 发出地址**换来的（下面单独说明）。公式因此是：
 
-公式就是 `1 + max(强制等待, ack 等待)`。这个 `max` 是有意的：参数化的强制等待用来给慢速存储一个**下限**（比如所有卡带读至少 2 拍），ack 用来表达 owner 自己还要多久（SDRAM 控制器忙）。两者取较大值，不需要优先级仲裁。
+```text
+CPU 路径：完成拍数 = 1 + max(wait_need - 1, 0) + ack 等待，且 wait_need <= 1 时整个 max 为 0
+```
 
-`RAM_READ_SYNC=1` 时 RAM 固定多 1 拍，因为 BRAM 的输出只能在时钟沿后有效。同步读的地址在**请求沿**打进 `ram_q`（CPU 路径）或 `dma_ram_q`（DMA 路径），所以数据在下一拍稳定，配合 1 拍等待正好是“提前一拍发地址”的标准写法。两个路径各用各的读寄存器而不是共用一个：CPU 侧的状态机在 `bus_hold` 为高时整段不推进，DMA 侧的状态机在 `bus_hold` 为低时整段不推进，结构上互斥，但合成工具不会因为“两个 always 块在同一条件下互补”就替你证明这一点，所以最省事的做法就是两份寄存器。
+| 区域 | `RAM_READ_SYNC=0, READ_WAIT_CYCLES=0` | `RAM_READ_SYNC=1, READ_WAIT_CYCLES=1`（v2..v6 的实际接法） | `RAM_READ_SYNC=1, READ_WAIT_CYCLES=3` |
+|---|---|---|---|
+| RAM | 1 | 1 | 1 |
+| OPEN | 1 | 1 | 1 |
+| 外部 owner（ack 立即来） | 1 | 1 | 4 |
+| 外部 owner（ack 要 N 拍） | 1+N | 1+N | 1+max(3, N) |
 
-**DMA 读端口用完全相同的公式**，因为它复用了同一张译码表和同一组参数：
+`READ_WAIT_CYCLES` 因此不再表示“至少要几拍”，而是表示“超过 1 拍之后，最少要几拍”。这是 2026-10-03 那次 2x 速率修正带来的合同变更，改动之前 `wait_need == 0` 是唯一的零等待条件，于是 `READ_WAIT_CYCLES = 1` 让每一次访问都多花一个 `ce_cpu`，CPU 跑在真实速率的一半上，而 APU 仍然按 `ce_cpu` 走，音乐和游戏逻辑差 2 倍。
+
+**那一个 `clk` 的提前量从哪来。** `bus_addr` 是 `state_reg` 的组合函数，而 `state_reg` 只在 `bus_fire` 上推进，所以 CPU 已经把地址摆在总线上、而完成沿还没到的窗口有 11 个 `clk`（`div_phase` 1..11）。因此把片上 RAM 的读端口做成**自由运行**（每个 `clk` 都发一次 `ram_q <= ram_array[ram_addr]`，不看 `ce`）就能在完成沿之前一拍拿到正确字节，不花任何 CPU 周期。一个写端口 + 一个自由运行读端口就是 Vivado 早就认得的最简单双端口模板，不是新的推断形态。
+
+代价是这条推理**不能搬到 DMA 端口上**。DMA 侧 `dma_addr` 是与 `dma_req_oam`/`dma_req_dmc` 选出来的，地址和请求在**同一个 `clk`** 才同时有效，`dma_grant` 完全可能就是地址刚出现的那一拍，所以那里没有提前量，一拍等待是读操作本身的引线而不是被浪费的 CPU 周期（`dma_ram_q` 因此仍然只在 `ce` 上装载）。
+
+**DMA 读端口用原来的公式**，因为 `dma_ack` 不是 CPU 周期，而且如上所述它拿不到提前量：
 
 | 区域 | `RAM_READ_SYNC=0, READ_WAIT_CYCLES=0` | `RAM_READ_SYNC=1, READ_WAIT_CYCLES=3` |
 |---|---|---|
@@ -201,6 +212,7 @@ case 0x2002: return ppu_read_status();   // 读 + 副作用，一次函数调用
 | PPU/APU MMIO（占位值） | 1 | 1 |
 | 卡带 RAM/PRG（ack 立即来） | 1 | 4 |
 | 卡带 RAM/PRG（ack 要 N 拍） | 1+N | 1+max(3, N) |
+| **DMC 取数（任何 owner，`DMC_READ_WAIT_CYCLES = 3`）** | 4 | 4 |
 
 唯一的差别是 PPU/APU MMIO：CPU 走它要等 owner 的 ack，DMA 走它不产生任何 owner 请求、0 等待直接返回占位值（第 7 节）。这条不对称是刻意的——DMA 读 PPU 寄存器在真机上会带来难以建模的副作用（渲染被打断、滚动寄存器被重写），与其实现一半不如显式地不做并让 `dma_unimpl` 说出来。
 
@@ -210,7 +222,7 @@ case 0x2002: return ppu_read_status();   // 读 + 副作用，一次函数调用
 
 ```text
 完成拍（cpu_fire / dma_ack） -> 清 active/wait_cnt，提交副作用（RAM 写、open bus 更新）
-请求沿（req && !active）     -> 置 active，wait_cnt = wait_need - 1，同步读在此沿锁数据
+请求沿（req && !active）     -> 置 active，wait_cnt = wait_need - 1（wait_need <= 1 时为 0）
 撤回沿（!req && active）     -> 清 active/wait_cnt，事务作废（见 4.4）
 其余拍                      -> wait_cnt 递减
 ```
@@ -218,10 +230,10 @@ case 0x2002: return ppu_read_status();   // 读 + 副作用，一次函数调用
 `ready_c` 的组合表达式把“事务还没开始”和“事务已经在等”分开处理：
 
 ```text
-ready = !bus_hold && (active ? (wait_cnt == 0) : (wait_need == 0)) && (!外部owner || ack)
+ready = !bus_hold && (active ? (wait_cnt == 0) : (wait_need <= 1)) && (!外部owner || ack)
 ```
 
-没开始时看 `wait_need`（配置决定的最小等待），已经在等时看 `wait_cnt`（本次事务实际剩余）。这样 0 等待配置下 CPU 提出请求的那一拍就能完成，不需要额外一个“启动”状态。DMA 侧是同构的 `dma_ready`，唯一差别是把 `!bus_hold` 换成 `dma_grant`：
+没开始时看 `wait_need`（配置决定的最小等待），已经在等时看 `wait_cnt`（本次事务实际剩余）。`<= 1` 而不是 `== 0` 是 2x 速率修正的那一处改动：因为 `ce` 就是 CPU 周期，1 拍等待不额外消耗周期，所以它在请求提出的第一拍就必须能完成。`wait_cnt` 仍然为 `wait_need >= 2` 的配置保留路径，`READ_WAIT_CYCLES = 3` 的实例仍然是 4 拍，ack 延迟的语义也完全没变。DMA 侧是同构的 `dma_ready`，但阈值留在 0，因为 DMA 侧的地址没有提前量（见 4.1），唯一差别是把 `!bus_hold` 换成 `dma_grant`：
 
 ```text
 dma_ready = dma_grant && (dma_active_r ? (dma_wait_cnt == 0) : (dma_wait_need == 0)) && (!卡带owner || cart_ack)

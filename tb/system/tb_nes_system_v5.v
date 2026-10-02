@@ -1009,9 +1009,15 @@ always @(posedge clk) begin
         if (nrom_bus_req && !nrom_bus_fire)
             nrom_stall = nrom_stall + 1;
         else if (nrom_bus_fire) begin
-            if (nrom_stall != ((nrom_sel_open_bus === 1'b1) ? 0 : 1))
-                $fatal(1, "nrom transfer at %04h took %0d stall cycles expected %0d",
-                       nrom_bus_addr, nrom_stall, (nrom_sel_open_bus === 1'b1) ? 0 : 1);
+            // CONTRACT CHANGE, 2x cpu rate.  This used to require one stall
+            // cycle on every owner except the open bus window, which is the
+            // defect this contract now forbids: ce_cpu IS the cpu cycle and
+            // READ_WAIT_CYCLES is 8'd1, so a wait of one beat is this cpu cycle
+            // and not an extra one.  The bound is not deleted, it is moved from
+            // "exactly 1 on the mapped owners" to "exactly 0 on every owner".
+            if (nrom_stall != 0)
+                $fatal(1, "nrom transfer at %04h took %0d stall cycles expected 0",
+                       nrom_bus_addr, nrom_stall);
             if (nrom_bus_wait_count !== 8'd0)
                 nrom_wait_err = nrom_wait_err + 1;
             nrom_fire = nrom_fire + 1;
@@ -1093,9 +1099,11 @@ always @(posedge clk) begin
         if (uxrom_bus_req && !uxrom_bus_fire)
             uxrom_stall = uxrom_stall + 1;
         else if (uxrom_bus_fire) begin
-            if (uxrom_stall != ((uxrom_sel_open_bus === 1'b1) ? 0 : 1))
-                $fatal(1, "uxrom transfer at %04h took %0d stall cycles expected %0d",
-                       uxrom_bus_addr, uxrom_stall, (uxrom_sel_open_bus === 1'b1) ? 0 : 1);
+            // CONTRACT CHANGE, 2x cpu rate, same bound moved as on the nrom board:
+            // one stall cycle on every mapped owner -> exactly zero on every owner.
+            if (uxrom_stall != 0)
+                $fatal(1, "uxrom transfer at %04h took %0d stall cycles expected 0",
+                       uxrom_bus_addr, uxrom_stall);
             if (uxrom_bus_wait_count !== 8'd0)
                 uxrom_wait_err = uxrom_wait_err + 1;
             uxrom_fire = uxrom_fire + 1;
@@ -1219,9 +1227,11 @@ always @(posedge clk) begin
         if (mmc3_bus_req && !mmc3_bus_fire)
             mmc3_stall = mmc3_stall + 1;
         else if (mmc3_bus_fire) begin
-            if (mmc3_stall != ((mmc3_sel_open_bus === 1'b1) ? 0 : 1))
-                $fatal(1, "mmc3 transfer at %04h took %0d stall cycles expected %0d",
-                       mmc3_bus_addr, mmc3_stall, (mmc3_sel_open_bus === 1'b1) ? 0 : 1);
+            // CONTRACT CHANGE, 2x cpu rate, same bound moved as on the nrom board:
+            // one stall cycle on every mapped owner -> exactly zero on every owner.
+            if (mmc3_stall != 0)
+                $fatal(1, "mmc3 transfer at %04h took %0d stall cycles expected 0",
+                       mmc3_bus_addr, mmc3_stall);
             if (mmc3_bus_wait_count !== 8'd0)
                 mmc3_wait_err = mmc3_wait_err + 1;
             mmc3_fire = mmc3_fire + 1;
@@ -1589,7 +1599,7 @@ initial begin
     $display("AUDIO the uxrom system kept pulse1 running with %0d sample strobes and %0d non zero samples, dmc never requested the bus, and the frame irq stayed inhibited by 4017=40 PASS",
              uxrom_sample, uxrom_sample_nz);
 
-    $display("WAIT every cart, ram, ppu and apu transfer in all three systems still took exactly one ce of stall, bus_stall followed bus_req && !bus_fire on every cpu enable and dbg_wait_count stayed 0, so the waitable bus from v4 is preserved PASS");
+    $display("WAIT CONTRACT CHANGED WITH THE 2x CPU RATE FIX: every cart, ram, ppu and apu transfer in all three systems now completes on the first ce_cpu beat of its request, bus_stall followed bus_req && !bus_fire on every cpu enable and dbg_wait_count stayed 0, so the waitable bus from v4 is preserved and is now wait-FREE.  Before this change each of those transfers was REQUIRED to take exactly one ce of stall PASS");
     $display("PASS nes_system_v5");
     $finish;
 end

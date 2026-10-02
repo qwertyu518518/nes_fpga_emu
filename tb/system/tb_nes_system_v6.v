@@ -302,6 +302,7 @@ wire [2:0]  v6_oam_dma_ppu_reg_addr;
 wire [7:0]  v6_oam_dma_ppu_reg_dout;
 wire        v6_oam_dma_busy;
 wire        v6_oam_dma_done;
+wire [15:0] v6_oam_dma_cycle_count;
 wire [7:0]  v6_oam_dma_page;
 wire [7:0]  v6_oam_dma_base_addr;
 wire [7:0]  v6_oam_dma_index;
@@ -872,6 +873,10 @@ integer dma_data_err;
 integer dma_unimpl_seen;
 integer dma_ppu_addr_err;
 integer dma_ppu_we_err;
+integer oam_cyc_seen;
+integer oam_cyc_bad;
+integer oam_cyc_last;
+integer oam_steal_cpu;
 
 integer nmi_rise_count;
 integer nmi_entry_count;
@@ -2388,7 +2393,7 @@ nes_system_v6 #(
     .oam_dma_index(v6_oam_dma_index),
     .oam_dma_align_left(),
     .oam_dma_addr_wr(),
-    .oam_dma_cycle_count(),
+    .oam_dma_cycle_count(v6_oam_dma_cycle_count),
     .apu_dmc_bus_req(v6_apu_dmc_bus_req),
     .apu_dmc_addr(),
     .apu_dmc_ack(),
@@ -3360,6 +3365,203 @@ always @(posedge clk) begin
     end
 end
 
+// ------------------------------------------------ P1-1 RATE, zero-stall + ratio
+//
+// The check above is the tautology stall == req && !fire, which every possible
+// wait satisfies.  These two are not.  Both read the CORE's own wires through
+// ab_v6, and both were written before the fix so that the pre-fix run has
+// something to fail on.
+//
+// 1. ZERO-STALL.  ce_cpu IS the cpu cycle (div_phase == 4'd0, twelve clk wide,
+//   three PPU dots).  nes_cpu_bus's ready_c spends a wait in ce_cpu units, so
+//   wait_need of 0 or 1 is free and ready must ALREADY be high on the first clk
+//   of such a request.  owner_ack is the other term in ready_c; in this core
+//   ppu_ack/apu_ack/cart_ack are tied to 1'b1 (nes_system_v6.v:247-249), so the
+//   antecedent is not narrowed by them and the check really is a bound of zero
+//   on the stall length.  A hold (oam dma / dmc) is not a stall and is not
+//   charged to it.  The consequence is written as bus_fire rather than as
+//   cpu_ready: with a request up, ready_c high IS cpu_fire (nes_cpu_bus.v:233),
+//   and bus_fire is already independently checked elsewhere in this file, so
+//   this cannot pass by resting on its own term.
+//
+// 2. THE RATE IDENTITY.  Over the window between two frame_done rising edges the
+//   ppu advances a fixed number of dots (262 x 341 = 89342, and 89342 is an exact
+//   multiple of the four-clk dot period, so the window holds exactly 89342
+//   ce_ppu whatever the phase), and twelve-clk ce_cpu therefore fires either
+//   29780 or 29781 times.  Every one of those beats has to complete an access:
+//   a beat with a request up, no hold and no fire is a wasted cpu cycle, and one
+//   wasted cycle per access is exactly a 2x-slow cpu.  In the frame this program
+//   runs its oam dma in, bus_hold takes 256 of the beats away from the cpu, so
+//   the identity is asserted on the frames the dma did not touch and the dma
+//   frame is reported rather than excused.
+integer rate_ce_ppu;
+integer rate_ce_cpu;
+integer rate_fire;
+integer rate_dma_ack;
+integer rate_hold;
+integer rate_stall;
+integer rate_frames;
+integer rate_clean_frames;
+integer rate_bad;
+integer rate_bad_fire;
+integer rate_bad_ce_ppu;
+integer rate_bad_ce_cpu;
+integer rate_bad_stall;
+integer rate_bad_dma;
+integer rate_bad_hold;
+integer rate_stall_total;
+integer rate_fire_min;
+integer rate_fire_max;
+integer rate_last_fire;
+integer rate_last_ce_ppu;
+integer rate_last_ce_cpu;
+integer rate_last_stall;
+integer rate_last_dma;
+integer rate_last_hold;
+reg     rate_prev_frame_done;
+integer rate_zero_stall_opp;
+integer rate_zero_stall_err;
+integer rate_dma_steal;
+integer rate_dma_steal_max;
+integer dma_steal_run;
+reg     rate_warm;
+integer rate_acct_bad;
+integer rate_acct_bad_fire;
+integer rate_acct_bad_dma;
+integer rate_acct_bad_hold;
+integer rate_acct_bad_stall;
+integer rate_acct_bad_cecpu;
+
+always @(posedge clk) begin
+    if (reset) begin
+        rate_ce_ppu = 0;
+        rate_ce_cpu = 0;
+        rate_fire = 0;
+        rate_dma_ack = 0;
+        rate_hold = 0;
+        rate_stall = 0;
+        rate_frames = 0;
+        rate_clean_frames = 0;
+        rate_bad = 0;
+        rate_bad_fire = 0;
+        rate_bad_ce_ppu = 0;
+        rate_bad_ce_cpu = 0;
+        rate_bad_stall = 0;
+        rate_bad_dma = 0;
+        rate_bad_hold = 0;
+        rate_stall_total = 0;
+        rate_fire_min = 1000000;
+        rate_fire_max = -1;
+        rate_last_fire = 0;
+        rate_last_ce_ppu = 0;
+        rate_last_ce_cpu = 0;
+        rate_last_stall = 0;
+        rate_last_dma = 0;
+        rate_last_hold = 0;
+        rate_prev_frame_done = 1'b0;
+        rate_zero_stall_opp = 0;
+        rate_zero_stall_err = 0;
+        rate_dma_steal = 0;
+        rate_dma_steal_max = 0;
+        dma_steal_run = 0;
+        rate_warm = 1'b0;
+        rate_acct_bad = 0;
+        rate_acct_bad_fire = 0;
+        rate_acct_bad_dma = 0;
+        rate_acct_bad_hold = 0;
+        rate_acct_bad_stall = 0;
+        rate_acct_bad_cecpu = 0;
+    end else begin
+        if ((v6_bus_req !== 1'b0) && (v6_bus_hold === 1'b0) &&
+            (ab_v6.u_bus.wait_need <= 8'd1)) begin
+            rate_zero_stall_opp = rate_zero_stall_opp + 1;
+            if (v6_bus_fire === 1'b0)
+                rate_zero_stall_err = rate_zero_stall_err + 1;
+        end
+        if (ab_v6.ce_ppu !== 1'b0)
+            rate_ce_ppu = rate_ce_ppu + 1;
+        if (ab_v6.ce_cpu !== 1'b0) begin
+            rate_ce_cpu = rate_ce_cpu + 1;
+            if (v6_dma_ack !== 1'b0)
+                rate_dma_ack = rate_dma_ack + 1;
+            else if (v6_bus_hold !== 1'b0)
+                rate_hold = rate_hold + 1;
+            else if (v6_bus_fire !== 1'b0)
+                rate_fire = rate_fire + 1;
+            else
+                rate_stall = rate_stall + 1;
+            if (v6_bus_hold !== 1'b0) begin
+                dma_steal_run = dma_steal_run + 1;
+                if (dma_steal_run > rate_dma_steal_max)
+                    rate_dma_steal_max = dma_steal_run;
+            end else begin
+                dma_steal_run = 0;
+            end
+        end else if (v6_bus_hold === 1'b0) begin
+            dma_steal_run = 0;
+        end
+        if ((v6_frame_done !== 1'b0) && (rate_prev_frame_done === 1'b0)) begin
+            rate_prev_frame_done = 1'b1;
+            rate_frames = rate_frames + 1;
+            rate_last_fire = rate_fire;
+            rate_last_ce_ppu = rate_ce_ppu;
+            rate_last_ce_cpu = rate_ce_cpu;
+            rate_last_stall = rate_stall;
+            rate_last_dma = rate_dma_ack;
+            rate_last_hold = rate_hold;
+            if (rate_warm === 1'b1) begin
+                rate_stall_total = rate_stall_total + rate_stall;
+                if (rate_fire < rate_fire_min)
+                    rate_fire_min = rate_fire;
+                if (rate_fire > rate_fire_max)
+                    rate_fire_max = rate_fire;
+                rate_dma_steal = dma_steal_run;
+                if (rate_dma_steal != 0) begin
+                    $display("    DIAG P1-1 RATE frame window %0d carried an oam dma: ce_cpu=%0d cpu fires=%0d dma acks=%0d held=%0d stalled=%0d, longest cpu-cycle steal run=%0d",
+                             rate_frames, rate_ce_cpu, rate_fire, rate_dma_ack,
+                             rate_hold, rate_stall, rate_dma_steal);
+                end
+                if ((rate_fire + rate_dma_ack + rate_hold + rate_stall) != rate_ce_cpu) begin
+                    if (rate_acct_bad == 0) begin
+                        rate_acct_bad_fire = rate_fire;
+                        rate_acct_bad_dma = rate_dma_ack;
+                        rate_acct_bad_hold = rate_hold;
+                        rate_acct_bad_stall = rate_stall;
+                        rate_acct_bad_cecpu = rate_ce_cpu;
+                    end
+                    rate_acct_bad = rate_acct_bad + 1;
+                end
+                if ((rate_dma_ack == 0) && (rate_hold == 0)) begin
+                    rate_clean_frames = rate_clean_frames + 1;
+                    if ((rate_ce_ppu != 89342) || (rate_stall != 0) ||
+                        (rate_fire != rate_ce_cpu) ||
+                        ((rate_fire != (rate_ce_ppu + 1) / 3) &&
+                         (rate_fire != rate_ce_ppu / 3))) begin
+                        if (rate_bad == 0) begin
+                            rate_bad_fire = rate_fire;
+                            rate_bad_ce_ppu = rate_ce_ppu;
+                            rate_bad_ce_cpu = rate_ce_cpu;
+                            rate_bad_stall = rate_stall;
+                            rate_bad_dma = rate_dma_ack;
+                            rate_bad_hold = rate_hold;
+                        end
+                        rate_bad = rate_bad + 1;
+                    end
+                end
+            end
+            rate_ce_ppu = 0;
+            rate_ce_cpu = 0;
+            rate_fire = 0;
+            rate_dma_ack = 0;
+            rate_hold = 0;
+            rate_stall = 0;
+            rate_warm = 1'b1;
+        end else if (v6_frame_done === 1'b0) begin
+            rate_prev_frame_done = 1'b0;
+        end
+    end
+end
+
 // ------------------------------------------------- W1 upload-flag snapshot
 //
 // The program raises ram[0015] only after its last $2007 CHR write, and the
@@ -3537,16 +3739,53 @@ always @(posedge clk) begin
         expect_dma_data_valid = 1'b0;
         prev_dma_ack = 1'b0;
         prev_dma_ppu_cs = 1'b0;
+        oam_cyc_seen = 0;
+        oam_cyc_bad = 0;
+        oam_cyc_last = 0;
+        oam_steal_cpu = 0;
+        dma_steal_run = 0;
     end else begin
         if (v6_dma_unimpl !== 1'b0)
             dma_unimpl_seen = dma_unimpl_seen + 1;
+        // The cpu cycles this transaction actually stole, counted at the beat
+        // rather than derived: every ce_cpu edge on which oam_dma_cpu_hold is
+        // high is a cpu cycle the cpu was not allowed to have.  The real NES
+        // budget is 513/514 (one read plus one write per byte, plus 1-2 align),
+        // so this is the number that has to come down, and unlike
+        // oam_dma_cycle_count it is in cpu cycles and not in clk.
+        if ((ab_v6.ce_cpu !== 1'b0) && (v6_oam_dma_cpu_hold !== 1'b0))
+            oam_steal_cpu = oam_steal_cpu + 1;
         if (v6_oam_dma_start !== 1'b0) begin
             dma_start_count = dma_start_count + 1;
             dma_byte_index = 8'd0;
             dma_wr_index = 8'd0;
         end
-        if (v6_oam_dma_done !== 1'b0)
+        if (v6_oam_dma_done !== 1'b0) begin
             dma_done_count = dma_done_count + 1;
+            oam_cyc_seen = oam_cyc_seen + 1;
+            oam_cyc_last = v6_oam_dma_cycle_count;
+            // printed here rather than in check_p1_2 so the oam dma's cost is on
+            // the record even when an earlier check kills the run first
+$display("P1-2 RATE-DMA oam dma done: stole %0d cpu cycles (beats on which oam_dma_cpu_hold was high), real NES budget 513/514; oam_dma_cycle_count=%0d clk, derived band [6145,6146]; out-of-band occurrences so far=%0d",
+                     oam_steal_cpu, v6_oam_dma_cycle_count, oam_cyc_bad);
+            // nes_oam_dma has no ce, so cycle_count is in CLK and not in cpu
+            // cycles, and it is (start + align) + 256 x (the read's clk span + 1
+            // clk for the $2004 write).  The read's span is 23 clk: the dma port
+            // muxes dma_addr against dma_req_oam/dma_req_dmc, so the address and
+            // the request go valid on the SAME clk and dma_ack cannot land before
+            // the SECOND ce_cpu edge, and nes_oam_dma then waits a whole 12-clk
+            // cpu cycle for it.  1 + align(1..2) + 256 x (23 + 1) = 6145 or 6146.
+            // The band below holds the counter to that derivation rather than to a
+            // round number, and it is the assertion that fails if a dma read ever
+            // costs three ce_cpu beats or more.
+            if ((v6_oam_dma_cycle_count < 16'd6145) ||
+                (v6_oam_dma_cycle_count > 16'd6146)) begin
+                oam_cyc_bad = oam_cyc_bad + 1;
+                if (oam_cyc_bad < 4)
+                    $display("    DIAG P1-2 RATE oam_dma_cycle_count=%0d at done, outside [6145,6146]",
+                             v6_oam_dma_cycle_count);
+            end
+        end
         if (v6_dma_ack !== 1'b0) begin
             dma_ack_count = dma_ack_count + 1;
             if (prev_dma_ack !== 1'b0)
@@ -6017,6 +6256,41 @@ endtask
 
 task check_p1_1;
     begin
+        // The numbers first, on every run, pass or fail, so the ratio is on the
+        // record even when one of the assertions below kills the run.
+        $display("P1-1 RATE-CPU one ce_cpu IS one cpu cycle.  Last full frame: ce_ppu=%0d ce_cpu=%0d completed bus fires=%0d stalled ce_cpu=%0d dma acks=%0d held=%0d, so fires/ce_ppu=%0d per mille and fires/ce_cpu=%0d per mille.  Over %0d frame windows (%0d of them dma-free) completed fires ran %0d..%0d and TOTAL stalled ce_cpu across the whole run=%0d, zero-stall violations=%0d of %0d clk.  Required: ce_ppu=89342 (262x341) and fires==ce_cpu==89342/3 or (89342+1)/3, i.e. 29780 or 29781",
+                 rate_last_ce_ppu, rate_last_ce_cpu, rate_last_fire,
+                 rate_last_stall, rate_last_dma, rate_last_hold,
+                 (rate_last_fire * 1000) / rate_last_ce_ppu,
+                 (rate_last_fire * 1000) / rate_last_ce_cpu,
+                 rate_frames, rate_clean_frames, rate_fire_min, rate_fire_max,
+                 rate_stall_total, rate_zero_stall_err, rate_zero_stall_opp);
+        if (rate_zero_stall_opp < 10000)
+            $fatal(1, "P1-1 RATE only %0d clk qualified for the zero-stall invariant",
+                   rate_zero_stall_opp);
+        if (rate_zero_stall_err != 0)
+            $fatal(1, "P1-1 RATE ready was low on %0d of %0d clk that had a cpu request up, no hold and wait_need<=1: one ce_cpu IS the cpu cycle, so a wait of one beat is free and ready must already be high.  This is the 2x cpu bus rate: every access was spending a second ce_cpu beat",
+                   rate_zero_stall_err, rate_zero_stall_opp);
+        if (rate_frames < 3)
+            $fatal(1, "P1-1 RATE only %0d frame_done windows were measured", rate_frames);
+        if (rate_clean_frames < 2)
+            $fatal(1, "P1-1 RATE only %0d dma-free frame_done windows were measured",
+                   rate_clean_frames);
+        if (rate_acct_bad != 0)
+            $fatal(1, "P1-1 RATE the per-frame beat accounting did not close on %0d frames; first: ce_cpu=%0d fire=%0d dma_ack=%0d hold=%0d stall=%0d",
+                   rate_acct_bad, rate_acct_bad_cecpu, rate_acct_bad_fire,
+                   rate_acct_bad_dma, rate_acct_bad_hold, rate_acct_bad_stall);
+        if (rate_stall_total != 0)
+            $fatal(1, "P1-1 RATE %0d ce_cpu beats across %0d frames carried a cpu request that completed nothing",
+                   rate_stall_total, rate_frames);
+        if (rate_bad != 0)
+            $fatal(1, "P1-1 RATE %0d of %0d dma-free frames broke the rate identity.  FIRST: ce_ppu=%0d ce_cpu=%0d completed_fires=%0d stalled=%0d dma_ack=%0d hold=%0d, required ce_ppu=89342 and fires==ce_cpu==89342/3 or (89342+1)/3.  A cpu at half rate reads exactly half: fires %0d against a required 29780/29781",
+                   rate_bad, rate_clean_frames, rate_bad_ce_ppu, rate_bad_ce_cpu,
+                   rate_bad_fire, rate_bad_stall, rate_bad_dma, rate_bad_hold,
+                   rate_bad_fire);
+        if (rate_fire_min < 29000 || rate_fire_max > 30000)
+            $fatal(1, "P1-1 RATE completed fires per frame ranged %0d..%0d, outside the nes band around 29780",
+                   rate_fire_min, rate_fire_max);
         if (bus_stall_err != 0)
             $fatal(1, "P1-1 bus_stall != bus_req&&!bus_fire on %0d ce_cpu",
                    bus_stall_err);
@@ -6037,6 +6311,9 @@ task check_p1_1;
         $display("P1-1 BUS stall=req&&!fire on every ce_cpu (%0d err), dbg_wait_count=0 on every clk (%0d err), cart reads=%0d matched the independent tb prg bank model for mapper_prg_bank_offset, cart_din and bus_din (err=%0d), transfers=%0d PASS",
                  bus_stall_err, bus_wait_count_bad, prg_rd_count, prg_rd_err,
                  bus_fire_count);
+        $display("P1-1 RATE-ZERO-STALL on %0d clk that had a cpu request up, no bus_hold and wait_need<=1, cpu_ready was already high on all %0d of them (violations=%0d) PASS",
+                 rate_zero_stall_opp, rate_zero_stall_opp - rate_zero_stall_err,
+                 rate_zero_stall_err);
         $display("P1-1 CHR-OFF-BUS chr requests with the cpu bus idle=%0d of %0d, while the dma held the bus=%0d, by bus_owner open/ram/ppu/apu/cartrom=%0d/%0d/%0d/%0d/%0d, so the chr port is structurally off the cpu bus PASS",
                  chr_req_bus_idle, chr_req_total, chr_req_during_dma,
                  chr_req_owner[3'd0], chr_req_owner[3'd1], chr_req_owner[3'd2],
@@ -6046,6 +6323,15 @@ endtask
 
 task check_p1_2;
     begin
+        if (oam_cyc_seen < 1)
+            $fatal(1, "P1-2 RATE the oam dma never reported done, so its cost was not measured");
+        if (oam_cyc_bad != 0)
+            $fatal(1, "P1-2 RATE oam_dma_cycle_count read %0d at done on %0d transactions, outside [6145,6146].  The band is 1 + align(1..2) + 256 x (23 clk read + 1 clk $2004 write), so it fails the moment a dma read costs three ce_cpu beats or more",
+                   oam_cyc_last, oam_cyc_bad);
+        if (oam_steal_cpu < 256)
+            $fatal(1, "P1-2 RATE the oam dma stole only %0d cpu cycles, fewer than its own 256 reads", oam_steal_cpu);
+        if (oam_steal_cpu > 513)
+            $fatal(1, "P1-2 RATE the oam dma stole %0d cpu cycles, above the real NES budget of 513/514 (one read plus one write per byte plus 1-2 align)", oam_steal_cpu);
         if (dma_start_count != 1)
             $fatal(1, "P1-2 oam dma start count got %0d expected 1", dma_start_count);
         if (dma_done_count != 1)
@@ -6087,6 +6373,8 @@ task check_p1_2;
                  dma_addr_err, dma_data_err, dma_unimpl_seen, dma_ppu_addr_err,
                  ab_v6.u_ppu.oam_ram[0], ab_v6.u_ppu.oam_ram[1],
                  ab_v6.u_ppu.oam_ram[2], ab_v6.u_ppu.oam_ram[3]);
+        $display("P1-2 RATE-DMA the oam dma stole %0d cpu cycles, counted at the beat on which oam_dma_cpu_hold was high.  The real NES budget is 513/514 (one read plus one write per byte plus 1-2 align), so this transaction is inside it.  oam_dma_cycle_count read %0d and that counter is in CLK, not cpu cycles, because nes_oam_dma has no ce.  KNOWN GAP, measured and named rather than asserted away, and it is NOT closed by the 2x cpu rate fix: the dma read port muxes dma_addr against dma_req_oam/dma_req_dmc, so its address and its request go valid on the same clk and a dma read cannot be given the eleven-clk lead that lets a cpu read cost one ce_cpu.  Each read therefore still costs two ce_cpu, 256 reads cost 512, and nes_oam_dma drives the 256 $2004 writes straight at the ppu port so a write costs no cpu cycle at all.  The two facts cancel to 512, which is why the 2x defect was invisible here: a correct implementation would read 256 + 256 = 512 as well but for entirely different reasons.  Closing the gap needs a dma port that presents the address before the request, or nes_oam_dma routing its writes through the cpu bus, and both are outside this change's write scope PASS",
+                 oam_steal_cpu, oam_cyc_last);
     end
 endtask
 
