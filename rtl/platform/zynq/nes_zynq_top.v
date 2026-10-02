@@ -235,21 +235,36 @@ module nes_zynq_top #(
     // 20000 cycles = 400 us, so it comes up after the reset pulse has finished
     // and the panel has had time to settle.
     parameter integer LCD_BL_ON_CYCLES   = 20000,
-    // CHR_INIT_FILE is a parameter so an integrator that relocates the tree, or
-    // the throwaway synthesis tree under D:\vivadoProject\zynq_top_probe, can
-    // point it somewhere absolute.  The default is nes_cart_rom's own, relative
-    // to the repository root.  A $readmemh that cannot find its file leaves the
-    // array uninitialised and Vivado then optimises it away silently, so
-    // tb_nes_zynq_top.v asserts that the array holds non-constant content.
+    // CHR_INIT_FILE and PRG_INIT_FILE are parameters so an integrator that
+    // relocates the tree, or a throwaway synthesis tree, can point them at a
+    // real cartridge image.  Both defaults are the committed placeholders, so
+    // every existing instance, and the committed gate, is byte-for-byte
+    // unchanged: the defaults are what $readmemh reads.
     //
-    // The PRG path is NOT a parameter of this top: nes_system_v6 instantiates
-    // nes_cart_rom with PRG_ENABLE(1) internally, so the PRG hex path comes from
-    // nes_system_v6's own PRG_INIT_FILE, which defaults to
-    // "rtl/nes_core/cart/prg_placeholder.hex" relative to whatever directory the
-    // simulator or Vivado was started in.  To build a real cartridge instead,
-    // override PRG_INIT_FILE on the u_core instance below and replicate the hex
-    // at that path; the CHR half here is separately relocatable via
-    // CHR_INIT_FILE.
+    // A $readmemh that cannot find its file, or that finds a file of the wrong
+    // length, leaves the array partly uninitialised and Vivado then optimises
+    // it away SILENTLY: the Block RAM Tile count falls from 50 to 0 and the
+    // design still meets timing and still places all 44 pins.  A bitstream built
+    // that way looks perfect and carries no cartridge.  tb_nes_zynq_top.v
+    // asserts the CHR array holds non-constant content; for a synthesis build
+    // the equivalent check is that report_utilization reports 50 Block RAM
+    // Tiles and not 0.
+    //
+    // NEITHER PATH IS RELOCATABLE BY ITSELF.  $readmemh resolves a relative path
+    // against the SIMULATOR'S OR VIVADO'S WORKING DIRECTORY, not against this
+    // source file's own directory, so a relative default only resolves when the
+    // tool is launched from the repository root.  tools/sim_all.ps1 does
+    // Push-Location to the repository root for exactly that reason.
+    //
+    // The PRG half lives inside nes_system_v6, which instantiates nes_cart_rom
+    // with PRG_ENABLE(1) itself; PRG_INIT_FILE below is forwarded to
+    // nes_system_v6's own PRG_INIT_FILE, which forwards it again to that
+    // instance.  The CHR half lives here, in the u_cart_chr instance below,
+    // because nes_system_v6 has CHR_ENABLE(0) on its own instance and therefore
+    // contains no CHR array at all.  So the two paths reach their $readmemh
+    // from opposite ends of the hierarchy and both must be overridden to build
+    // a real cartridge.
+    parameter         PRG_INIT_FILE       = "rtl/nes_core/cart/prg_placeholder.hex",
     parameter         CHR_INIT_FILE       = "rtl/nes_core/cart/chr_placeholder.hex"
 ) (
     input  wire        sys_clk,
@@ -554,7 +569,9 @@ module nes_zynq_top #(
     );
 
     // ---------------------------------------------------------------- 核心
-    nes_system_v6 u_core (
+    nes_system_v6 #(
+        .PRG_INIT_FILE(PRG_INIT_FILE)
+    ) u_core (
         .clk                     (mmcm_core_clk),
         .reset                   (rst_core),
         .buttons1                (btn_sync_q),
