@@ -158,9 +158,16 @@ module nes_zynq_top #(
     // rst_sys / rst_core / rst_lcd are ACTIVE HIGH (1 = in reset).
     // Async assert on !sys_rst_n, sync release, ANDed with the per-domain
     // two-flop synchroniser of the MMCM locked.
-    reg [1:0] rst_sys_q;
-    reg [1:0] rst_core_q;
-    reg [1:0] rst_lcd_q;
+    // MAX_FANOUT: without it opt_design leaves ONE flop driving the whole
+    // domain's asynchronous clear.  Measured on the routed design this was
+    // rst_core_q[1]/C -> */CLR at 9.4..10.3 ns, about 94% routing, one logic
+    // level, hundreds of endpoints: a 32k-load net pushed through one LUT2.
+    // 32 makes opt_design replicate the driver and build a reset tree instead.
+    // It is a synthesis directive only; it does not change behaviour and it is
+    // not a timing exception.
+    (* MAX_FANOUT = 32 *) reg [1:0] rst_sys_q;
+    (* MAX_FANOUT = 32 *) reg [1:0] rst_core_q;
+    (* MAX_FANOUT = 32 *) reg [1:0] rst_lcd_q;
 
     reg locked_sys_q0;
     reg locked_sys_q1;
@@ -389,77 +396,85 @@ module nes_zynq_top #(
     // -------------------------------------------------------------- 调色板
     // cNES reference table, ppu.c:94-111, RGBValue = {r, g, b}.
     // R5 = R8>>3, G6 = G8>>2, B5 = B8>>3.
-    reg [15:0] pal_rgb565;
-
-    always @(*) begin
-        case (core_pixel_pal[5:0])
-            6'h00: pal_rgb565 = 16'h632C;  // 66 66 66
-            6'h01: pal_rgb565 = 16'h00F3;  // 00 1E 9A
-            6'h02: pal_rgb565 = 16'h0855;  // 0E 09 A8
-            6'h03: pal_rgb565 = 16'h4012;  // 44 00 93
-            6'h04: pal_rgb565 = 16'h700C;  // 71 00 60
-            6'h05: pal_rgb565 = 16'h8803;  // 89 01 1D
-            6'h06: pal_rgb565 = 16'h8080;  // 86 13 00
-            6'h07: pal_rgb565 = 16'h6940;  // 69 29 00
-            6'h08: pal_rgb565 = 16'h39E0;  // 39 3E 00
-            6'h09: pal_rgb565 = 16'h0260;  // 04 4C 00
-            6'h0A: pal_rgb565 = 16'h0260;  // 00 4F 00
-            6'h0B: pal_rgb565 = 16'h0225;  // 00 47 2B
-            6'h0C: pal_rgb565 = 16'h01AD;  // 00 35 6C
-            6'h0D: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h0E: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h0F: pal_rgb565 = 16'h0000;  // 00 00 00  blanking entry, black
-            6'h10: pal_rgb565 = 16'hAD75;  // AD AD AD
-            6'h11: pal_rgb565 = 16'h029E;  // 00 50 F1
-            6'h12: pal_rgb565 = 16'h39BF;  // 3B 34 FF
-            6'h13: pal_rgb565 = 16'h811D;  // 80 22 E8
-            6'h14: pal_rgb565 = 16'hB8F4;  // BB 1E A5
-            6'h15: pal_rgb565 = 16'hD949;  // DB 29 4E
-            6'h16: pal_rgb565 = 16'hD200;  // D7 40 00
-            6'h17: pal_rgb565 = 16'hB2E0;  // B1 5E 00
-            6'h18: pal_rgb565 = 16'h73C0;  // 73 79 00
-            6'h19: pal_rgb565 = 16'h2C40;  // 2D 8B 00
-            6'h1A: pal_rgb565 = 16'h0461;  // 00 8F 08
-            6'h1B: pal_rgb565 = 16'h042C;  // 00 84 60
-            6'h1C: pal_rgb565 = 16'h0376;  // 00 6D B5
-            6'h1D: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h1E: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h1F: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h20: pal_rgb565 = 16'hFFFF;  // FF FF FF
-            6'h21: pal_rgb565 = 16'h4D1F;  // 4B A0 FF
-            6'h22: pal_rgb565 = 16'h8C3F;  // 8A 84 FF
-            6'h23: pal_rgb565 = 16'hD39F;  // D1 72 FF
-            6'h24: pal_rgb565 = 16'hFB7E;  // FF 6D F7
-            6'h25: pal_rgb565 = 16'hFBD3;  // FF 79 9E
-            6'h26: pal_rgb565 = 16'hFC88;  // FF 90 47  salmon / orange
-            6'h27: pal_rgb565 = 16'hFD61;  // FF AE 0A
-            6'h28: pal_rgb565 = 16'hC640;  // C4 CA 00
-            6'h29: pal_rgb565 = 16'h7EE2;  // 7D DC 13
-            6'h2A: pal_rgb565 = 16'h470A;  // 41 E1 57
-            6'h2B: pal_rgb565 = 16'h26B6;  // 21 D5 B0
-            6'h2C: pal_rgb565 = 16'h25FF;  // 25 BE FF
-            6'h2D: pal_rgb565 = 16'h4A69;  // 4F 4F 4F
-            6'h2E: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h2F: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h30: pal_rgb565 = 16'hFFFF;  // FF FF FF
-            6'h31: pal_rgb565 = 16'hB6DF;  // B6 D8 FF
-            6'h32: pal_rgb565 = 16'hD67F;  // D0 CD FF
-            6'h33: pal_rgb565 = 16'hEE3F;  // ED C6 FF
-            6'h34: pal_rgb565 = 16'hFE3F;  // FF C4 FC
-            6'h35: pal_rgb565 = 16'hFE5B;  // FF C8 D8
-            6'h36: pal_rgb565 = 16'hFE96;  // FF D2 B4
-            6'h37: pal_rgb565 = 16'hFEF3;  // FF DE 9C
-            6'h38: pal_rgb565 = 16'hE752;  // E7 E9 94
-            6'h39: pal_rgb565 = 16'hCF93;  // CA F1 9F
-            6'h3A: pal_rgb565 = 16'hB797;  // B2 F3 BB
-            6'h3B: pal_rgb565 = 16'hA77B;  // A5 EE DF
-            6'h3C: pal_rgb565 = 16'hA73F;  // A6 E5 FF
-            6'h3D: pal_rgb565 = 16'hBDD7;  // B8 B8 B8
-            6'h3E: pal_rgb565 = 16'h0000;  // 00 00 00
-            6'h3F: pal_rgb565 = 16'h0000;  // 00 00 00
-            default: pal_rgb565 = 16'h0000;
+    // A function, not an always block, so the same table can be read
+    // combinationally for the debug tap and one stage later out of the pixel
+    // pipeline register below.  pal_rgb565 stays a net with the same value it
+    // always had; tb_nes_zynq_top.v drives core_pixel_pal with a force and
+    // reads pal_rgb565 combinationally to check every one of the 64 entries.
+    function [15:0] pal_to_rgb565;
+        input [5:0] idx;
+        begin
+        case (idx)
+            6'h00: pal_to_rgb565 = 16'h632C;  // 66 66 66
+            6'h01: pal_to_rgb565 = 16'h00F3;  // 00 1E 9A
+            6'h02: pal_to_rgb565 = 16'h0855;  // 0E 09 A8
+            6'h03: pal_to_rgb565 = 16'h4012;  // 44 00 93
+            6'h04: pal_to_rgb565 = 16'h700C;  // 71 00 60
+            6'h05: pal_to_rgb565 = 16'h8803;  // 89 01 1D
+            6'h06: pal_to_rgb565 = 16'h8080;  // 86 13 00
+            6'h07: pal_to_rgb565 = 16'h6940;  // 69 29 00
+            6'h08: pal_to_rgb565 = 16'h39E0;  // 39 3E 00
+            6'h09: pal_to_rgb565 = 16'h0260;  // 04 4C 00
+            6'h0A: pal_to_rgb565 = 16'h0260;  // 00 4F 00
+            6'h0B: pal_to_rgb565 = 16'h0225;  // 00 47 2B
+            6'h0C: pal_to_rgb565 = 16'h01AD;  // 00 35 6C
+            6'h0D: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h0E: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h0F: pal_to_rgb565 = 16'h0000;  // 00 00 00  blanking entry, black
+            6'h10: pal_to_rgb565 = 16'hAD75;  // AD AD AD
+            6'h11: pal_to_rgb565 = 16'h029E;  // 00 50 F1
+            6'h12: pal_to_rgb565 = 16'h39BF;  // 3B 34 FF
+            6'h13: pal_to_rgb565 = 16'h811D;  // 80 22 E8
+            6'h14: pal_to_rgb565 = 16'hB8F4;  // BB 1E A5
+            6'h15: pal_to_rgb565 = 16'hD949;  // DB 29 4E
+            6'h16: pal_to_rgb565 = 16'hD200;  // D7 40 00
+            6'h17: pal_to_rgb565 = 16'hB2E0;  // B1 5E 00
+            6'h18: pal_to_rgb565 = 16'h73C0;  // 73 79 00
+            6'h19: pal_to_rgb565 = 16'h2C40;  // 2D 8B 00
+            6'h1A: pal_to_rgb565 = 16'h0461;  // 00 8F 08
+            6'h1B: pal_to_rgb565 = 16'h042C;  // 00 84 60
+            6'h1C: pal_to_rgb565 = 16'h0376;  // 00 6D B5
+            6'h1D: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h1E: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h1F: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h20: pal_to_rgb565 = 16'hFFFF;  // FF FF FF
+            6'h21: pal_to_rgb565 = 16'h4D1F;  // 4B A0 FF
+            6'h22: pal_to_rgb565 = 16'h8C3F;  // 8A 84 FF
+            6'h23: pal_to_rgb565 = 16'hD39F;  // D1 72 FF
+            6'h24: pal_to_rgb565 = 16'hFB7E;  // FF 6D F7
+            6'h25: pal_to_rgb565 = 16'hFBD3;  // FF 79 9E
+            6'h26: pal_to_rgb565 = 16'hFC88;  // FF 90 47  salmon / orange
+            6'h27: pal_to_rgb565 = 16'hFD61;  // FF AE 0A
+            6'h28: pal_to_rgb565 = 16'hC640;  // C4 CA 00
+            6'h29: pal_to_rgb565 = 16'h7EE2;  // 7D DC 13
+            6'h2A: pal_to_rgb565 = 16'h470A;  // 41 E1 57
+            6'h2B: pal_to_rgb565 = 16'h26B6;  // 21 D5 B0
+            6'h2C: pal_to_rgb565 = 16'h25FF;  // 25 BE FF
+            6'h2D: pal_to_rgb565 = 16'h4A69;  // 4F 4F 4F
+            6'h2E: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h2F: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h30: pal_to_rgb565 = 16'hFFFF;  // FF FF FF
+            6'h31: pal_to_rgb565 = 16'hB6DF;  // B6 D8 FF
+            6'h32: pal_to_rgb565 = 16'hD67F;  // D0 CD FF
+            6'h33: pal_to_rgb565 = 16'hEE3F;  // ED C6 FF
+            6'h34: pal_to_rgb565 = 16'hFE3F;  // FF C4 FC
+            6'h35: pal_to_rgb565 = 16'hFE5B;  // FF C8 D8
+            6'h36: pal_to_rgb565 = 16'hFE96;  // FF D2 B4
+            6'h37: pal_to_rgb565 = 16'hFEF3;  // FF DE 9C
+            6'h38: pal_to_rgb565 = 16'hE752;  // E7 E9 94
+            6'h39: pal_to_rgb565 = 16'hCF93;  // CA F1 9F
+            6'h3A: pal_to_rgb565 = 16'hB797;  // B2 F3 BB
+            6'h3B: pal_to_rgb565 = 16'hA77B;  // A5 EE DF
+            6'h3C: pal_to_rgb565 = 16'hA73F;  // A6 E5 FF
+            6'h3D: pal_to_rgb565 = 16'hBDD7;  // B8 B8 B8
+            6'h3E: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            6'h3F: pal_to_rgb565 = 16'h0000;  // 00 00 00
+            default: pal_to_rgb565 = 16'h0000;
         endcase
-    end
+        end
+    endfunction
+
+    wire [15:0] pal_rgb565 = pal_to_rgb565(core_pixel_pal[5:0]);
 
     // ------------------------------------------------------------ 视频输出
     // The write port is core_clk and the read port is lcd_clk; frame_mem is the
@@ -475,13 +490,80 @@ module nes_zynq_top #(
     wire [10:0] vid_pixel_y;
     wire        vid_frame_pulse;
 
+    // ---------------------------------------------------- 像素流水线寄存器
+    // Two register stages between the PPU and the video write port, so the
+    // frame memory's DIADI pins are driven from flops rather than from the
+    // PPU's combinational output.
+    //
+    // ONE WRITE PER DOT, AND WHY THE LEVEL CANNOT BE USED DIRECTLY
+    //   core_pixel_valid is a LEVEL, not a pulse.  It is high for the whole
+    //   window in which the PPU's dot register holds one value, which is four
+    //   core clocks per dot (nes_ppu2c02.v:949 gates it on dot < 256).
+    //   nes_video_800x480.v:186 writes frame_mem on EVERY wr_clk edge with
+    //   in_valid high, so presenting the level would write one dot four times
+    //   into the same address.
+    //   The strobe is therefore core_ce_ppu AND core_pixel_valid.
+    //   core_ce_ppu is the core's own exported enable and
+    //   nes_system_v6.v drives it as !reset && (div_phase[1:0] == 2'b00), so it
+    //   is high on exactly the one core clock edge per dot on which the PPU's
+    //   dot register advances.  The conjunction is therefore high once per dot,
+    //   for the 256 visible dots of a line and not for the 85 blanked ones.
+    //   Nothing here regenerates or re-phases div_phase, which nes_cart_rom's
+    //   read path is sensitive to.
+    //
+    //   At that edge dot still holds its pre-increment value, so the x, y and
+    //   palette byte captured are those of one specific visible dot, and the
+    //   256 captured dots of a line are exactly x = 0..255, once each.  Data
+    //   and strobe move together through both stages, so the colour written
+    //   always belongs to the address it is written to.
+    //
+    //   frame_mem is addressed by {in_y, in_x}, so neither the write order nor
+    //   the two clocks of added latency matter; only that each visible dot is
+    //   written exactly once with its own colour, which the strobe guarantees.
+    //   The second stage exists so the 64-entry palette table sits between two
+    //   registers instead of between the PPU and one.
+    reg        px_we_q;
+    reg [7:0]  px_x_q;
+    reg [7:0]  px_y_q;
+    reg [5:0]  px_pal_q;
+    reg        vid_we_q;
+    reg [7:0]  vid_in_x_q;
+    reg [7:0]  vid_in_y_q;
+    reg [15:0] vid_in_rgb_q;
+
+    always @(posedge mmcm_core_clk or negedge sys_rst_n) begin
+        if (!sys_rst_n) begin
+            px_we_q      <= 1'b0;
+            px_x_q       <= 8'h00;
+            px_y_q       <= 8'h00;
+            px_pal_q     <= 6'h00;
+            vid_we_q     <= 1'b0;
+            vid_in_x_q   <= 8'h00;
+            vid_in_y_q   <= 8'h00;
+            vid_in_rgb_q <= 16'h0000;
+        end else begin
+            px_we_q <= core_ce_ppu && core_pixel_valid;
+            if (core_ce_ppu && core_pixel_valid) begin
+                px_x_q   <= core_pixel_x;
+                px_y_q   <= core_pixel_y;
+                px_pal_q <= core_pixel_pal[5:0];
+            end
+            vid_we_q <= px_we_q;
+            if (px_we_q) begin
+                vid_in_x_q   <= px_x_q;
+                vid_in_y_q   <= px_y_q;
+                vid_in_rgb_q <= pal_to_rgb565(px_pal_q);
+            end
+        end
+    end
+
     nes_video_800x480 u_video (
         .wr_clk        (mmcm_core_clk),
         .wr_reset      (rst_core),
-        .in_valid      (core_pixel_valid),
-        .in_x          (core_pixel_x),
-        .in_y          (core_pixel_y),
-        .in_rgb565     (pal_rgb565),
+        .in_valid      (vid_we_q),
+        .in_x          (vid_in_x_q),
+        .in_y          (vid_in_y_q),
+        .in_rgb565     (vid_in_rgb_q),
         .in_line_ready (),
         .in_frame_ready(),
         .rd_clk        (mmcm_lcd_clk),

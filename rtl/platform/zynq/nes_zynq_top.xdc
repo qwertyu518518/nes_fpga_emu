@@ -343,6 +343,59 @@ create_clock -name lcd_clk -period 40.000 -waveform {0.000 20.000} [get_ports lc
 # -----------------------------------------------------------------------------
 
 
+# -----------------------------------------------------------------------------
+# TOUCH BUTTON CDC: sys_clk -> mmcm_core_clk, BOUNDED, NOT EXCUTED
+#
+# The eight failing endpoints on the routed design were all
+#     u_touch/touch_*_q_reg[*]/C  ->  btn_meta_q_reg[7..0]/D
+# at WNS -2.665, and each was only 3 logic levels and 3.232 ns deep.  The
+# depth is not the problem.  The REQUIREMENT is: btn_meta_q is clocked by
+# mmcm_core_clk, and mmcm_core_clk is an MMCM output derived from sys_clk, so
+# Vivado treats the two as a synchronous, phase-related pair and computes a
+# setup window of 0.106 ns for a path that physically needs 3.232 ns.  A 3 ns
+# path against a 0.1 ns requirement fails by construction, and no amount of
+# placement will fix it.
+#
+# WHY NOT set_clock_groups -asynchronous
+#   The two clocks are NOT asynchronous.  mmcm_core_clk is produced from
+#   sys_clk by the MMCME2_BASE in nes_zynq_clk.v, so there is a defined, fixed
+#   frequency and phase relationship between them that Vivado derives and that
+#   the rest of the design relies on.  Declaring them asynchronous would be a
+#   false statement about the hardware, and it would additionally remove the
+#   timing relationship between the two domains everywhere, not just on the
+#   eight button bits.  It is the wrong tool because the real property here is
+#   not "these clocks are unrelated", it is "this one path crosses domains and
+#   its only obligation is to be short".
+#
+# WHY set_max_delay -datapath_only AND NOT set_false_path
+#   A blanket false path on the same eight endpoints would silence the
+#   violation with no constraint left standing, and an unbounded false path is
+#   exactly how a metastability synchroniser ends up with its two stages
+#   placed on opposite sides of the die.  set_max_delay -datapath_only keeps a
+#   real bound on the physical delay while removing the meaningless setup
+#   check, which is the standard treatment for a synchroniser input stage:
+#
+#     * the delay is still bounded, so btn_meta_q stays adjacent to its source
+#       and the ASYNC_REG attribute can do its job;
+#     * the bound is 20.000 ns, the SOURCE clock period, so the path is
+#       checked against a number the design can actually meet (it needs
+#       3.232 ns) rather than against a 0.106 ns coincidence of two edges;
+#     * it applies ONLY to the source-to-first-stage arcs.  The second stage
+#       btn_meta_q -> btn_sync_q is intra-core_clk and stays fully timed, so
+#       the synchroniser's own settling window is still analysed.
+#
+# 20.000 ns is used rather than the 46.561 ns destination period because the
+# bound should be the tighter of the two: the point of the constraint is to
+# keep this path short, and the source period is the shorter period.
+#
+# The expression is scoped to the first-stage flops and to the touch module's
+# own flops, so nothing else in the design is affected by it.
+# -----------------------------------------------------------------------------
+set_max_delay -datapath_only 20.000 \
+    -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_touch/*}] \
+    -to   [get_cells -quiet -hierarchical -filter {NAME =~ *btn_meta_q_reg[*]}]
+
+
 # =============================================================================
 # AUDIO LANE -- COMMENTED OUT, NOT YET BUILT
 #
