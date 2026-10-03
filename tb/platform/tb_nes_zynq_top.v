@@ -25,6 +25,12 @@
 //      the RGB565 -> RGB888 expansion, plus the lcd_rgb tri-state behaviour and
 //      the buttons 2-FF crossing.
 //
+//   5. The touch lane.  This top owns the two panel I2C pins, so it is the only
+//      place where the open drain contract on touch_scl and touch_sda can be
+//      observed at all.  A behavioural GT9147 slave ACKs the controller and
+//      answers the status and coordinate register reads; the bus is then watched
+//      for the whole run so a push-pull driver cannot hide in a quiet window.
+//
 // ANTI-CIRCULARITY ON THE PALETTE
 //   The expected values are built from a SECOND, independent transcription of
 //   .slim/clonedeps/repos/caseif__cNES/src/ppu.c:94-111 as RGB888 triples,
@@ -69,7 +75,7 @@ module tb_nes_zynq_top;
     wire lcd_bl;
     wire lcd_clk;
     wire lcd_rst;
-    wire touch_scl;
+    tri  touch_scl;
     tri  touch_sda;
     wire touch_rst_n;
     reg  touch_int;
@@ -105,6 +111,9 @@ module tb_nes_zynq_top;
     integer btn_converged_ns;
     integer t_key_down_ns;
     integer btn_phase;
+    integer touch_base;
+    integer touch_guard;
+    integer touch_err_base;
     integer z_seen;
     integer de_seen;
 
@@ -116,8 +125,13 @@ module tb_nes_zynq_top;
     reg core_frame_d_r;
     reg lcd_frame_p_r;
 
-    // touch_sda is the open-drain side of the panel I2C bus; the bench models
-    // the panel side pull-up so sda_i is never Z.
+    // touch_scl and touch_sda are the open-drain side of the panel I2C bus.  The
+    // bench models the panel side pull-up on BOTH lines so neither is ever Z:
+    // nes_zynq_top.xdc constrains the two pins with no PULLUP anywhere, so the
+    // board module carries them and the model has to as well.  touch_scl was a
+    // passive wire here while touch_sda had a pull-up, which is precisely why a
+    // push-pull touch_scl driver in the top was invisible here.
+    pullup pu_scl (touch_scl);
     pullup pu_sda (touch_sda);
 
     nes_zynq_top dut (        .sys_clk     (sys_clk),
@@ -146,6 +160,220 @@ module tb_nes_zynq_top;
                 $display("VIOLATION %0s a=%0d b=%0d t=%0t", code, a, b, $time);
         end
     endtask
+
+    // ---------------------------------------------------------------------
+    // Behavioural GT9147 slave on the touch bus.
+    //
+    // The panel is the only other device on touch_scl / touch_sda and it is open
+    // drain like the master: it pulls a line low and otherwise releases it.  It
+    // ACKs every byte addressed to 7'h14 and answers the two register reads the
+    // controller makes, 16'h814E for the status and 16'h8150 for the four
+    // coordinate bytes.  The register pointer survives a repeated START, which is
+    // how the controller issues write-two-bytes-then-repeated-START-read.
+    //
+    // The decode is deliberately the same shape as the module bench's: sample on
+    // the SCL rising edge, decide and present ACK or data on the SCL falling
+    // edge, release on the falling edge that ends the slot.  Presenting anything
+    // while SCL is low is what keeps the panel's own edges from being mistaken
+    // for START or STOP.
+    // ---------------------------------------------------------------------
+    localparam [6:0]  SL_ADDR  = 7'h14;
+    localparam [15:0] SL_STREG = 16'h814E;
+    localparam [15:0] SL_COREG = 16'h8150;
+
+    localparam [1:0] SL_RX      = 2'd0;
+    localparam [1:0] SL_ACK     = 2'd1;
+    localparam [1:0] SL_TX      = 2'd2;
+    localparam [1:0] SL_TX_ACK  = 2'd3;
+
+    localparam       SL_POST_IDLE = 1'b0;
+    localparam       SL_POST_TX   = 1'b1;
+
+    reg         sl_scl_low = 1'b0;
+    reg         sl_sda_low = 1'b0;    reg  [1:0]  sl_state   = SL_RX;
+    reg  [7:0]  sl_rx      = 8'h00;
+    integer     sl_bit     = 0;
+    integer     sl_byte    = 0;
+    reg  [15:0] sl_ptr     = 16'h0000;
+    reg  [15:0] sl_rd_base = 16'h0000;
+    integer     sl_rd_idx  = 0;
+    reg         sl_is_read = 1'b0;
+    reg         sl_post    = SL_POST_IDLE;
+    reg  [7:0]  sl_tx      = 8'h00;
+    integer     sl_tx_bit  = 7;
+    reg         sl_master_ack = 1'b1;
+    reg         sl_in_txn  = 1'b0;
+    reg  [15:0] sl_hold_cnt = 16'hFFFF;
+
+    reg  [7:0]  sl_status  = 8'h00;
+    reg  [15:0] sl_x       = 16'd100;
+    reg  [15:0] sl_y       = 16'd120;
+
+    integer sl_start_cnt  = 0;
+    integer sl_stop_cnt   = 0;
+    integer sl_addr_hits  = 0;
+    integer sl_flag_clr   = 0;
+    integer sl_coord_rds  = 0;
+    integer scl_probe_bad = 0;
+    integer bus_xcl       = 0;
+    integer bus_xsda      = 0;
+    integer bus_pp_sda    = 0;
+
+    assign touch_scl = sl_scl_low ? 1'b0 : 1'bz;
+    assign touch_sda = sl_sda_low ? 1'b0 : 1'bz;
+
+    // The panel holding SCL low for a bounded window is ordinary I2C: it is how
+    // a slave keeps the master from starting a new transfer until it is ready.
+    always @(posedge sys_clk) begin
+        if (sl_scl_low !== 1'b0) begin
+            if (sl_hold_cnt != 16'd0) begin
+                sl_hold_cnt = sl_hold_cnt - 16'd1;
+            end else begin
+                sl_scl_low = 1'b0;
+                sl_hold_cnt = 16'hFFFF;
+            end
+        end
+    end
+
+    function sl_want_ack;
+        begin
+            if (sl_byte == 0) sl_want_ack = (sl_rx[7:1] == SL_ADDR);
+            else              sl_want_ack = 1'b1;
+        end
+    endfunction
+
+    task sl_load_rd_byte;
+        begin
+            if (sl_rd_base == SL_STREG) begin
+                sl_tx = sl_status;
+            end else if (sl_rd_base == SL_COREG) begin
+                case (sl_rd_idx)
+                    0:       sl_tx = sl_x[7:0];
+                    1:       sl_tx = sl_x[15:8];
+                    2:       sl_tx = sl_y[7:0];
+                    default: sl_tx = sl_y[15:8];
+                endcase
+                if (sl_rd_idx == 0) sl_coord_rds = sl_coord_rds + 1;
+            end else begin
+                sl_tx = 8'h00;
+            end
+            sl_rd_idx = sl_rd_idx + 1;
+        end
+    endtask
+
+    task sl_byte_done;
+        begin
+            if (sl_byte == 0) begin
+                sl_is_read = sl_rx[0];
+                sl_byte    = 1;
+                sl_post    = SL_POST_IDLE;
+                if (sl_rx[7:1] == SL_ADDR) begin
+                    sl_addr_hits = sl_addr_hits + 1;
+                    if (sl_is_read) begin
+                        sl_rd_base = sl_ptr;
+                        sl_rd_idx  = 0;
+                        sl_post    = SL_POST_TX;
+                        sl_load_rd_byte();
+                    end
+                end
+            end else if (sl_byte == 1) begin
+                sl_ptr[15:8] = sl_rx;
+                sl_byte      = 2;
+            end else if (sl_byte == 2) begin
+                sl_ptr[7:0]  = sl_rx;
+                sl_byte      = 3;
+            end else begin
+                if (sl_ptr == SL_STREG) begin
+                    sl_flag_clr = sl_flag_clr + 1;
+                    sl_status   = 8'h00;
+                end
+            end
+        end
+    endtask
+
+    always @(posedge touch_scl) begin
+        if (sl_state == SL_RX && sl_bit < 8) begin
+            sl_rx[7 - sl_bit] = touch_sda;
+            sl_bit = sl_bit + 1;
+        end else if (sl_state == SL_ACK) begin
+            sl_byte_done();
+        end else if (sl_state == SL_TX_ACK) begin
+            sl_master_ack = touch_sda;
+        end
+    end
+
+    always @(negedge touch_scl) begin
+        if (sl_state == SL_RX && sl_bit == 8) begin
+            sl_sda_low = sl_want_ack();
+            sl_state   = SL_ACK;
+        end else if (sl_state == SL_ACK) begin
+            sl_bit     = 0;
+            sl_sda_low = 1'b0;
+            sl_state   = SL_RX;
+            if (sl_post == SL_POST_TX) begin
+                sl_tx_bit  = 7;
+                sl_sda_low = ~sl_tx[7];
+                sl_state   = SL_TX;
+            end
+        end else if (sl_state == SL_TX) begin
+            if (sl_tx_bit == 0) begin
+                sl_sda_low = 1'b0;
+                sl_state   = SL_TX_ACK;
+            end else begin
+                sl_tx_bit  = sl_tx_bit - 1;
+                sl_sda_low = ~sl_tx[sl_tx_bit];
+            end
+        end else if (sl_state == SL_TX_ACK) begin
+            sl_bit = 0;
+            if (sl_master_ack === 1'b0) begin
+                sl_load_rd_byte();
+                sl_tx_bit  = 7;
+                sl_sda_low = ~sl_tx[7];
+                sl_state   = SL_TX;
+            end else begin
+                sl_state   = SL_RX;
+            end
+        end
+    end
+
+    always @(negedge touch_sda) begin
+        if (touch_scl === 1'b1) begin
+            sl_start_cnt = sl_start_cnt + 1;
+            sl_in_txn    = 1'b1;
+            sl_byte      = 0;
+            sl_bit       = 0;
+            sl_rx        = 8'h00;
+            sl_state     = SL_RX;
+            sl_post      = SL_POST_IDLE;
+            sl_sda_low   = 1'b0;
+        end
+    end
+
+    always @(posedge touch_sda) begin
+        if (touch_scl === 1'b1) begin
+            if (sl_in_txn) sl_stop_cnt = sl_stop_cnt + 1;
+            sl_in_txn  = 1'b0;
+            sl_sda_low = 1'b0;
+            sl_state   = SL_RX;
+        end
+    end
+
+    // ---------------------------------------------------------------------
+    // Open drain contract on the two panel pins, observed on the real nets.
+    //
+    // X on either line is the only way a push-pull driver shows up here: a
+    // strong one against the panel's strong zero resolves to X, while a correct
+    // open-drain driver simply loses and lets the zero win.  The second check is
+    // the direct form of the same contract on the master's own drive request.
+    // ---------------------------------------------------------------------
+    always @(posedge sys_clk) begin
+        if (touch_scl === 1'bx) bus_xcl = bus_xcl + 1;
+        if (touch_sda === 1'bx) bus_xsda = bus_xsda + 1;
+        if (dut.touch_sda_oe === 1'b1 && dut.touch_sda_o === 1'b1) bus_pp_sda = bus_pp_sda + 1;
+        // While the panel holds SCL low the wire must read low, whether or not the
+        // master happens to be releasing it at that instant.
+        if (sl_scl_low !== 1'b0 && touch_scl !== 1'b0) scl_probe_bad = scl_probe_bad + 1;
+    end
 
     // ---------------------------------------------------------------------
     // Reference palette: a second, independent transcription of
@@ -451,6 +679,25 @@ module tb_nes_zynq_top;
         z_seen = 0;
         if (dut.u_core.buttons2 !== 8'h00) err("BUTTONS2_NOT_TIED_OFF", dut.u_core.buttons2, 0);
 
+        // ------------------------------- touch_scl is open drain, regression
+        // The controller holds ct_rst_n low for another 9 ms and then waits the
+        // vendor's 50 ms, so at this point in the run the bus is guaranteed idle
+        // and the master's I2C engine is sitting with scl_o released.  The panel
+        // now pulls SCL low for 100 us, exactly as a GT9147 does when it needs
+        // the bus.  A push-pull touch_scl driver fights that pull-down and the
+        // resolved level is X; an open-drain driver loses and the wire stays low.
+        // The pull-up has to exist first: nes_zynq_top.xdc constrains touch_scl
+        // with no PULLUP, so the board module supplies it and without this the
+        // pin would simply read Z.
+        if (dut.touch_scl_o !== 1'b1) err("TOUCH_SCL_NOT_RELEASED_WHILE_IDLE", dut.touch_scl_o, 1);
+        sl_hold_cnt = 16'd4999;
+        sl_scl_low  = 1'b1;
+        repeat (6000) @(posedge sys_clk);
+        if (sl_scl_low !== 1'b0) err("TOUCH_SCL_STILL_HELD", sl_scl_low, 0);
+        if (touch_scl !== 1'b1) err("TOUCH_SCL_DID_NOT_RECOVER", touch_scl, 1);
+        $display("BUS  touch SCL open drain: 5000 clk held low by the panel, %0d cycles the wire was not low",
+                 scl_probe_bad);
+
         // ---------------------------------------------- buttons CDC, real path
         // The synthetic pattern force has to come off first: while it is on,
         // touch_buttons is pinned to btn_drv and the real key path is invisible.
@@ -563,12 +810,115 @@ module tb_nes_zynq_top;
         if (z_seen < 1000) err("LCD_RGB_NEVER_TRISTATE", z_seen, 1000);
         if (de_seen < 1000) err("LCD_DE_NEVER_ASSERTED", de_seen, 1000);
 
+        // ------------------------------------------- the panel I2C lane, live
+        // ct_rst_n is low for 10 ms and the controller then waits the vendor's
+        // 50 ms, so the first poll starts about 60 ms after the reset release.
+        // Until now this bench finished at about 50 ms and never saw a single
+        // I2C edge, which is the other half of why a push-pull touch_scl and a
+        // dead panel could both ship.
+        touch_guard = 0;
+        while (dut.u_touch.init_done !== 1'b1 && touch_guard < 8000000) begin
+            @(posedge sys_clk);
+            touch_guard = touch_guard + 1;
+        end
+        if (dut.u_touch.init_done !== 1'b1) err("TOUCH_INIT_DONE_NEVER", touch_guard, 0);
+        if (dut.touch_rst_n !== 1'b1) err("TOUCH_RST_N_NOT_RELEASED", dut.touch_rst_n, 1);
+
+        // One poll cycle is a status read, a coordinate read and a flag clear.
+        touch_base   = sl_stop_cnt;
+        touch_err_base = sl_addr_hits;
+        touch_guard  = 0;
+        while (sl_stop_cnt < touch_base + 3 && touch_guard < 8000000) begin
+            @(posedge sys_clk);
+            touch_guard = touch_guard + 1;
+        end
+        if (sl_stop_cnt < touch_base + 3) err("TOUCH_POLL_NEVER_COMPLETED", sl_stop_cnt, touch_base + 3);
+        if (sl_addr_hits < touch_err_base + 4) err("TOUCH_PANEL_NOT_ADDRESSED", sl_addr_hits, touch_err_base + 4);
+        if (sl_flag_clr < 1) err("TOUCH_FLAG_NEVER_CLEARED", sl_flag_clr, 1);
+        // An ACKing panel that answers must never raise the error flag; that flag
+        // clearing poll_ok_q is what pins touch_valid low forever on the board.
+        if (dut.u_touch.touch_error !== 1'b0) err("TOUCH_ERROR_ON_AN_ACKING_PANEL", dut.u_touch.touch_error, 0);
+        if (dut.u_touch.poll_ok_q !== 1'b1) err("TOUCH_POLL_OK_NEVER_SET", dut.u_touch.poll_ok_q, 1);
+        if (dut.u_touch.poll_done !== 1'b0) err("TOUCH_POLL_DONE_STUCK", dut.u_touch.poll_done, 0);
+        if (touch_scl !== 1'b1 || touch_sda !== 1'b1)
+            err("TOUCH_BUS_NOT_RELEASED", touch_scl, touch_sda);
+        $display("TOUCH %0d START, %0d STOP, %0d address matches, %0d flag clears, error=%0b",
+                 sl_start_cnt, sl_stop_cnt, sl_addr_hits, sl_flag_clr, dut.u_touch.touch_error);
+
+        // A reported touch has to come back as coordinates and as the dpad half
+        // of the button byte.  (100, 120) is left of the x_left cut at 200, so
+        // dpad is 4'b0010.
+        //
+        // The report has to be staged while the bus is idle.  A real GT9147
+        // clears its own data-ready flag when the master writes 0x00 to 16'h814E,
+        // and the model does the same, so staging a report in the middle of a
+        // poll cycle would have it wiped by that cycle's own flag clear.
+        touch_guard = 0;
+        while (touch_guard < 4000000) begin
+            touch_base  = sl_start_cnt;
+            touch_guard = 0;
+            while (sl_start_cnt == touch_base && touch_guard < 300000) begin
+                @(posedge sys_clk);
+                touch_guard = touch_guard + 1;
+            end
+            if (touch_guard >= 300000) begin
+                touch_guard = 4000001;
+            end else begin
+                @(posedge sys_clk);
+                touch_guard = touch_guard + 1;
+            end
+        end
+        if (sl_in_txn !== 1'b0) err("TOUCH_BUS_NEVER_WENT_IDLE", sl_in_txn, 0);
+        $display("TOUCH bus went idle after %0d START, %0d STOP", sl_start_cnt, sl_stop_cnt);
+
+        sl_x      = 16'd100;
+        sl_y      = 16'd120;
+        sl_status = 8'h81;
+        @(negedge sys_clk);
+        touch_int = 1'b0;
+        touch_guard = 0;
+        while (!(dut.u_touch.touch_valid === 1'b1 &&
+                 dut.u_touch.touch_x === 16'd100 &&
+                 dut.u_touch.touch_y === 16'd120) && touch_guard < 8000000) begin
+            @(posedge sys_clk);
+            touch_guard = touch_guard + 1;
+        end
+        if (!(dut.u_touch.touch_valid === 1'b1 &&
+              dut.u_touch.touch_x === 16'd100 &&
+              dut.u_touch.touch_y === 16'd120))
+            err("TOUCH_REPORT_NEVER_LATCHED", dut.u_touch.touch_valid, dut.u_touch.touch_x);
+        if (dut.u_touch.touch_error !== 1'b0) err("TOUCH_ERROR_ON_A_REPORT", dut.u_touch.touch_error, 0);
+        if (sl_coord_rds < 1) err("TOUCH_COORDINATES_NEVER_READ", sl_coord_rds, 1);
+        if (dut.touch_buttons[7:4] !== 4'b0010)
+            err("TOUCH_DPAD_LEFT", dut.touch_buttons[7:4], 4'b0010);
+        $display("TOUCH panel reported (%0d, %0d) status %02h, dpad %b, buttons %02h",
+                 dut.u_touch.touch_x, dut.u_touch.touch_y, sl_status,
+                 dut.touch_buttons[7:4], dut.touch_buttons);
+
+        // Release it and let the flag clear consume the report.
+        @(negedge sys_clk);
+        touch_int = 1'b1;
+        touch_guard = 0;
+        while (dut.u_touch.touch_valid !== 1'b0 && touch_guard < 8000000) begin
+            @(posedge sys_clk);
+            touch_guard = touch_guard + 1;
+        end
+        if (dut.u_touch.touch_valid !== 1'b0) err("TOUCH_REPORT_NEVER_RELEASED", touch_guard, 0);
+        if (dut.touch_buttons[7:4] !== 4'b0000) err("TOUCH_DPAD_STUCK", dut.touch_buttons[7:4], 0);
+
+        // The open drain contract over the whole run, not just the probe window.
+        if (bus_xcl != 0) err("TOUCH_SCL_CONTENDED", bus_xcl, 0);
+        if (bus_xsda != 0) err("TOUCH_SDA_CONTENDED", bus_xsda, 0);
+        if (bus_pp_sda != 0) err("TOUCH_SDA_PUSH_PULL", bus_pp_sda, 0);
+        $display("BUS  touch bus contention over the whole run: scl=%0d sda=%0d push_pull_sda=%0d",
+                 bus_xcl, bus_xsda, bus_pp_sda);
+
         if (errors != 0) begin
             $display("FAIL nes_zynq_top with %0d violations", errors);
             $fatal(1, "nes_zynq_top tb failed");
         end
 
-        $display("PASS nes_zynq_top three clock domains, reset gated on locked, 64-entry palette, RGB888 expansion, two CDCs");
+        $display("PASS nes_zynq_top three clock domains, reset gated on locked, 64-entry palette, RGB888 expansion, open drain touch bus");
         $finish;
     end
 

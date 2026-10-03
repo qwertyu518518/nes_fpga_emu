@@ -521,7 +521,7 @@ module nes_zynq_top #(
         .poll_done  (touch_poll_done)
     );
 
-    assign touch_scl     = touch_scl_o;
+    assign touch_scl     = touch_scl_o ? 1'bz : 1'b0;
     assign touch_sda     = touch_sda_oe ? touch_sda_o : 1'bz;
     assign touch_sda_i   = touch_sda;
     assign touch_rst_n   = ct_rst_n;
