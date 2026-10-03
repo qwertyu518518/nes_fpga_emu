@@ -660,6 +660,8 @@ wire [2:0] fu_state;
 wire       fu_cap_pl;
 wire [7:0] fu_bg_lo;
 wire [7:0] fu_bg_hi;
+wire [13:0] fu_chr_addr;
+wire        fu_chr_req;
 
 // P0-6 race window.  The tb chr_mem array now changes mid-run, so a shadow
 // comparison whose address was itself written in the last two ce is comparing
@@ -671,6 +673,71 @@ reg                      chr_wq0_v;
 reg                      chr_wq1_v;
 integer chr_pred_race_skip;
 integer chr_latch_race_skip;
+
+// ------------------------------------------- P0-6 where the expectation comes
+// from, and why it is no longer the arbitrated bus.
+//
+// This check USED to derive its expectation from chr_final_addr delayed two ce,
+// i.e. from whatever address the arbiter had put on the bus.  That made it
+// structurally blind to a fetch beat being STOLEN: when the $2007 read arm won
+// the bus on the unit's own S_BEAT clk, chr_h2 became the arm's address, the
+// unit latched chr_mem[the arm's address], and chr_mem[chr_h2] agreed with the
+// corrupted latch.  The expectation followed the defect, so system-v6 could not
+// have caught it at any program.  W3-11 was added for the arm path and derives
+// its expectation from each unit's OWN chr_addr register instead; this is P0-6
+// corrected to do the same, over P0-6's own stimulus (every S_GRAB of the
+// background unit) and P0-6's own latch registers (bg_lo / bg_hi, i.e. the
+// register the unit really latched, not the bus).
+//
+// fu_chr_addr is u_chr_fetch.chr_addr, the register the unit itself drives, and
+// the arbiter has no path into it.  The translation into the mapper's address
+// space uses the TB's OWN bank model exactly the way P0-2's read-beat check and
+// W3-11 already do, so a mapper bank selection is accounted for without the
+// expectation depending on any DUT-side muxing.
+//
+// The pipeline has to be two ce deep because the comparison runs one ce AFTER
+// S_GRAB, on the latch register the unit produced at the end of S_GRAB, while
+// fu_chr_addr has already moved on to the NEXT byte's address by then:
+//
+//   ce N   S_BEAT.  fu_chr_req high, fu_chr_addr still holds the address being
+//         asked for.  fu_exp_a and fu_wr_q1 sample it and whether chr_we owned
+//         the mapper port on this beat.
+//   ce N+1 S_GRAB.  the unit latches chr_rdata.  fu_exp_b carries the recorded
+//         address, fu_exp_v2 marks it valid, fu_wr_q2 carries the write flag.
+//   ce N+2 fu_sgrab_q is high.  fu_chr_addr has moved to the following byte, so
+//         fu_exp_b is the only record of what this latch was entitled to.
+//
+// HOW MUCH OF THE RUN P0-6 ACTUALLY AUDITS, measured rather than assumed.  This
+// check's counters are read and asserted when check_p0_6 is called, which is at
+// 10.72 ms of a 32.36 ms run, i.e. the first third: 268028 of the 809020 ce_ppu
+// edges, 50132 of the 117118 background S_GRAB beats.  Every one of those beats
+// IS compared -- a shadow counter reading u_chr_fetch.state == S_GRAB on the same
+// edge returns exactly 50132, the same number as chr_latch_checks -- so this is
+// a SCOPE limit, not an undercount, and it is W3-11, whose task runs at the end
+// of the run, that covers the remaining two thirds.  Left as it is on purpose:
+// P0-6 keeps its own stimulus and its own scope, and the two checks are
+// independent witnesses of the same property over different windows.
+//
+// chr_wr_exp_final below exists for the same reason on the WRITE side, where the
+// PPU has no address register of its own to read and chr_waddr is the port the
+// $2007 access drives, so a raw read of it would be a DUT mux output rather than
+// an independent model.  chr_wq0/wq1 are the $2007 strobe beats only; chr_rdata
+// is read-only to a chr-ram board (mapper_chr_ram_we needs ppu_we, which needs
+// ppu_req, and ppu_req is structurally 0 on the fetch-unit-owned div_phase), so
+// the fetch latch comparison is a pure read of tb chr_mem and needs no write
+// guard of its own.
+wire [CHR_ADDR_BITS-1:0] fu_exp_now =
+    ({13'b0, tb_chr_bank_model} << 13) | (fu_chr_addr & 14'h1FFF);
+reg  [CHR_ADDR_BITS-1:0] fu_exp_a;
+reg  [CHR_ADDR_BITS-1:0] fu_exp_b;
+reg  [13:0]              fu_loc_a;    // the unit's LOCAL chr_addr, for the message
+reg  [13:0]              fu_loc_b;
+reg                      fu_exp_v1;
+reg                      fu_exp_v2;
+reg                      fu_wr_q1;
+reg                      fu_wr_q2;
+integer chr_latch_wr_skip;   // beats a $2007 CHR WRITE owned the port for (L-17)
+integer chr_latch_noexp;     // beats with no recorded address: would be vacuous
 
 // ---------------------------------------------------- W1 / W2 / ignore counters
 integer chr_wr_beats;          // ab_v6 strobe beats
@@ -791,6 +858,8 @@ assign fu_state = ab_v6.u_ppu.g_chr_external.u_chr_fetch.state;
 assign fu_cap_pl = ab_v6.u_ppu.g_chr_external.u_chr_fetch.cap_pl;
 assign fu_bg_lo = ab_v6.u_ppu.g_chr_external.u_chr_fetch.bg_lo;
 assign fu_bg_hi = ab_v6.u_ppu.g_chr_external.u_chr_fetch.bg_hi;
+assign fu_chr_addr = ab_v6.u_ppu.g_chr_external.u_chr_fetch.chr_addr;
+assign fu_chr_req  = ab_v6.u_ppu.g_chr_external.u_chr_fetch.chr_req;
 
 integer cart_wr_total;
 integer cart_pulse_total;
@@ -2947,6 +3016,14 @@ always @(posedge clk) begin
         chr_wq1_v <= 1'b0;
         fu_sgrab_q <= 1'b0;
         fu_cappl_q <= 1'b0;
+        fu_exp_a <= {CHR_ADDR_BITS{1'b0}};
+        fu_exp_b <= {CHR_ADDR_BITS{1'b0}};
+        fu_loc_a <= 14'd0;
+        fu_loc_b <= 14'd0;
+        fu_exp_v1 <= 1'b0;
+        fu_exp_v2 <= 1'b0;
+        fu_wr_q1 <= 1'b0;
+        fu_wr_q2 <= 1'b0;
     end else if (ab_v6.ce_ppu) begin
         chr_write_on_port = 1'b0;
         chr_h1 <= v6_chr_final_addr;
@@ -2960,29 +3037,72 @@ always @(posedge clk) begin
             chr_wq0_v <= 1'b0;
         end
 
-        // P0-6.  The tb chr_mem array changes mid-run now that the program can
-        // store into it, so a latched byte whose address was itself written in
-        // the last two ce is being compared against a different epoch of the
-        // array.  Those beats are counted and skipped, everything else is
-        // still compared, and both counts are printed.
+        // ---- what the background fetch unit was entitled to on the beat it
+        // asked for.  Sampled on the ce chr_req is high, which is S_BEAT, the
+        // one state where u_chr_fetch.chr_addr still holds the byte being read.
+        // A unit the rtl defers (chr_hold_bg freezes it with chr_addr and chr_req
+        // untouched) repeats the SAME address on the next ce, so re-recording is
+        // harmless and the two cases stay identical.
+        if (fu_chr_req !== 1'b0) begin
+            fu_exp_a <= fu_exp_now;
+            fu_loc_a <= fu_chr_addr;
+            fu_exp_v1 <= 1'b1;
+            fu_wr_q1 <= (v6_chr_we !== 1'b0);
+        end else begin
+            fu_exp_v1 <= 1'b0;
+        end
+        fu_exp_b <= fu_exp_a;
+        fu_loc_b <= fu_loc_a;
+        fu_exp_v2 <= fu_exp_v1;
+        fu_wr_q2 <= fu_wr_q1;
+
+        // P0-6.  The expectation is chr_mem[the address in the fetch unit's OWN
+        // chr_addr register], banked through the tb's own model, NOT
+        // chr_mem[chr_final_addr delayed 2 ce].  The old form was blind to a
+        // stolen beat because chr_final_addr is the arbitrated address, so on a
+        // beat where the $2007 read arm won the bus the expectation became the
+        // arm's byte and agreed with the corrupted latch.  chr_h2 is still
+        // carried, but only to be printed as the foreign address in the message.
+        //
+        // Two classes of beat are counted and not compared, and neither is the
+        // read arm:
+        //   * a beat a $2007 CHR WRITE owned the mapper port for.  mapper_ppu_addr
+        //     = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr, so a write takes the
+        //     address from the fetch unit exactly the way a read arm does, and
+        //     that hazard is still open (risk L-17, P0-2's
+        //     WRITE-READ-ARBITRATION measures it, 22 of 96 write beats in this
+        //     program).  It is a separate defect with a separate owner and is
+        //     named and counted here rather than silently dropped or absorbed.
+        //   * a beat whose expected cell was itself written in the last two ce.
+        //     The tb chr_mem array changes mid-run now that the program can store
+        //     into it, so such a beat compares against a different epoch of the
+        //     array.  Same rule as before, now applied to the address actually
+        //     read.
+        // A beat with no recorded address would be vacuous and is counted too.
         if (fu_sgrab_q !== 1'b0) begin
             chr_latch_checks = chr_latch_checks + 1;
-            if (((chr_wq0_v !== 1'b0) && (chr_wq0 === chr_h2)) ||
-                ((chr_wq1_v !== 1'b0) && (chr_wq1 === chr_h2))) begin
+            if (fu_exp_v2 === 1'b0) begin
+                chr_latch_noexp = chr_latch_noexp + 1;
+            end else if (fu_wr_q2 !== 1'b0) begin
+                chr_latch_wr_skip = chr_latch_wr_skip + 1;
+            end else if (((chr_wq0_v !== 1'b0) && (chr_wq0 === fu_exp_b)) ||
+                ((chr_wq1_v !== 1'b0) && (chr_wq1 === fu_exp_b))) begin
                 chr_latch_race_skip = chr_latch_race_skip + 1;
             end else if (fu_cappl_q === 1'b0) begin
-                if (fu_bg_lo !== chr_mem[chr_h2]) begin
+                if (fu_bg_lo !== chr_mem[fu_exp_b]) begin
                     chr_latch_err = chr_latch_err + 1;
                     if (chr_latch_err < 5)
-                        $fatal(1, "P0-6 bg_lo latched %02h, tb chr_mem[%05h] = %02h",
-                               fu_bg_lo, chr_h2, chr_mem[chr_h2]);
+                        $fatal(1, "P0-6 bg_lo latched %02h, but the byte it asked for is tb chr_mem[%05h] (its own chr_addr %04h through the tb bank model) = %02h.  The arbitrated bus carried %05h on that beat, so the two addresses differ and the unit was handed a byte captured for another master",
+                               fu_bg_lo, fu_exp_b, fu_loc_b,
+                               chr_mem[fu_exp_b], chr_h2);
                 end
             end else begin
-                if (fu_bg_hi !== chr_mem[chr_h2]) begin
+                if (fu_bg_hi !== chr_mem[fu_exp_b]) begin
                     chr_latch_err = chr_latch_err + 1;
                     if (chr_latch_err < 5)
-                        $fatal(1, "P0-6 bg_hi latched %02h, tb chr_mem[%05h] = %02h",
-                               fu_bg_hi, chr_h2, chr_mem[chr_h2]);
+                        $fatal(1, "P0-6 bg_hi latched %02h, but the byte it asked for is tb chr_mem[%05h] (its own chr_addr %04h through the tb bank model) = %02h.  The arbitrated bus carried %05h on that beat, so the two addresses differ and the unit was handed a byte captured for another master",
+                               fu_bg_hi, fu_exp_b, fu_loc_b,
+                               chr_mem[fu_exp_b], chr_h2);
                 end
             end
         end
@@ -4693,17 +4813,25 @@ end
 
 // ------------------------------------------------------------------ W3-11
 //
-// WHY THIS GROUP EXISTS AT ALL, and why P0-6 above could never have caught it.
+// WHY THIS GROUP EXISTS AT ALL, and what P0-6 used to be.
 //
-//   P0-6 already checks every background fetch-unit latch against
+//   P0-6 checked every background fetch-unit latch against
 //   chr_mem[chr_final_addr delayed two ce].  chr_final_addr is the arbitrated
 //   address, i.e. whatever the arbiter put on the bus.  So on a beat where the
 //   $2007 read arm won, P0-6's expectation became chr_mem[the arm's address],
 //   the corrupted latch was chr_mem[the arm's address], and the check agreed.
-//   The expectation followed the defect.  W3-11 therefore takes the address from
-//   the fetch unit's OWN chr_addr register, which the arbiter cannot override,
-//   and the byte from the TB's OWN chr_mem.  Nothing in the comparison is a
-//   function of the arbiter's choice.
+//   The expectation followed the defect.  This group was therefore added with
+//   the address taken from the fetch unit's OWN chr_addr register, which the
+//   arbiter cannot override, and the byte from the TB's OWN chr_mem.  Nothing in
+//   the comparison is a function of the arbiter's choice.
+//
+//   P0-6 HAS SINCE BEEN CORRECTED TO DO THE SAME THING, over its own stimulus
+//   (every S_GRAB of the background unit) and its own latch registers.  It is
+//   deliberately not folded in here: P0-6 checks the REGISTER the unit latched
+//   one ce later and this group checks chr_rdata at S_GRAB itself, this group
+//   covers the sprite unit as well, and the DEFERRED-not-OUT-VOTED half below
+//   exists nowhere else.  Two independent witnesses of the same property is the
+//   point; one would be a single point of failure for the whole tree.
 //
 //   THE DEFECT, stated as a check.  A fetch unit presents its address across
 //   S_ARM and S_BEAT, has chr_req high for exactly the S_BEAT clk, and captures
@@ -5311,15 +5439,30 @@ task check_p0_6;
                    chr_model_pred_err);
         if (chr_latch_err != 0)
             $fatal(1, "P0-6 the fetch unit latched %0d wrong bytes", chr_latch_err);
+        if (chr_latch_noexp != 0)
+            $fatal(1, "P0-6 %0d fetch-unit latches had no recorded address of their own, so the comparison below was vacuous on them",
+                   chr_latch_noexp);
         if (chr_model_pred_checks < 50000)
             $fatal(1, "P0-6 only %0d model presentations were shadowed",
                    chr_model_pred_checks);
         if (chr_latch_checks < 1000)
             $fatal(1, "P0-6 only %0d fetch-unit latches were shadowed",
                    chr_latch_checks);
-        $display("P0-6 CHR-MODEL registered chr_rdata shadowed against chr_mem[chr_final_addr delayed 1 ce] on %0d request beats (err=%0d), fetch unit bg_lo/bg_hi latches shadowed against chr_mem[chr_final_addr delayed 2 ce] on %0d beats (err=%0d) PASS",
+        if ((chr_latch_checks - chr_latch_wr_skip - chr_latch_race_skip
+             - chr_latch_noexp) < 1000)
+            $fatal(1, "P0-6 only %0d fetch-unit latches were actually compared against the unit's own address",
+                   chr_latch_checks - chr_latch_wr_skip - chr_latch_race_skip
+                   - chr_latch_noexp);
+        $display("P0-6 CHR-MODEL registered chr_rdata shadowed against chr_mem[chr_final_addr delayed 1 ce] on %0d request beats (err=%0d) -- that half is a check of the MEMORY MODEL and stays on the arbitrated address on purpose, because the memory really is asked for the byte at whatever address is on the bus.  The fetch-unit half is NOT on that address any more: bg_lo/bg_hi are shadowed against chr_mem[the address in the fetch unit's OWN u_chr_fetch.chr_addr register, sampled on the ce it raised chr_req and carried through S_GRAB, banked by (tb_chr_bank_model<<13)|(local&0x1fff)] on %0d beats (err=%0d) PASS",
                  chr_model_pred_checks, chr_model_pred_err, chr_latch_checks,
                  chr_latch_err);
+        $display("P0-6 WHY-THE-EXPECTATION-IS-NOT-THE-BUS the old expectation was chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a beat where the $2007 read arm won the bus the expectation became chr_mem[the arm's address], the corrupted latch was chr_mem[the arm's address], and the check agreed with the corruption: it could not have caught a stolen beat at any program.  The address now comes from u_chr_fetch.chr_addr, a register inside the fetch unit that the arbiter has no path into, and the byte from the tb's own chr_mem, so nothing in the comparison is a function of the arbiter's choice.  Of the %0d fetch-unit latches, %0d were compared and %0d were not, and the %0d that were not are two named classes: %0d on a beat a $2007 CHR WRITE owned the mapper port for (mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr, so a write takes the address from the fetch unit the same way a read arm does; that is the separate and STILL OPEN risk L-17 that P0-2's WRITE-READ-ARBITRATION measures, not this check's subject and not absorbed by it), %0d whose expected cell was itself written in the last two ce, %0d with no recorded address PASS",
+                 chr_latch_checks,
+                 chr_latch_checks - chr_latch_wr_skip - chr_latch_race_skip
+                 - chr_latch_noexp,
+                 chr_latch_wr_skip + chr_latch_race_skip + chr_latch_noexp,
+                 chr_latch_wr_skip + chr_latch_race_skip + chr_latch_noexp,
+                 chr_latch_wr_skip, chr_latch_race_skip, chr_latch_noexp);
         $display("P0-6 TB-MODEL-CHANGES the tb chr_mem array is no longer write-once: the program now stores %0d bytes into it, so a shadow comparison whose address was itself written in the last two ce would be comparing against a different epoch of the array.  Those beats are COUNTED and skipped rather than compared, and nothing else is skipped: %0d of %0d registered-read beats and %0d of %0d fetch-unit latch beats were excluded this way, leaving err=%0d and err=%0d on the rest PASS",
                  chr_wr_accepted, chr_pred_race_skip, chr_model_pred_checks,
                  chr_latch_race_skip, chr_latch_checks,
@@ -5836,9 +5979,10 @@ task check_w3_readback;
         // w3_defer_bad_bg/sp say a displaced beat was OUT-VOTED, i.e. the old
         // defect: allowed to be zero, and asserted to be.  w3_err_bg/sp say a
         // fetch unit CONSUMED a byte captured for another master: the corruption
-        // itself, asserted to be zero.  P0-6 cannot make the last statement,
-        // because its expectation is chr_mem[the arbitrated address] and the
-        // corruption makes the arbitrated address the arm's.
+        // itself, asserted to be zero.  P0-6 makes the same statement over the
+        // background unit's latched bg_lo/bg_hi rather than over chr_rdata at
+        // S_GRAB, from its own corrected expectation, so this is a second
+        // witness and not the only one.
         if (w3_err_bg != 0 || w3_err_sp != 0)
             $fatal(1, "W3-11 %0d background and %0d sprite fetch beats were consumed with a byte captured for the $2007 read arm",
                    w3_err_bg, w3_err_sp);
@@ -5878,7 +6022,7 @@ task check_w3_readback;
         $display("W3-6 SENTINEL-SURVIVES this EXTENDS the W1 SENTINEL check rather than restating it.  W1 proves the $2000 control region was never written; here the four windows the read-back loops address are snapshotted at the moment the program raised ram[%04h] (loop A has already run at that point) and re-read at the end of the run: %0d of the %0d bytes moved, so neither loop A nor the %0d read arms loop B issued per nmi wrote anything.  chr_mem[$2000+d] still holds the sentinel on all %0d bytes (err=%0d), and the chr-rom board's whole 128 KiB is still byte identical to its pre-run snapshot (%0d of %0d bytes differ).  A read path that raised chr_we, or a model that accepted a store the mapper refused, would move one of these PASS",
                  CHR_UPLOAD_FLAG_CELL, rb_snap_err, rb_cells, rb_loopb_arms,
                  CHR_TILE_BYTES, chr_up_addr_err, rom_pre_err, rom_pre_bytes);
-        $display("W3-7 MODEL-CREDIBILITY no new shadow model is introduced here on purpose: W3-2 reuses P0-6's existing per-ce shadow of the registered chr_rdata against chr_mem[chr_final_addr delayed 1 ce] and of the fetch unit's bg_lo/bg_hi against chr_mem[chr_final_addr delayed 2 ce], which is what already makes the memory model itself auditable.  Over the whole run that shadow ran on %0d request beats (err=%0d) and %0d fetch-unit latches (err=%0d), with %0d and %0d beats skipped for a write race.  A read arm is a request beat like any other, so it is inside those numbers: the model is asked for the byte at whatever address was on the bus, whoever put it there PASS",
+        $display("W3-7 MODEL-CREDIBILITY no new shadow model is introduced here on purpose: W3-2 reuses P0-6's existing per-ce shadow of the registered chr_rdata against chr_mem[chr_final_addr delayed 1 ce] and of the fetch unit's bg_lo/bg_hi against P0-6's own fetch-unit expectation, which is chr_mem[the address in the fetch unit's OWN u_chr_fetch.chr_addr register] and NOT chr_mem[chr_final_addr delayed 2 ce] any more.  That correction is what makes the memory model itself auditable: the byte side is the tb's own array and the address side is a register the arbiter cannot redefine, so a beat the arbiter gave to another master shows up as an error instead of as a matching expectation.  Over the whole run that shadow ran on %0d request beats (err=%0d) and %0d fetch-unit latches (err=%0d), with %0d and %0d beats skipped for a write race.  A read arm is a request beat like any other, so it is inside the first number: the model is asked for the byte at whatever address was on the bus, whoever put it there PASS",
                  chr_model_pred_checks, chr_model_pred_err, chr_latch_checks,
                  chr_latch_err, chr_pred_race_skip, chr_latch_race_skip);
         $display("W3-8 CROSS-DUT-VALUE-AB the strongest single check in the group.  ab_v5 runs the SAME program on the INTERNAL chr path: g_chr_internal answers $2007 out of nes_ppu2c02's own chr_ram with no external port, no mapper and no bus at all.  ab_v6 answers the same $2007 reads out of a top-level registered 128 KiB array addressed through mapper_ppu_addr.  All %0d ram cells holding a read-back byte are byte identical between the two (differing cells=%0d).  Two completely different storage mechanisms, one program, one answer, so the byte cannot have come from a ppu-side cache of the writes: ab_v5 never performed the external write that put run A's image into chr_mem, and it still returns it.  The same cells on chr_ram_b differ from ab_v6 on %0d of %0d, which is the non-vacuity half: identical code, different data, different answer PASS",
@@ -5888,7 +6032,7 @@ task check_w3_readback;
                  ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
                  ab_consec_arm_vs_sp,
                  rb_arms_vblank, rb_loopa_arms, rb_min_sl, rb_max_sl);
-        $display("W3-11 A-FETCH-BEAT-IS-NEVER-STOLEN this is the hard check for the tile-corruption hazard, and it is not a restatement of W3-9.  W3-9 counts CONTENTION: an arm and a fetch beat both asked for the bus on one ce, which is ordinary arbitration and still happens.  This counts CONSUMPTION: on every ce where a fetch unit was in S_GRAB, the byte it took must be chr_mem[the address in its OWN chr_addr register], because that register is what the unit asked for and the arbiter cannot override it.  Background: %0d beats wanted, %0d consumed, %0d on a beat a $2007 CHR WRITE owned the mapper port for (the separate, separately counted and still-open write hazard, risk L-17, which this group does not absorb), %0d skipped for a write race in the same two ce, %0d consumed with a byte captured for another master.  Sprite: %0d wanted, %0d consumed, %0d write-owned, %0d race skips, %0d wrong.  P0-6 CANNOT make this statement: its expectation is chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a stolen beat the expectation became the arm's byte and the corrupted latch agreed with it -- the expectation followed the defect.  Separately, every displaced beat must have been DEFERRED rather than out-voted: %0d background and %0d sprite beats found mid-flight by an arm had their clock enable suppressed (out-voted instead=%0d and %0d), so the unit neither saw its request serviced nor consumed anything and repeated the same beat on the next ce with its address register untouched.  The arm phase did not move and no pending register was added to the read address path, because the arm has zero slack: the ce_ppu edge that ends div_phase 8 is followed by 9, 10, 11, 0 and the edge that ends div_phase 0 is the one read_buffer_reg latches on, so there is no ce_ppu edge a deferred or registered address could be captured on PASS",
+        $display("W3-11 A-FETCH-BEAT-IS-NEVER-STOLEN this is the hard check for the tile-corruption hazard, and it is not a restatement of W3-9.  W3-9 counts CONTENTION: an arm and a fetch beat both asked for the bus on one ce, which is ordinary arbitration and still happens.  This counts CONSUMPTION: on every ce where a fetch unit was in S_GRAB, the byte it took must be chr_mem[the address in its OWN chr_addr register], because that register is what the unit asked for and the arbiter cannot override it.  Background: %0d beats wanted, %0d consumed, %0d on a beat a $2007 CHR WRITE owned the mapper port for (the separate, separately counted and still-open write hazard, risk L-17, which this group does not absorb), %0d skipped for a write race in the same two ce, %0d consumed with a byte captured for another master.  Sprite: %0d wanted, %0d consumed, %0d write-owned, %0d race skips, %0d wrong.  WHAT CHANGED SINCE THIS GROUP WAS WRITTEN: P0-6's fetch-unit latch expectation was chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a stolen beat the expectation became the arm's byte and the corrupted latch agreed with it -- the expectation followed the defect and P0-6 could not have caught this.  P0-6 has since been corrected to derive its background expectation from u_chr_fetch.chr_addr exactly as W3-11 does here, so the coverage is no longer arm-path-only and no longer lives in one check; it lives in both, over different registers (P0-6 on the latched bg_lo/bg_hi, W3-11 on chr_rdata at S_GRAB) and over different units (P0-6 background, W3-11 both).  This group is kept, not folded into P0-6, because it is the only place the DEFERRED rather than OUT-VOTED half is asserted.  Separately, every displaced beat must have been DEFERRED rather than out-voted: %0d background and %0d sprite beats found mid-flight by an arm had their clock enable suppressed (out-voted instead=%0d and %0d), so the unit neither saw its request serviced nor consumed anything and repeated the same beat on the next ce with its address register untouched.  The arm phase did not move and no pending register was added to the read address path, because the arm has zero slack: the ce_ppu edge that ends div_phase 8 is followed by 9, 10, 11, 0 and the edge that ends div_phase 0 is the one read_buffer_reg latches on, so there is no ce_ppu edge a deferred or registered address could be captured on PASS",
                  w3_want_bg, w3_grab_bg, w3_wr_bg, w3_race_bg, w3_err_bg,
                  w3_want_sp, w3_grab_sp, w3_wr_sp, w3_race_sp, w3_err_sp,
                  w3_defer_bg, w3_defer_sp, w3_defer_bad_bg, w3_defer_bad_sp);
@@ -6786,6 +6930,8 @@ initial begin
     reset_mapper_id_bad = 0;
     chr_pred_race_skip = 0;
     chr_latch_race_skip = 0;
+    chr_latch_wr_skip = 0;
+    chr_latch_noexp = 0;
     chr_wr_beats = 0;
     chr_wr_exp_total = 0;
     chr_wr_checks = 0;
