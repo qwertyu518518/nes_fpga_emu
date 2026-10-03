@@ -449,6 +449,9 @@ BRAM 阶段（8-16 KiB PRG）：
 ```text
 owner 侧不变（cart_req/cart_we/cart_addr/cart_dout/cart_ack/cart_din）
 READ_WAIT_CYCLES = 1        // 给 BRAM 一拍，和 RAM 同步读对齐
+                            // c7ebf00 之后 1 拍不额外花 CPU 周期：CPU 侧地址有 11 个 clk 的提前量
+                            // （见 4.1），所以这个 1 是"白拿的"，不是一次 stall。
+                            // DMA 侧没有这个提前量，所以 DMA 端口的同一拍仍然是实打实的一拍。
 cart_ack = cart_req && bram_done
 ```
 
@@ -473,8 +476,8 @@ cart_addr 由 mapper 决定，SDRAM 控制器自己管 bank/row/column
 不要拍脑袋。定 `READ_WAIT_CYCLES` 的正确顺序是：
 
 1. 先定**功能**上的下限：0（片上 RAM 组合读 + 立即应答的 owner）。这是当前 `nes_system_v0` 的行为，也是所有 CPU 侧周期计数 test 的基线。
-2. 换存储时只改参数，不改逻辑。BRAM → 1，SDRAM → 2 或 3。
-3. 用 trace 验证：记录每次 `cpu_fire` 的拍数分布，确认 PPU/APU 访问仍然是 1 拍（它们是片上寄存器，不该被卡带存储的延迟拖慢——本模块按 owner 分别计算等待就是这个原因）。
+2. 换存储时只改参数，不改逻辑。BRAM → 1，SDRAM → 2 或 3。**注意 1 与 0 在 CPU 路径上等价**（4.1：`wait_need <= 1` 是零等待，BRAM 那一拍靠自由运行读端口白拿），而在 DMA 路径上 0 与 1 差一整拍。
+3. 用 trace 验证：记录每次 `cpu_fire` 的拍数分布，确认 PPU/APU 访问仍然是 1 拍（它们是片上寄存器，不该被卡带存储的延迟拖慢——本模块按 owner 分别计算等待就是这个原因）。**另外要单独看 stalled 的 `ce_cpu` 总数**：它必须是 0，否则就是又回到 2x 速率那条路上去了。
 4. 不要用 `READ_WAIT_CYCLES` 去“修”某个 mapper 的行为。mapper 的时序 glitch（MMC1 的连续 CPU cycle 过滤等）属于 mapper/时序层，用总线等待参数去凑会把两个问题搅在一起。
 
 ### 8.4 接入现有顶层

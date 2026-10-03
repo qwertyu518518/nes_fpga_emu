@@ -88,7 +88,7 @@ wire [7:0]  mapper_cpu_dout = cart_wr_pending_q ? cart_wr_data_q : cart_dout;
 
 三个设计点：
 
-1. **只认完成沿，不认请求沿。** `cart_we` 是**请求级**的（`cart_req && cpu_we`），一次 cart 写会在"等待拍"和"完成拍"各出现一次；`READ_WAIT_CYCLES=1` 意味着每次传输都占两个 `ce`。直接把它接给 mapper，一次写会在同一个 CPU 周期里被锁存两次。这与 v4 对 `$4016` `/PL` 的处理是同一条纪律（见 `docs/modules/system-v4.md` 第 2 节）。
+1. **只认完成沿，不认请求沿。** `cart_we` 是**请求级**的（`cart_req && cpu_we`），一次 cart 写会在"等待拍"和"完成拍"各出现一次；**只要 `wait_need >= 2`，一次传输就会占两个 `ce`**。直接把它接给 mapper，一次写会在同一个 CPU 周期里被锁存两次。**（这一条要连同一个数读：`c7ebf00` 之后 `READ_WAIT_CYCLES=1` 是零等待，所以 v5 这条线上一次传输只占一个 `ce`——纪律本身不变，但触发它的条件从"默认"变成了"仅当 `wait_need >= 2`"。）** 这与 v4 对 `$4016` `/PL` 的处理是同一条纪律（见 `docs/modules/system-v4.md` 第 2 节）。
 
 2. **地址与数据一起寄存。** 完成沿之后 `cart_addr` 可能已经指向下一次请求的目标，所以脉冲那一拍必须用寄存下来的地址/数据。`mapper_cpu_addr` 用一个 2 选 1 mux：脉冲拍用寄存值，其余拍用实时 `cart_addr`——这样 mapper 的**读**译码（NROM/UxROM/CNROM 的 `prg_bank_offset` 里那部分窗口内地址）在任何一拍都拿得到正确的 `cpu_addr`。
 

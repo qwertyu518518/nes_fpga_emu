@@ -171,7 +171,7 @@ wire ctrl_read_select = apu_addr_ctrl2;
 | 线 | 表达式 | 为什么是这个极性 |
 | --- | --- | --- |
 | `/PL` 电平 | `apu_xfer && apu_we && apu_addr == $16` | 必须是**完成沿**，不是请求沿。`apu_we` 是请求级的（`apu_req && cpu_we`），如果用它而不是 `apu_xfer`，一个 stalled 的 `$4016` 写会在等待拍和完成拍各改一次电平 |
-| 读选通 | `apu_ctrl_read` = `apu_xfer && !apu_we && addr ∈ {$16,$17}` | 同上：**只认完成沿**。APU_IO owner 有 `READ_WAIT_CYCLES=1`，一次读占 2 个 CPU 周期；用请求级信号会让一次读移两位 |
+| 读选通 | `apu_ctrl_read` = `apu_xfer && !apu_we && addr ∈ {$16,$17}` | 同上：**只认完成沿**。APU_IO owner 用 `READ_WAIT_CYCLES=1`，而 `c7ebf00` 之后 `wait_need <= 1` 是**零等待**，所以一次读只占**一个** CPU 周期（原文写的"一次读占 2 个 CPU 周期"是 2x 速率缺陷的形态）；无论占几个周期，用请求级信号都会让一次读错位 |
 | 端口选择 | `apu_addr_ctrl2` | `$4016` -> 0，`$4017` -> 1。与 cNES 的 `addr - 0x4016` 同义 |
 | 数据回注 | `cpu_din = apu_ctrl_xfer ? {7'b0, controller_data} : bus_cpu_din` | `nes_cpu_bus` 的读数据 mux 在 `OWNER_APU_IO` 分支上取 `apu_din`；顶层在**同一拍**把它换成串行位 |
 

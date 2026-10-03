@@ -18,7 +18,7 @@
 | 项 | v5 | v6 |
 | --- | --- | --- |
 | PPU 例化 | `nes_ppu2c02 #(.MIRROR_VERTICAL(1'b0))`，默认 `EXTERNAL_CHR = 1'b0` | 同一份例化，加 `.EXTERNAL_CHR(1'b1)` |
-| `mapper_ppu_addr` | `wire [13:0] mapper_ppu_addr = 14'h0000;`（常量） | `wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;`（读地址与写地址的组合仲裁，**写优先**） |
+| `mapper_ppu_addr` | `wire [13:0] mapper_ppu_addr = 14'h0000;`（常量） | `wire [13:0] mapper_ppu_addr = {ppu_chr_we ? 1'b0 : ppu_chr_addr[13], ppu_chr_addr[12:0]};`（**读地址**，只在写拍上替换 bit 13，见 2.2）。**`274e25a` 之前**是 `ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr`，即**写优先**的组合仲裁 |
 | `mapper_ppu_we` / `mapper_ppu_dout` | `1'b0` / `8'h00` | 接 PPU 的 `chr_we` / `chr_wdata`。外部分支不再绑 0：`chr_we` 是 `$2007` 写的组合单 `clk` 选通，`chr_wdata` 是 `reg_din` |
 | `mapper_ppu_a12` | `1'b0` | `1'b0`（**不变**，见第 6 节）。TB 侧**为了验证**而 force 上去过一条建模的 A12 流，但**生产 RTL 里这一行一个字节都没改**（`nes_system_v6.v:302`；读臂那一轮之前是 `:259`），而且 TB 在 force 窗口的**两侧**都断言它读回 0 |
 | 顶层 CHR 端口 | 无 | 新增 `chr_rdata[7:0]`（in）、`chr_req`（out）、`chr_final_addr[CHR_ADDR_BITS-1:0]`（out，默认 17 bit）；写通路再加 `chr_waddr[13:0]`（out）、`chr_we`（out）、`chr_wdata[7:0]`（out）。**读臂那一轮没有再加顶层端口**——`chr_rd_arm` 是 PPU 的输入、由 v6 在模块内部生成（`ppu_chr_rd_arm`，`:255`、赋值 `:296-297`、接进 PPU 在 `:537`） |
@@ -90,7 +90,8 @@ nes_ppu2c02 #(
 ### 2.2 mapper 侧
 
 ```verilog
-wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;  // 写优先仲裁
+wire [13:0] mapper_ppu_addr = {ppu_chr_we ? 1'b0 : ppu_chr_addr[13],
+                               ppu_chr_addr[12:0]};   // 读地址；写拍上只有 bit 13 换成写地址那一位
 wire        mapper_ppu_we   = ppu_chr_we;
 wire [7:0]  mapper_ppu_dout = ppu_chr_wdata;
 wire        mapper_ppu_a12  = 1'b0;              // 仍然绑 0
@@ -98,7 +99,11 @@ wire        mapper_ppu_a12  = 1'b0;              // 仍然绑 0
 assign chr_final_addr = mapper_chr_bank_offset;
 ```
 
-读地址与写地址共用这一根 14 bit 总线，仲裁是**一行组合 mux、写在 v6 里、写在 mapper 之外**：写优先。选择器必须在**地址与 `ppu_we` 之间保持一致**，否则 mapper 会拿写数据去写一个读地址（或者反过来），而 PPU 的读通路不会因此报错——这类错误在 A/B 像素比较里表现为"偶尔一个 tile 错"，很难查。TB 把这条 mux 的每一拍都单独断言（见 5.1 的 P0-2 WRITE-TRANSLATION）。
+**`274e25a` 之前**这一行是 `mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr`，也就是**读地址与写地址共用一根 14 bit 总线、写在 v6 里、写在 mapper 之外的写优先组合 mux**。那根 mux **已经删掉了**，原因是实测的：写拍上取数单元锁到的是为写采集的字节，`tb/ppu/tb_chr_wr_collision.v` 在渲染开着的可见场里量到 **5,587** 个背景与 **1,389** 个精灵单元吃错字节、184,304 个像素里 **23,006** 个不同（风险登记册的 **L-17**）。
+
+**删掉它之后这根线上还剩什么，以及为什么只剩 bit 13。** CHR 阵列本来就有一条与读地址无关的写地址（`nes_cart_rom.v:193-197` 的 `chr_windex` 就在 `chr_rindex` 旁边），共用一根地址的地方**在 mapper 上游**。于是 `ppu_chr_addr[12:0]` 现在**完全无 mux**地喂给 mapper，写与读**谁也不夺谁的地址**。只保留的那一项是 bit 13，而且它不是为了仲裁：`nes_mapper.v:221` 的 `chr_ram_we` 要看 `ppu_addr[13] == 1'b0`，而写地址的 bit 13 **结构上恒 0**（`chr_we` 被 `v_addr < $2000` 限定），读地址却能到 `0x2007`（`nes_chr_fetch_unit.v:36` 的 `fwd_addr = nxt_addr + 8`，`bg_tile_base` 顶到 `0x1FFF`），所以写拍上必须把写地址那一位放回去，`chr_ram_we` 才与改动之前逐位相同。这一位是 testbench 逼出来的更正——直接换成裸 `ppu_chr_addr` 时，那块板拒绝了 **11** 次合法的 CHR-RAM 写。
+
+**选择器必须在地址与 `ppu_we` 之间保持一致**这条老告诫今天仍然成立，而且正是 bit 13 那一项要小心的东西：它让 mapper 在写拍上看到的低 13 位是**读**地址、bit 13 是**写**地址。TB 逐拍断言这根线（见 5.1 的 P0-2 WRITE-TRANSLATION 与 WRITE-READ-ARBITRATION）。
 
 `nes_mapper` 的 CHR 侧本来就是纯组合的（`docs/modules/mappers.md` 第 2.2 节）：五个子模块各有一条 `chr_bank_offset` 组合式，`nrom` 是恒 0 的常量，其余按各自的 bank 寄存器与 `ppu_addr` 的低位拼出来。所以 v6 **不需要给 mapper 加任何一个新的端口**——`ppu_addr` / `ppu_we` / `ppu_dout` 这条观察通道本来就在，v5 只是喂了 0。**`nes_mapper.v` 没有为写通路改过一行**：`chr_ram_we = chr_ram_enable_r && ppu_we && (ppu_addr[13] == 1'b0)`（`nes_mapper.v:221`）早就是对的，只是 `ppu_we` 从来没为 1 过。顶层导出的 `mapper_chr_ram_we` 因此是**过了 mapper 门控之后**的权威选通，也就是 CHR-ROM 板应该恒为低的那一根。
 
@@ -323,24 +328,30 @@ P0-2 的模型**不是**从输出反推的：本地那一项是**从 PPU 自己�
 6. **不证明读写竞争的行为。** 同址同拍的写/读冲突在 TB 模型里是 undefined、建模成 read-first；读臂让这个选择**第一次对程序可见**，而它仍然是一个**建模选择**，必须由真实存储器回答。
 7. **不证明硬件行为。** 没有任何综合、Fitter、TimeQuest、引脚或上板证据；本机没有安装 Quartus。`ppu_ext_chr` 端口是纯 RTL 端口，不是引脚。片上 CHR 阵列的 BRAM 推断也没有被验证过。
 8. **不证明 MMC3 的 bit 7 bank 编号可用**——`CHR_ADDR_BITS = 17` 把它们截掉了（见 3.4）。
-9. **不证明渲染中途写 CHR 是安全的**——读/写仲裁冲突被测量出来了，但没有被修掉，见第 6 节。
+9. **不证明渲染中途 `$2007` 写 CHR 会损坏一个 tile 拍**——写侧的仲裁冲突（L-17）已在上游关闭，见第 6 节。**读侧的那一条（L-20）仍然是开放的**，而且代价换了形状：不再是被顶掉一个取数字节，而是**丢掉一次取数请求**。
 10. **不证明 MMC3 扫描线 IRQ 在真实卡带上的任何行为。** P1-11 证明的是"MMC3 计数器 / reload / pending 状态机与 `mapper_irq → irq_line → CPU` 入口链在被喂进一条**形状标准**的建模 A12 流时内部一致"。它**不**证明：(a) `mapper_ppu_a12` 在 RTL 里不再是 0（它仍然是 0，而且 PPU 没有 VRAM 地址总线所以**根本没有真实 A12**）；(b) 注入的模型预测了 `chr_mmc3` 这块板——那块板跑 `PPUCTRL = $00`，真实硬件每帧把计数器时钟 **0** 次；(c) 每帧 241 这个数字——它是 NESdev 的**文献值**，不是对真实硬件的测量；(d) 依赖精灵的 A12 变化——真实硬件上它可以让每条扫描线被时钟多达 4 次，而它**没有**被建模、**也不能**被建模，因为精灵 pattern 地址是 OAM 相关的；(e) 任何真实卡带——没有跑过 MMC3 游戏，也没有跑过 `nes-test-roms/mmc3_irq_tests` 的任何二进制，在 harness 有真实 ROM 装载之前也跑不了。
 
 ## 6. v6 明确未实现
 
 以下是被测顶层 `nes_system_v6` 的范围限制，不是 testbench 的缺陷：
 
-- **`$2007` 对外部 CHR 的读已实现，但它会占掉总线上一个取数拍。** 读臂那一轮把这一条从"完全没通"改成了"通了、但有代价"：返回的字节在 mapper 翻译后的地址上永远正确，然而把它放上总线要花掉一个 `ce` 的地址时间，并**可能顶掉一个**在飞的取数字节（一个背景 tile 或一个精灵 slot 平面，限定在那条扫描线）。**渲染开着时帧中 `$2007` CHR 读不宣称安全**，扫描线 261 明确不安全。读臂**不**抬 `mapper_chr_ram_we`、**不**与 `chr_we` 的捕获沿重合（各 0 个臂拍），但它**会**抬 `chr_req`，所以 CHR 存储器合同多了一条义务：**在每一个 `chr_req` 为高的 `ce` 上捕获地址**。失效保护 `chr_rd_armed_q ? chr_rdata : 8'h00` 保留，所以端口没接或读臂漏掉时退化成原来那条**有文档的** `8'h00`。见 5.1.3 与第 8 节。
-- **写与取数、以及读臂与取数的仲裁冲突都未修。** `chr_req`（`nes_ppu2c02.v:809`；写通路落地那一轮结束时是 `:709`）**不会**被写抑制，`bg_fetch_due`（`:700`，写通路落地那一轮结束时是 `:604`）也没有扫描线/掩码门控，所以同一个 `ce` 上两者可以同时为高。实测 **96 个写拍里有 22 个**与在飞的背景取数撞上；`bg_pa_enable` 为高时 **0** 个（上传期间 `PPUMASK=$00`）。写优先意味着撞上那一拍取数单元锁存的是写地址的字节——**渲染中途做 `$2007` CHR 写会损坏一个 tile 拍**。**读臂那一侧是同一条隐患的第二个实例**：396 个臂里 **107** 个撞上在飞的取数（背景 71 / 精灵 36）。这两条都是已知限制，**不是**被删掉的检查；风险登记册分别是 L-17 与 L-20。
-- **片上没有任何 CHR 存储。** 128 KiB CHR 只存在于 testbench 里。真实系统需要外部存储（SDRAM 或 TF），**而 SDRAM 控制器在仓库里还不存在**，TF 也只有命令帧发送器。选通 `chr_we` 是组合的、不登记，所以下游存储器必须自己按单拍脉冲用；片上 CHR 阵列能否被推断成 BRAM 也没有验证过（无 Quartus/Fitter/STA）。
+- **`$2007` 对外部 CHR 的读已实现，但它会占掉总线上一个取数拍。** 读臂那一轮把这一条从"完全没通"改成了"通了、但有代价"：返回的字节在 mapper 翻译后的地址上永远正确，然而把它放上总线要花掉一个 `ce` 的地址时间。`00ca051` 之后取数单元**不会再吃到一个为读采集的字节**——撞上时那个处在 `S_BEAT` 的单元被**冻结一整拍**、下一拍重跑同一个请求（`chr_hold_bg = chr_rd_win && bg_chr_req`、`chr_hold_sp = chr_rd_win && sp_chr_req`）。**代价换了形状而不是消失**：背景取数流水余量为零，所以这一次冻结等于丢掉一次 `bg_fetch_due` 请求。**读臂不能被延后**——它零余量，`div_phase 8` 之后是 9、10、11、0，arm 沿与 consume 沿之间**不存在**任何 `ce_ppu` 沿，所以"延后读臂"不是更慢而是**读到上一个字节**。**渲染开着时帧中 `$2007` CHR 读不宣称安全**，扫描线 261 明确不安全。读臂**不**抬 `mapper_chr_ram_we`、**不**与 `chr_we` 的捕获沿重合（各 0 个臂拍），但它**会**抬 `chr_req`，所以 CHR 存储器合同多了一条义务：**在每一个 `chr_req` 为高的 `ce` 上捕获地址**。失效保护 `chr_rd_armed_q ? chr_rdata : 8'h00` 保留，所以端口没接或读臂漏掉时退化成原来那条**有文档的** `8'h00`。见 5.1.3 与第 8 节。
+- **写与取数的仲裁冲突已经关闭（L-17），而且是**在上游**关闭的，不是用冻结。** `mapper_ppu_addr` 现在喂的是**读地址**（只在写拍上替换 bit 13，见 2.2），所以写拍上那个处在 `S_BEAT` 的取数单元收到的是**它自己的字节**，不需要任何保护，`chr_hold_bg` / `chr_hold_sp` 里**不再有 `chr_we`**。`chr_req`（`nes_ppu2c02.v:809`）**仍然不会**被写抑制，`bg_fetch_due`（`:700`）也仍然没有扫描线/掩码门控，所以两者仍然可以在同一个 `ce` 上同时为高，实测 **96 个写拍里 22 个**相撞——**但那一拍什么都不拿不走了**。原先的冻结虽然挡住了错字节，却因为零余量而丢掉整个请求：`tb/ppu/tb_bg_fetch_drop.v` 量到写侧单独贡献每三帧 **3,142** 次丢弃与 184,304 个像素里的 **8,317** 个错像素；删掉 mux 之后是 **0** 与 **0**。
+- **读臂与取数的冲突仍然要付代价（L-20，仍未修）。** 每三帧 **5,236** 次背景取数丢弃、184,304 个受门可见点里 **11,578** 个（6.28%）与一个参照 PPU 渲染不同。损伤是**瞬态有界**而不是流移位：开局与收尾配对相等（**8,290 / 8,290**），没有一段错点超过 **9** 个点，平均每次可见丢弃 **2.4** 个错像素，范围限定在一个 8×8 cell 内。**受影响条件三条同时成立**：程序在 `v_addr < $2000` 时发 `$2007` 访问、这些访问发生在 PPU **正在取数**时、nametable **非均匀**；只做一次开机上传且上传时关渲染的游戏**不受影响**。结构性修法是给 CHR 加**第二个读端口**（约 **2** 个额外 RAMB36E1 tile）。**冻结逻辑在 PPU 内部、`mapper_chr_ram_enable` 的上游，两个冻结项都没有 CHR-RAM / CHR-ROM 限定**，所以 **CHR-ROM 卡带冻结流水线的程度与 CHR-RAM 卡带完全一样**，只有那次写会在下游被 mapper 拒绝。
+- **片上没有任何 CHR 存储。** 128 KiB CHR 只存在于 testbench 里。真实系统需要外部存储（SDRAM 或 TF），**而 SDRAM 控制器在仓库里还不存在**，TF 也只有命令帧发送器。选通 `chr_we` 是组合的、不登记，所以下游存储器必须自己按单拍脉冲用。**推断形态现在有综合数字**（从布线后的设计读回 `WRITE_MODE_A = READ_FIRST`、`READ_WIDTH_A = WRITE_WIDTH_A = 4`），但**没有任何上板证据**，而且真实存储器的 `tACC` 截止期预算**没有被核对过**。
+- **同址同拍的写读冲突第一次在硬件上是活的，而没有任何测量碰到它。** `274e25a` 删掉写侧冻结之后，CHR 阵列第一次在同一 `clk` 上被读和写，两个地址可以重合。推断出的 READ_FIRST 意味着同址写读返回**写前**的字节——这与仓库里每一个 bench 的模型一致，也是唯一自洽的选择（取数单元没法被告知"这个字节还没生效"）。**但两个碰撞 bench 报告的同址碰撞都是 0 次**，所以这条路径**一条测量都没有**。界是**一个 tile 的一个 dot** 上一个错字节，对照的代价是冻结平均每次丢弃 **2.4** 个错像素。
 - **`write_toggle` 与 `read_buffer_reg` 的既有行为未动。** `$2007` 写不清 `write_toggle`，写也不清 `read_buffer_reg`。这是**预先存在**的，且被刻意不动：对称地修任何一边都会改变 PPU 的内部分支并波及 10 个以上回归目标，留给专门的一轮。
 - **`mapper_ppu_a12` 仍绑 0**（`nes_system_v6.v:302`；读臂那一轮之前是 `:259`），所以 MMC3 的扫描线 IRQ 计数器在系统级**仍然无法自时钟**，这一点**没有被修**；`chr_final_addr[12]` 已经是 PPU 的 pattern-table 选择位而不是 bank 位，所以它**不能**拿来当 A12 用。**根因不是"忘了接线"**：本 PPU **没有 VRAM 地址总线**，所以根本不存在一个可以接出来的真实 A12（见 5.3 的 P1-11）。
   - **但是**状态机不再是无证据的：TB 的 `check_p1_11` 把一条**建模的** A12 流 force 到那根生产网上，计数器 / reload / `irq_pending_r` 与整条 IRQ 入口链因此**由真实 RTL 产生**而不是被 force。**这条证据的类型必须说清楚**——它是**建模刺激下的内部一致性与已发表时序吻合**，不是硬件预测。`chr_mmc3` 跑 `PPUCTRL = $00`，真实硬件每帧把计数器时钟 **0** 次（那个众所周知的 MMC3 陷阱，也是商业游戏必须用 `$2006` 手动打计数器数扫描线的原因）；**每帧 241 是 NESdev 的文献值，不是实测**；依赖精灵的 A12 变化（真实硬件上每条扫描线可达 4 次）**没有**建模、**也不能**建模。完整声明边界见 `tb/system/README.md` 的"### P1-11"一节。
   - **关掉这个缺口的正确路径**：若将来某次改动给 `nes_ppu2c02` 加上**真实的 VRAM 地址总线**，TB 那个 A12 模型就成为它**逐拍 A/B 的参照对象**，模型对不对就从假设变成可测量的量。**那**才是"真实 A12"这个说法开始站得住的时刻。
   - 仍然没有证据的部分：没有任何 MMC3 卡带被跑过，`nes-test-roms/mmc3_irq_tests` 的任何二进制都没有被跑过，harness 也还没有真实 ROM 装载。
 - **`CHR_ADDR_BITS = 17` 截断 MMC3 的 CHR bank bit 7**，`0x80`–`0xFF` 别名到 `0x00`–`0x7F`。已接受，不要加宽（见 3.4）。
-- **PPU 没有运行期 nametable-mirroring 端口。** v5/v6 都以 `MIRROR_VERTICAL(1'b0)` elaboration；mapper 的 mirroring 输出被观测但**没有被应用**。四屏的 4 KiB nametable RAM 同样没有。
-- **CHR 端口上没有背压。** `chr_req` 是无条件请求，没有 ready/ack；一次背景/精灵请求拍的重叠会**静默丢掉**背景那一拍（取数对取数的碰撞 P0-8 实测 **0** 次，但它成立只因为两个窗口不重叠；写侧与读臂侧的冲突都被**测量**出来了，见上面第二条）。
+- **PPU 没有运行期 nametable-mirroring 端口。** v5/v6 都以 `MIRROR_VERTICAL(1'b0)` elaboration；mapper 的 mirroring 输出被观测但**没有被应用**。**具体后果**：一块**垂直镜像**的卡带会渲染出错误的 nametable——水平镜像恰好与这个硬绑值一致，所以它不会被发现。四屏的 4 KiB nametable RAM 同样没有。
+- **OAM DMA 仍然只偷 512 个 CPU 周期，不是 513/514。** `nes_oam_dma.v` **没有 `ce` 输入**、按 `clk` 计数，所以这条总线上 `oam_dma_cycle_count` 读出 **6,145** clk，也就是 **512** 个 CPU 周期。之所以恰好落在真机预算之内，是两个事实相消：这个 RTL 把 256 次 `$2004` 写直接打在 PPU 端口上而不走 CPU 总线（写不占周期），而读又要 2 个 `ce_cpu`（DMA 侧的地址与请求在同一个 `clk` 才同时有效，拿不到 CPU 那 11 个 `clk` 的提前量）。**一个正确实现同样会读出 256 + 256 = 512，但理由完全不同**——这正是 2x 速率缺陷在这个指标上一直看不出来的原因。要读到真正的 513 或 514，需要改 `nes_oam_dma.v` 或 `nes_ppu2c02.v`。
+- **CPU 速率现在有守卫，但只有两处 testbench 在守。** `c7ebf00` 之前没有任何 testbench 断言过 CPU 的速率，所以 2x 缺陷能一路通过全部门；现在只有 `c7ebf00` 新加的两条在守：`tb/system/tb_nes_system_v6.v` 的 P1-1 RATE（每帧数 `ce_ppu` / `ce_cpu` / 完成的 `bus_fire` / stalled 的 `ce_cpu`，实测 `ce_ppu=89342 ce_cpu=29780 fires=29780 stalled=0`，比值 1.000，逐 `clk` 零 stall 不变式 **88,831** 次机会 **0** 次违反）与 `tb/bus/tb_nes_cpu_bus.v` 的 ZERO-STALL（三个 `nes_cpu_bus` 实例各数一遍机会数与违反数，其中 `READ_WAIT_CYCLES=1` 那个实例就是 v2..v6 的实际配置）。**其余任何 bench 都不再断言速率**，改一个别的 bench 的期望值不会碰到这一条。
+- **`rdata_MISMATCHES = 10` 是那个 bench 自己的启动期产物，不是本核的缺陷。** 卡带启动 bench（`tb/cart/tb_nes_boot_rom.v`）在 50 / 200 / 420 帧读到的都是 10，**不增长**，加不加仪表都一样，**没有被调查，也没有被断言**。
+- **没有任何硬件验证。** 综合与布局布线的数字存在（RAMB36E1 **50** / RAMB18 **0** / LUT-as-memory **2**，**44 / 44** 引脚全部落位，DRC 与布线 0 错误，核心 setup WNS **+4.711 ns**、hold **+0.087 ns**），但**没有任何东西被烧到板子上**。另外**整个仓库没有一处 `set_input_delay` / `set_output_delay`**，因此 **6 个输入与 34 个输出端口是未约束的**。
+- **CHR 端口上没有背压。** `chr_req` 是无条件请求，没有 ready/ack；一次请求拍被读臂或写 strobe 抢掉时，**取数请求会被丢掉而不是被推迟**（取数对取数的碰撞 P0-8 实测 **0** 次，但它成立只因为两个窗口不重叠；**读臂侧的冲突仍然在发生、并且仍然有代价**，见上面第三条）。**写侧不参与任何握手**：`chr_we` 是无条件 strobe，接受与否由 `chr_ram_enable_r` 决定。
 - **PRG RAM / `$6000-$7FFF` 没有存储阵列**、**MMC1 的串行移位寄存器在系统级没有被程序驱动过**、**MAPPER_SELECT 仍是 elaboration 期参数**、`chr_final_addr` 没有被任何模块实例化使用——与 v5 相同，见 `docs/modules/system-v5.md` 第 8 节。
 - 其余与 v5 相同的总线与 CPU 缺口（`$4017` 读只回手柄位、open bus 上没有手柄位、`$4016` bit6/bit7 扩展口、第 9 次以后读恒 1、DMC DMA 未激励、`OAMADDR_WRITE=0`、音频输出通路）见 `docs/modules/system-v5.md` 第 8 节。
 

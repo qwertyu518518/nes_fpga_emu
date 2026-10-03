@@ -965,16 +965,24 @@ generate
         // The cost is bounded and was measured rather than assumed.  An arm can
         // freeze a unit only on a div_phase 8 clk, and ce_ppu edges are 4 clk
         // apart with a div_phase 4 edge in between where no arm exists, so a unit
-        // cannot be frozen on two CONSECUTIVE ce.  A background tile costs 8 ce of
-        // the 24 ce its cadence allows (bg_fetch_due fires every 8 dots and a dot
-        // is 4 clk), so even that cannot make it miss a start.  The sprite
-        // prefetch costs 35 ce of the 444 ce between its start at dot 257 and the
-        // first dot of the next line that reads its shadow, and one freeze per
-        // byte at most adds 16, so neither cadence changes.  What the arm's own
-        // freeze DOES cost is drops, and those are NOT fixed here: with $2007 CHR
-        // reads only, tb/ppu/tb_bg_fetch_drop.v still measures 5236 of 25152
-        // requests dropped.  The arm cannot be given a port of its own -- see
-        // above -- so the read side is unchanged by design and remains open.
+        // cannot be frozen on two CONSECUTIVE ce.  A background tile then costs
+        // its whole 8 ce occupancy, because the background pipeline has ZERO
+        // slack: bg_fetch_due fires every 8 ce and one tile occupies 8 ce.  A DOT
+        // IS ONE ce, NOT THREE -- the earlier text here said "8 ce of the 24 ce
+        // its cadence allows (bg_fetch_due fires every 8 dots and a dot is 4 clk)",
+        // which is wrong by a factor of three and is exactly what made this file
+        // look like it had headroom it does not have.  A freeze that lands on the
+        // tile's LAST S_BEAT therefore pushes the request past the next
+        // bg_fetch_due, and the request is DROPPED, not merely deferred.  The
+        // sprite prefetch costs 35 ce of the 444 ce between its start at dot 257
+        // and the first dot of the next line that reads its shadow, and one freeze
+        // per byte at most adds 16, so that cadence still has room either way.
+        // What the arm's own freeze DOES cost is drops, and those are NOT fixed
+        // here: with $2007 CHR reads only, tb/ppu/tb_bg_fetch_drop.v measures
+        // 5236 of 25152 requests dropped per three frames, and 11578 of 184304
+        // gated visible dots wrong on a deliberately non-uniform nametable.  The
+        // arm cannot be given a port of its own -- see above -- so the read side
+        // is unchanged by design and remains open.
         //
         // NO DEADLOCK IS POSSIBLE, structurally rather than by measurement:
         // chr_req is high in S_BEAT and in NO other state, so a frozen unit is
