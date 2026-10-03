@@ -282,6 +282,17 @@ module tb_nes_boot_rom;
     wire             pv_ppu_reg_we;
     wire [2:0]       pv_ppu_reg_addr;
 
+    // Bus taps, added for the diagnosis below.  They are diagnostics only: the
+    // bench never drives them, so the committed gate target's behaviour is
+    // unchanged by their presence.
+    wire             pv_bus_fire;
+    wire [15:0]      pv_bus_addr;
+    wire             pv_bus_we;
+    wire [7:0]       pv_bus_dout;
+    wire [7:0]       pv_bus_din;
+    wire             pv_sel_apu_io;
+    wire             pv_irq_line;
+
     // MAPPER_SELECT 0 and HEADER_MIRRORING 0 are already this core's defaults
     // and are stated explicitly anyway so the cartridge's mapper and mirroring
     // are visible here rather than inherited.  NROM_PRG_RAM and NROM_CHR_RAM
@@ -320,14 +331,14 @@ module tb_nes_boot_rom;
         .bus_wait_count(),
         .bus_req(),
         .bus_stall(),
-        .bus_fire(),
-        .bus_addr(),
-        .bus_we(),
-        .bus_dout(),
-        .bus_din(),
+        .bus_fire(pv_bus_fire),
+        .bus_addr(pv_bus_addr),
+        .bus_we(pv_bus_we),
+        .bus_dout(pv_bus_dout),
+        .bus_din(pv_bus_din),
         .sel_ram(),
         .sel_ppu(),
-        .sel_apu_io(),
+        .sel_apu_io(pv_sel_apu_io),
         .sel_open_bus(),
         .sel_cart_ram(),
         .sel_cart_rom(),
@@ -392,7 +403,7 @@ module tb_nes_boot_rom;
         .mapper_chr_ram_we(),
         .mapper_bus_conflict(),
         .mapper_irq(),
-        .irq_line(),
+        .irq_line(pv_irq_line),
         .mapper_write_pulse(),
         .mapper_write_addr(),
         .mapper_write_data(),
@@ -779,6 +790,7 @@ reg     press_active;
     endtask
 
     integer fi;
+    integer bsf;
     always @(frame_count) begin
         if (WRITE_FRAMES == 1 && !reset) begin
             for (fi = 0; fi < n_cap; fi = fi + 1) begin
@@ -802,7 +814,422 @@ reg     press_active;
             end
             buttons1 = press_active ? 8'h08 : 8'h00;
         end
+        // DIAG button schedule: +BS0..+BS15, each frame*256+mask.  When any is
+        // given it REPLACES the press schedule entirely, because the whole point
+        // of the experiment is to deliver an exact per-frame button byte in the
+        // bit order the game itself uses.  Absent any +BS argument n_bsched is 0
+        // and this line cannot fire, so the committed gate target is unchanged.
+        if (WRITE_FRAMES == 1 && !reset && n_bsched != 0) begin
+            bsf = frame_count & 255;
+            buttons1 = btn_sched[bsf];
+        end
+        // PLAYER mode: press START whenever the program counter is actually
+        // inside one of the two loops this cartridge uses to wait for the player,
+        // and never otherwise.  Those two loops are, from the disassembly,
+        //     $C527-$C576  the title-screen wait, which exits only on $08 & $08
+        //     $C7AB-$C7C5  the main-loop wait, which exits only on $08 & $0C
+        // A human presses START when the game asks for it, not on a fixed frame
+        // schedule, and a fixed schedule is exactly what fails here: a press that
+        // arrives while the program counter is somewhere else is read, produces a
+        // correct edge in $08, and is then thrown away, and the next press has to
+        // wait for the next wait loop.  Off unless +DPLAYER=1, so the committed
+        // gate target is unaffected.
+        if (WRITE_FRAMES == 1 && !reset && diag_player != 0) begin
+            buttons1 = auto_press ? 8'h08 : 8'h00;
+        end
+        // HAMMER mode: press START every N frames, which is what a player does
+        // when an arcade title screen is not responding to one tap.  Off unless
+        // +DHAMMER=N is given, so the committed gate target is unaffected.
+        if (WRITE_FRAMES == 1 && !reset && diag_hammer != 0) begin
+            bsf = frame_count & 255;
+            buttons1 = ((bsf % diag_hammer) < 2) ? 8'h08 : 8'h00;
+        end
+        auto_press = 1'b0;
     end
+
+    // =========================================================================
+    // DIAGNOSIS INSTRUMENTATION
+    //
+    // Inert unless +DIAG=1 is passed, so `tools\sim_all.ps1` (which passes no
+    // plusargs) behaves exactly as before.
+    //
+    // WHAT IT MEASURES AND WHY
+    //   1. WHERE the PC is, not how fast it moves.  A per-frame top-N histogram
+    //      of dbg_pc, plus a histogram of backward-branch targets.  Two or three
+    //      PCs at high counts in one frame means a wait loop; a long flat
+    //      distribution means game logic running normally.  A rate number
+    //      cannot tell those apart, which is why the earlier freeze
+    //      investigation could not separate them.
+    //   2. Every PPU register access with its frame number and the PRE-increment
+    //      v_addr, so the three outcomes separate cleanly: zero accesses means
+    //      the program never reaches the update code; accesses with identical
+    //      values mean the field genuinely is not changing; accesses with
+    //      changing values but unchanged pixels mean the renderer is at fault.
+    //   3. The CPU's own zero page, read from the DUT's RAM, so what the game
+    //      believes about the buttons, the frame counter, the cursor row and the
+    //      vram write pointer is observed rather than inferred.
+    //   4. Interrupt handler entries (transitions into the ST_INT_* states at
+    //      nes_cpu6502.v:85-91, read from the DUT's own state_reg) and RTIs, so
+    //      "NMI stopped firing" is a separate measurement from "PC stopped
+    //      moving".
+    //   5. Every $4016/$4017 bus access, end to end, so the controller path from
+    //      the injected buttons byte to the bit the game shifts into zero-page
+    //      $06/$08 is proven rather than assumed.
+    // =========================================================================
+    integer diag_on;
+    integer diag_from;
+    integer diag_to;
+    integer diag_ppu;
+    integer diag_ctrl;
+    integer diag_hist;          // emit the PC histograms at all
+
+    integer pc_hist [0:65535];  // ce_cpu samples per pc value, this frame
+    integer bc_hist [0:65535];  // backward PC transitions per target, this frame
+
+    integer diag_cecpu;
+    integer diag_pcmax;
+    reg [15:0] diag_pcmn;
+    reg [15:0] diag_pc_q;
+    reg        diag_pc_qv;
+    integer diag_nmi_entry;
+    integer diag_irq_entry;
+    integer diag_rti;
+    integer diag_vbl;
+    integer diag_fd;
+    integer diag_s0;
+    integer diag_irl;
+    integer diag_dma;
+    integer diag_r2002;
+    integer diag_ppu_cnt [0:7];
+    integer diag_r4016;
+    integer diag_r4017;
+    integer diag_w4016;
+    integer diag_edge0c;        // ce_cpu beats where the game could see START/SELECT
+    integer diag_nz08;          // ce_cpu beats where $08 is non-zero at all
+    integer diag_held06;        // ce_cpu beats where $06 is non-zero at all
+    integer diag_first_edge;    // first frame the CPU sampled $08 & $0C != 0
+    integer diag_first_08;      // first frame $08 was non-zero at a sample point
+    integer diag_tot_r4016;     // run totals, not reset per frame
+    integer diag_tot_r4017;
+    integer diag_tot_w4016;
+    integer diag_tot_nmi;
+    reg [7:0]  diag_vio_q;      // $2007 byte currently on the bus, for the log
+    reg [14:0] diag_v_q;        // v_addr BEFORE the current edge
+
+    // Button schedule.  256 entries so a frame number indexes it directly.
+    reg [7:0] btn_sched [0:255];
+    integer   n_bsched;
+
+    // PLAYER mode state.  auto_press is set from the ce_cpu sampler the moment
+    // the program counter is seen inside a wait loop, and is consumed at the next
+    // frame boundary, so the press is delivered for the whole of the following
+    // frame and the game's own NMI handler latches it on that frame's vblank.
+    integer   diag_player;
+    integer   auto_hold;
+    reg       auto_press;
+    integer   diag_hammer;   // 0 = off, else press START every N frames
+
+    integer dk;
+
+    task automatic diag_zero_page;
+        begin
+            // The zero-page locations this cartridge actually uses.  $06/$08
+            // are its held and newly-pressed button bytes, $0B/$0A its frame
+            // counter (the NMI handler at $D43C increments $0B and $0A), $46 the
+            // menu cursor, $4F/$50 the NMI's PPUCTRL sources, $4D the attribute
+            // update flag the NMI handler tests at $D416, $11/$12 the vram
+            // write pointer, $4B the text row pointer and $8E the menu toggle.
+            $write("DIAGZP f=%0d z04=%02h z05=%02h z06=%02h z08=%02h z0A=%02h z0B=%02h z10=%02h",
+                    frame_count,
+                    dut.u_bus.ram_array[4],  dut.u_bus.ram_array[5],
+                    dut.u_bus.ram_array[6],  dut.u_bus.ram_array[8],
+                    dut.u_bus.ram_array[10], dut.u_bus.ram_array[11],
+                    dut.u_bus.ram_array[16]);
+            $write(" z11=%02h z12=%02h z13=%02h z14=%02h z46=%02h z4A=%02h z4B=%02h z4D=%02h z4F=%02h z50=%02h",
+                    dut.u_bus.ram_array[17], dut.u_bus.ram_array[18],
+                    dut.u_bus.ram_array[19], dut.u_bus.ram_array[20],
+                    dut.u_bus.ram_array[70], dut.u_bus.ram_array[74],
+                    dut.u_bus.ram_array[75], dut.u_bus.ram_array[77],
+                    dut.u_bus.ram_array[79], dut.u_bus.ram_array[80]);
+            $write(" z83=%02h z85=%02h z8E=%02h z90=%02h z98=%02h zAB=%02h z4C=%02h z52=%02h z68=%02h btn1=%02h",
+                    dut.u_bus.ram_array[131], dut.u_bus.ram_array[133],
+                    dut.u_bus.ram_array[142], dut.u_bus.ram_array[144],
+                    dut.u_bus.ram_array[152], dut.u_bus.ram_array[171],
+                    dut.u_bus.ram_array[76],  dut.u_bus.ram_array[82],
+                    dut.u_bus.ram_array[104], buttons1);
+        end
+    endtask
+
+    task automatic diag_top_pc;
+        input integer nwant;
+        integer b;
+        integer best;
+        integer cnt;
+        integer k;
+        begin
+            $write("DIAGPC f=%0d", frame_count);
+            for (k = 0; k < nwant; k = k + 1) begin
+                best = -1;
+                cnt  = 0;
+                for (b = 0; b < 65536; b = b + 1)
+                    if (pc_hist[b] > cnt) begin
+                        cnt  = pc_hist[b];
+                        best = b;
+                    end
+                if (best >= 0) begin
+                    pc_hist[best] = 0;
+                    $write(" $%0h:%0d", best[15:0], cnt);
+                end
+            end
+            $write("\n");
+        end
+    endtask
+
+    task automatic diag_top_bc;
+        input integer nwant;
+        integer b;
+        integer best;
+        integer cnt;
+        integer k;
+        begin
+            $write("DIAGBC f=%0d", frame_count);
+            for (k = 0; k < nwant; k = k + 1) begin
+                best = -1;
+                cnt  = 0;
+                for (b = 0; b < 65536; b = b + 1)
+                    if (bc_hist[b] > cnt) begin
+                        cnt  = bc_hist[b];
+                        best = b;
+                    end
+                if (best >= 0) begin
+                    bc_hist[best] = 0;
+                    $write(" $%0h:%0d", best[15:0], cnt);
+                end
+            end
+            $write("\n");
+        end
+    endtask
+
+    task automatic diag_bsched_scan;
+        integer hit;
+        integer vtmp;
+        integer bsf;
+        reg [7:0] bsm;
+        begin
+            n_bsched = 0;
+            hit = $value$plusargs("BS0=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS1=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS2=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS3=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS4=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS5=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS6=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS7=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS8=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS9=%d",  vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS10=%d", vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS11=%d", vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS12=%d", vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS13=%d", vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS14=%d", vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+            hit = $value$plusargs("BS15=%d", vtmp); if (hit != 0) begin bsf = (vtmp / 256) & 255; bsm = vtmp & 255; btn_sched[bsf] = bsm; n_bsched = n_bsched + 1; end
+        end
+    endtask
+
+    integer di;
+
+    initial begin
+        diag_on   = 0;
+        diag_from = 30;
+        diag_to   = 90;
+        diag_ppu  = 0;
+        diag_ctrl = 0;
+        diag_hist = 1;
+        $value$plusargs("DIAG=%d",   diag_on);
+        $value$plusargs("DFROM=%d",  diag_from);
+        $value$plusargs("DTO=%d",    diag_to);
+        $value$plusargs("DPPU=%d",   diag_ppu);
+        $value$plusargs("DCTRL=%d",  diag_ctrl);
+        $value$plusargs("DHIST=%d",  diag_hist);
+        $value$plusargs("DPLAYER=%d", diag_player);
+        $value$plusargs("DHAMMER=%d", diag_hammer);
+        auto_hold  = 8;
+        $value$plusargs("DPLAYERHOLD=%d", auto_hold);
+        auto_press = 1'b0;
+        // btn_sched must be cleared HERE, before the scan writes it: initial
+        // blocks run in source order, so clearing it in a later block would wipe
+        // every schedule entry the scan had just installed.
+        for (di = 0; di < 256; di = di + 1) btn_sched[di] = 8'h00;
+        diag_bsched_scan();
+    end
+
+    initial begin
+        diag_cecpu = 0; diag_pcmax = 0; diag_pcmn = 16'hFFFF;
+        diag_nmi_entry = 0; diag_irq_entry = 0; diag_rti = 0;
+        diag_vbl = 0; diag_fd = 0; diag_s0 = 0; diag_irl = 0; diag_dma = 0;
+        diag_r2002 = 0; diag_r4016 = 0; diag_r4017 = 0; diag_w4016 = 0;
+        diag_edge0c = 0; diag_nz08 = 0; diag_held06 = 0;
+        diag_first_edge = -1; diag_first_08 = -1;
+        diag_tot_r4016 = 0; diag_tot_r4017 = 0; diag_tot_w4016 = 0; diag_tot_nmi = 0;
+        diag_pc_q = 16'hFFFF; diag_pc_qv = 1'b0;
+        diag_vio_q = 8'h00;
+        for (di = 0; di < 8; di = di + 1) diag_ppu_cnt[di] = 0;
+    end
+
+    wire diag_window = (diag_on != 0) &&
+                       (frame_count >= diag_from) &&
+                       (frame_count <= diag_to);
+
+    // Per-clock accumulation.  A separate process from the trace block above on
+    // purpose: that block's comment records that two processes writing the same
+    // variable is what produced a meaningless per-frame census before.  Every
+    // variable written here is private to this block.
+    reg [6:0] diag_state_q;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            diag_cecpu = 0; diag_pcmax = 0; diag_pcmn = 16'hFFFF;
+            diag_nmi_entry = 0; diag_irq_entry = 0; diag_rti = 0;
+            diag_vbl = 0; diag_fd = 0; diag_s0 = 0; diag_irl = 0; diag_dma = 0;
+            diag_r2002 = 0; diag_r4016 = 0; diag_r4017 = 0; diag_w4016 = 0;
+            diag_edge0c = 0; diag_nz08 = 0; diag_held06 = 0;
+            diag_pc_qv = 1'b0;
+            diag_state_q = 7'd0;
+            diag_v_q = 15'd0;
+            for (di = 0; di < 8; di = di + 1) diag_ppu_cnt[di] = 0;
+        end else begin
+            diag_vio_q = dut.u_cpu.bus_dout;
+            diag_v_q <= dut.u_ppu.v_addr;
+            diag_state_q <= dut.u_cpu.state_reg;
+
+            if (pv_vblank)       diag_vbl = diag_vbl + 1;
+            if (pv_frame_done)  diag_fd  = diag_fd + 1;
+            if (dut.u_ppu.dbg_sprite0_hit) diag_s0 = diag_s0 + 1;
+            if (pv_irq_line)    diag_irl = diag_irl + 1;
+            if (dut.oam_dma_start) diag_dma = diag_dma + 1;
+
+            // Interrupt handler entries.  nes_cpu6502.v:85-91 defines
+            // ST_INT_DUMMY2 54 .. ST_INT_VEC_HI 59 as the push-and-vector
+            // sequence every BRK/IRQ/NMI goes through, so a transition into
+            // ST_INT_DUMMY2 is exactly one interrupt being taken.
+            if ((diag_state_q < 7'd54) && (dut.u_cpu.state_reg >= 7'd54) &&
+                (dut.u_cpu.state_reg <= 7'd59)) begin
+                if (dut.ppu_nmi) diag_nmi_entry = diag_nmi_entry + 1;
+                else             diag_irq_entry = diag_irq_entry + 1;
+                if (dut.ppu_nmi) diag_tot_nmi = diag_tot_nmi + 1;
+            end
+            // RTI is ST_RTI_DUMMY2 42 .. ST_RTI_HI 46.
+            if ((diag_state_q < 7'd42) && (dut.u_cpu.state_reg >= 7'd42) &&
+                (dut.u_cpu.state_reg <= 7'd46))
+                diag_rti = diag_rti + 1;
+
+            // PPU register census.  cs/we/addr are the core's own decode taps,
+            // so this counts accesses the core performed, and v_addr_q is the
+            // PRE-increment value because the PPU increments v_addr on the same
+            // edge a $2007 write lands.
+            if (pv_ppu_reg_cs) begin
+                diag_ppu_cnt[pv_ppu_reg_addr] = diag_ppu_cnt[pv_ppu_reg_addr] + 1;
+                if (!pv_ppu_reg_we && (pv_ppu_reg_addr == 3'd2))
+                    diag_r2002 = diag_r2002 + 1;
+                if (diag_ppu != 0 && diag_window)
+                    $display("DIAGPPU f=%0d %0s r%0d v=$%04h vram=%02h",
+                             frame_count, pv_ppu_reg_we ? "WR" : "RD",
+                             pv_ppu_reg_addr, diag_v_q, diag_vio_q);
+            end
+
+            if (pv_bus_fire && pv_sel_apu_io) begin
+                if (pv_bus_we) begin
+                    if (pv_bus_addr == 16'h4016) begin
+                        diag_w4016 = diag_w4016 + 1;
+                        diag_tot_w4016 = diag_tot_w4016 + 1;
+                        if (diag_ctrl != 0 && diag_window)
+                            $display("DIAGCTL f=%0d WR $4016 = $%02h", frame_count, pv_bus_dout);
+                    end
+                end else begin
+                    if (pv_bus_addr == 16'h4016) diag_r4016 = diag_r4016 + 1;
+                    if (pv_bus_addr == 16'h4017) diag_r4017 = diag_r4017 + 1;
+                    if (pv_bus_addr == 16'h4016) diag_tot_r4016 = diag_tot_r4016 + 1;
+                    if (pv_bus_addr == 16'h4017) diag_tot_r4017 = diag_tot_r4017 + 1;
+                    if ((diag_ctrl != 0) && diag_window &&
+                        ((pv_bus_addr == 16'h4016) || (pv_bus_addr == 16'h4017)))
+                        $display("DIAGCTL f=%0d RD $%04h = %0d (sr=%02h cnt=%0d latch=%02h)",
+                                 frame_count, pv_bus_addr, pv_bus_din,
+                                 dut.u_controller.dbg_selected_sr,
+                                 dut.u_controller.dbg_selected_cnt,
+                                 dut.u_controller.dbg_selected_latch);
+                end
+            end
+
+            if (pv_ce_cpu) begin
+                diag_cecpu = diag_cecpu + 1;
+                pc_hist[cpu_pc] = pc_hist[cpu_pc] + 1;
+                if (cpu_pc > diag_pcmax) diag_pcmax = cpu_pc;
+                if (cpu_pc < diag_pcmn) diag_pcmn = cpu_pc;
+                // A backward PC transition is a branch or jump back, which is
+                // the only evidence a loop is running.  Counting the TARGET
+                // histogram separates "spinning in one wait" from "walking
+                // game logic forward".
+                if (diag_pc_qv === 1'b1 && (cpu_pc < diag_pc_q))
+                    bc_hist[cpu_pc] = bc_hist[cpu_pc] + 1;
+                diag_pc_q  = cpu_pc;
+                diag_pc_qv = 1'b1;
+                // What the game's own wait loops can possibly see.  Both
+                // $C7AB (main loop) and $C51C (title screen) exit only on
+                // $08 & $0C, so these three counters decide the whole question.
+                if ((dut.u_bus.ram_array[8] & 8'h0C) != 8'h00) begin
+                    diag_edge0c = diag_edge0c + 1;
+                    if (diag_first_edge < 0) diag_first_edge = frame_count;
+                end
+                if (dut.u_bus.ram_array[8] != 8'h00) begin
+                    diag_nz08 = diag_nz08 + 1;
+                    if (diag_first_08 < 0) diag_first_08 = frame_count;
+                end
+                if (dut.u_bus.ram_array[6] != 8'h00)
+                    diag_held06 = diag_held06 + 1;
+                // PLAYER mode: notice when the program counter is inside one of
+                // the cartridge's two wait-for-the-player loops.
+                if (diag_player != 0 && auto_hold <= 0 &&
+                    (((cpu_pc >= 16'hC527) && (cpu_pc <= 16'hC576)) ||
+                     ((cpu_pc >= 16'hC7AB) && (cpu_pc <= 16'hC7C5)))) begin
+                    auto_press = 1'b1;
+                    auto_hold  = 8;
+                    $display("DIAGPLAY f=%0d pressing START, pc=$%0h", frame_count, cpu_pc);
+                end
+            end
+
+            if (frame_tick && auto_hold > 0) auto_hold = auto_hold - 1;
+
+            if (frame_tick && diag_window) begin
+                diag_zero_page();
+                $display("DIAGFR f=%0d cecpu=%0d pcmin=$%0h pcmax=$%0h nmi=%0d irq=%0d rti=%0d vbl=%0d fd=%0d s0=%0d irl=%0d dma=%0d",
+                         frame_count, diag_cecpu, diag_pcmn, diag_pcmax,
+                         diag_nmi_entry, diag_irq_entry, diag_rti,
+                         diag_vbl, diag_fd, diag_s0, diag_irl, diag_dma);
+                $display("DIAGPP f=%0d R2000=%0d R2001=%0d R2002=%0d R2003=%0d R2004=%0d R2005=%0d R2006=%0d R2007=%0d ctl_r4016=%0d ctl_r4017=%0d ctl_w4016=%0d edge0c=%0d nz08=%0d held06=%0d v_addr=$%04h temp=$%04h",
+                         frame_count, diag_ppu_cnt[0], diag_ppu_cnt[1],
+                         diag_ppu_cnt[2], diag_ppu_cnt[3], diag_ppu_cnt[4],
+                         diag_ppu_cnt[5], diag_ppu_cnt[6], diag_ppu_cnt[7],
+                         diag_r4016, diag_r4017, diag_w4016,
+                         diag_edge0c, diag_nz08, diag_held06,
+                         dut.u_ppu.v_addr, dut.u_ppu.temp_addr);
+                if (diag_hist != 0) begin
+                    diag_top_pc(8);
+                    diag_top_bc(6);
+                end
+                diag_cecpu = 0; diag_pcmax = 0; diag_pcmn = 16'hFFFF;
+                diag_nmi_entry = 0; diag_irq_entry = 0; diag_rti = 0;
+                diag_vbl = 0; diag_fd = 0; diag_s0 = 0; diag_irl = 0; diag_dma = 0;
+                diag_r2002 = 0; diag_r4016 = 0; diag_r4017 = 0; diag_w4016 = 0;
+                diag_edge0c = 0; diag_nz08 = 0; diag_held06 = 0;
+                for (di = 0; di < 8; di = di + 1) diag_ppu_cnt[di] = 0;
+                for (di = 0; di < 65536; di = di + 1) begin
+                    pc_hist[di] = 0;
+                    bc_hist[di] = 0;
+                end
+            end
+        end
+    end
+
 
     // =========================================================================
     // PPM WRITER, binary P6, no library and no encoding
@@ -1463,6 +1890,19 @@ reg     press_active;
                  frame_count ? (cap_pixels / frame_count) : 0);
         $display("INFO mapper_id = %0d (0 = NROM), nametable map = $%0h",
                  pv_mapper_id, pv_mapper_nt);
+
+        if (diag_on != 0) begin
+            $display("DIAGSUM first frame the CPU sampled $08 & $0C != 0 = %0d",
+                     diag_first_edge);
+            $display("DIAGSUM first frame $08 was non-zero at a sample point = %0d",
+                     diag_first_08);
+            $display("DIAGSUM last frame = %0d, total $4016 reads = %0d, $4017 reads = %0d, $4016 writes = %0d, NMI entries = %0d",
+                     frame_count, diag_tot_r4016, diag_tot_r4017,
+                     diag_tot_w4016, diag_tot_nmi);
+            $display("DIAGSUM ctl latch1 = $%02h latch2 = $%02h buttons1 = $%02h buttons2 = $%02h",
+                     dut.u_controller.dbg_latch1, dut.u_controller.dbg_latch2,
+                     buttons1, buttons2);
+        end
 
         if (errors == 0)
             $display("PASS tb_nes_boot_rom");
