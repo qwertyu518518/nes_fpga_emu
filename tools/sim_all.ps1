@@ -5,7 +5,7 @@ param(
         'cpu', 'ppu', 'apu', 'bus', 'mapper', 'controller', 'cart', 'video', 'system', 'platform', 'peripheral',
         'cpu-core', 'cpu-integration', 'cpu-bus', 'cpu-inc',
         'ppu-core', 'ppu-sprite', 'ppu-oam-dma', 'ppu-integration', 'chr-feasibility-tb',
-        'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb',
+        'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb', 'chr-arb-tb',
         'sprite-fetch-core', 'sprite-fetch-tb',
         'apu-core', 'apu-tb',
         'bus-tb',
@@ -299,6 +299,23 @@ $allTargets = @(
         Label       = 'PPU external CHR A/B pixel-equivalence tb'
         Top         = 'tb_nes_ppu2c02_ext_chr'
            Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_nes_ppu2c02_ext_chr.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    # tb_chr_arb_collision drives $2007 CHR reads through the visible field with
+    # PPUMASK showing background and sprites, which is the one thing no other bench
+    # in this tree does: every other $2007 read arm is written to land where
+    # rendering is provably off, so the $2007-arm-vs-fetch-beat collision is
+    # produced but never made visible.  This one has no invisible-set guard on
+    # purpose and checks the consumed byte against the fetch unit's own address
+    # register, plus a pixel-for-pixel A/B against an otherwise identical PPU with
+    # chr_rd_arm tied low.  It elaborates only $ppuSources, so it is cheap.
+    [pscustomobject]@{
+        Id          = 'chr-arb-tb'
+        Group       = 'ppu'
+        Label       = 'CHR $2007 read-arm vs fetch-beat collision tb'
+        Top         = 'tb_chr_arb_collision'
+        Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_chr_arb_collision.v')
         Standard    = '2012'
         Run         = $true
     },

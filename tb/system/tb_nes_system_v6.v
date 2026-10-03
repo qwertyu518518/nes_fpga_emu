@@ -4691,6 +4691,174 @@ always @(posedge clk) begin
     end
 end
 
+// ------------------------------------------------------------------ W3-11
+//
+// WHY THIS GROUP EXISTS AT ALL, and why P0-6 above could never have caught it.
+//
+//   P0-6 already checks every background fetch-unit latch against
+//   chr_mem[chr_final_addr delayed two ce].  chr_final_addr is the arbitrated
+//   address, i.e. whatever the arbiter put on the bus.  So on a beat where the
+//   $2007 read arm won, P0-6's expectation became chr_mem[the arm's address],
+//   the corrupted latch was chr_mem[the arm's address], and the check agreed.
+//   The expectation followed the defect.  W3-11 therefore takes the address from
+//   the fetch unit's OWN chr_addr register, which the arbiter cannot override,
+//   and the byte from the TB's OWN chr_mem.  Nothing in the comparison is a
+//   function of the arbiter's choice.
+//
+//   THE DEFECT, stated as a check.  A fetch unit presents its address across
+//   S_ARM and S_BEAT, has chr_req high for exactly the S_BEAT clk, and captures
+//   whatever chr_rdata holds one ce later in S_GRAB.  It has no tag, no retry and
+//   no way to know it was handed somebody else's byte.  So on every consuming
+//   beat the byte it takes must be chr_mem[the address it asked for].  That is
+//   W3-11's fatal: a beat consumed with a byte captured for another master.
+//
+//   WHAT IS *NOT* ASSERTED, on purpose.  "An arm and a fetch beat both asked for
+//   the bus on this ce" is ordinary arbitration and it still happens: the arm
+//   has zero slack (nes_ppu2c02.v's module header derives it) so it must keep the
+//   address, and rb_coll_bg/rb_coll_sp above still count the contention.  What
+//   the rtl now does instead of stealing is DEFER the fetch: on an arm beat that
+//   finds a unit mid-beat, that unit's clock enable is suppressed, so the unit
+//   neither sees its request serviced nor consumes anything, and it repeats the
+//   same beat on the next ce with its address register untouched.  W3-11 counts
+//   those suppressions (rb_defer_bg / rb_defer_sp) and fatals if any displaced
+//   beat was out-voted rather than deferred (rb_defer_bad_*), which is what makes
+//   "the arm never steals a fetch beat" an invariant instead of an inference from
+//   the byte check passing.
+//
+//   chr_mmc3 is not in here: its program raises no read arms at all (P0-8 already
+//   reports that), so there is nothing to protect on that board and the two would
+//   only duplicate counters.
+
+wire [2:0]  w3fu_state  = ab_v6.u_ppu.g_chr_external.u_chr_fetch.state;
+wire [2:0]  w3sfu_state = ab_v6.u_ppu.g_chr_external.u_sprite_chr_fetch.state;
+wire [13:0] w3fu_addr   = ab_v6.u_ppu.g_chr_external.u_chr_fetch.chr_addr;
+wire [13:0] w3sfu_addr  = ab_v6.u_ppu.g_chr_external.u_sprite_chr_fetch.chr_addr;
+wire        w3fu_ce     = ab_v6.u_ppu.g_chr_external.u_chr_fetch.ce;
+wire        w3sfu_ce    = ab_v6.u_ppu.g_chr_external.u_sprite_chr_fetch.ce;
+wire [CHR_ADDR_BITS-1:0] w3fu_final  =
+    ({13'b0, tb_chr_bank_model} << 13) | (w3fu_addr & 14'h1FFF);
+wire [CHR_ADDR_BITS-1:0] w3sfu_final =
+    ({13'b0, tb_chr_bank_model} << 13) | (w3sfu_addr & 14'h1FFF);
+
+integer w3_grab_bg, w3_grab_sp;
+integer w3_want_bg, w3_want_sp;
+integer w3_race_bg, w3_race_sp;
+integer w3_wr_bg, w3_wr_sp;
+integer w3_err_bg,  w3_err_sp;
+integer w3_defer_bg, w3_defer_sp;
+integer w3_defer_bad_bg, w3_defer_bad_sp;
+reg [CHR_ADDR_BITS-1:0] w3_bg_final_q, w3_sp_final_q;
+reg [7:0] w3_bg_byte_q, w3_sp_byte_q;
+reg w3_bg_wr_q, w3_sp_wr_q;
+reg w3_arm_bg_q, w3_arm_sp_q;
+reg w3_ce_bg_q, w3_ce_sp_q;
+
+always @(posedge clk) begin
+    if (reset) begin
+        w3_grab_bg       = 0;
+        w3_grab_sp       = 0;
+        w3_want_bg       = 0;
+        w3_want_sp       = 0;
+        w3_race_bg       = 0;
+        w3_race_sp       = 0;
+        w3_wr_bg         = 0;
+        w3_wr_sp         = 0;
+        w3_err_bg        = 0;
+        w3_err_sp        = 0;
+        w3_defer_bg      = 0;
+        w3_defer_sp      = 0;
+        w3_defer_bad_bg  = 0;
+        w3_defer_bad_sp  = 0;
+        w3_bg_final_q    <= {CHR_ADDR_BITS{1'b0}};
+        w3_sp_final_q    <= {CHR_ADDR_BITS{1'b0}};
+        w3_bg_byte_q     <= 8'h00;
+        w3_sp_byte_q     <= 8'h00;
+        w3_bg_wr_q       <= 1'b0;
+        w3_sp_wr_q       <= 1'b0;
+        w3_arm_bg_q      <= 1'b0;
+        w3_arm_sp_q      <= 1'b0;
+        w3_ce_bg_q       <= 1'b0;
+        w3_ce_sp_q       <= 1'b0;
+    end else if (ab_v6.ce_ppu) begin
+        // ---- what each unit was entitled to on the beat it asked for.  A unit
+        //      that the rtl defers repeats the same address on the next ce, so
+        //      re-recording it is harmless and keeps the two cases identical.
+        //
+        //      w3_bg_wr_q records whether chr_we owned the mapper address bus on
+        //      that beat.  mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr :
+        //      ppu_chr_addr (nes_system_v6.v:334), so a $2007 CHR WRITE takes
+        //      the address from the fetch unit exactly the way a read arm does.
+        //      That is a DIFFERENT hazard, already counted by P0-2 as
+        //      chr_wr_req_clash and already documented as unfixed (risk L-17);
+        //      this task does not change it and W3-11 must not absorb it, or the
+        //      check would be failing on a known open item instead of on the
+        //      read arm.  Those beats are counted and named, not silently
+        //      dropped.
+        if (ab_bg_chr_req !== 1'b0) begin
+            w3_bg_final_q <= w3fu_final;
+            w3_bg_byte_q  <= chr_mem[w3fu_final];
+            w3_bg_wr_q    <= (v6_chr_we !== 1'b0);
+            w3_want_bg    = w3_want_bg + 1;
+        end
+        if (ab_sp_chr_req !== 1'b0) begin
+            w3_sp_final_q <= w3sfu_final;
+            w3_sp_byte_q  <= chr_mem[w3sfu_final];
+            w3_sp_wr_q    <= (v6_chr_we !== 1'b0);
+            w3_want_sp    = w3_want_sp + 1;
+        end
+
+        // ---- and now the byte each unit actually consumes
+        if (w3fu_state == 3'd4) begin
+            w3_grab_bg = w3_grab_bg + 1;
+            if (w3_bg_wr_q !== 1'b0) begin
+                w3_wr_bg = w3_wr_bg + 1;
+            end else if (((chr_wq0_v !== 1'b0) && (chr_wq0 === w3_bg_final_q)) ||
+                ((chr_wq1_v !== 1'b0) && (chr_wq1 === w3_bg_final_q))) begin
+                w3_race_bg = w3_race_bg + 1;
+            end else if (chr_rdata !== w3_bg_byte_q) begin
+                w3_err_bg = w3_err_bg + 1;
+                if (w3_err_bg < 3)
+                    $fatal(1, "W3-11 the BACKGROUND fetch unit consumed chr_rdata=%02h at sl=%0d dot=%0d, but the byte it asked for (chr_mem[%05h], from its own chr_addr %04h) is %02h.  THE $2007 READ ARM STOLE THIS FETCH BEAT: the arm took the address bus, the memory captured the $2007 pattern byte, and the unit consumed it one ce later with no tag to notice.  bus carried %05h, arm active=%b",
+                           chr_rdata, ab_v6.u_ppu.scanline, ab_v6.u_ppu.dot,
+                           w3_bg_final_q, w3fu_addr, w3_bg_byte_q,
+                           v6_chr_final_addr, (rb_arm !== 1'b0));
+            end
+        end
+        if (w3sfu_state == 3'd4) begin
+            w3_grab_sp = w3_grab_sp + 1;
+            if (w3_sp_wr_q !== 1'b0) begin
+                w3_wr_sp = w3_wr_sp + 1;
+            end else if (((chr_wq0_v !== 1'b0) && (chr_wq0 === w3_sp_final_q)) ||
+                ((chr_wq1_v !== 1'b0) && (chr_wq1 === w3_sp_final_q))) begin
+                w3_race_sp = w3_race_sp + 1;
+            end else if (chr_rdata !== w3_sp_byte_q) begin
+                w3_err_sp = w3_err_sp + 1;
+                if (w3_err_sp < 3)
+                    $fatal(1, "W3-11 the SPRITE fetch unit consumed chr_rdata=%02h at sl=%0d dot=%0d, but the byte it asked for (chr_mem[%05h], from its own chr_addr %04h) is %02h.  THE $2007 READ ARM STOLE THIS FETCH BEAT.  bus carried %05h, arm active=%b",
+                           chr_rdata, ab_v6.u_ppu.scanline, ab_v6.u_ppu.dot,
+                           w3_sp_final_q, w3sfu_addr, w3_sp_byte_q,
+                           v6_chr_final_addr, (rb_arm !== 1'b0));
+            end
+        end
+
+        // ---- and that every displaced beat was deferred rather than out-voted
+        if (w3_arm_bg_q !== 1'b0) begin
+            w3_defer_bg = w3_defer_bg + 1;
+            if (w3_ce_bg_q !== 1'b0)
+                w3_defer_bad_bg = w3_defer_bad_bg + 1;
+        end
+        if (w3_arm_sp_q !== 1'b0) begin
+            w3_defer_sp = w3_defer_sp + 1;
+            if (w3_ce_sp_q !== 1'b0)
+                w3_defer_bad_sp = w3_defer_bad_sp + 1;
+        end
+        w3_arm_bg_q <= (rb_arm !== 1'b0) && (ab_bg_chr_req !== 1'b0);
+        w3_arm_sp_q <= (rb_arm !== 1'b0) && (ab_sp_chr_req !== 1'b0);
+        w3_ce_bg_q  <= w3fu_ce;
+        w3_ce_sp_q  <= w3sfu_ce;
+    end
+end
+
 // ----------------------------------------------------------------- P1-5
 //
 // The entry length is measured, not asserted in prose: the monitor latches the
@@ -5660,6 +5828,25 @@ task check_w3_readback;
             $fatal(1, "W3-10 the per-ce v5/v6 A/B diverged on %0d visible pixels, a read arm reached a pixel", ab_visible_div);
         if (ab_all_ce_div != 0)
             $fatal(1, "W3-10 the per-ce v5/v6 A/B diverged on %0d of %0d ce", ab_all_ce_div, ab_all_ce_count);
+
+        // ---- 11. no fetch beat may be consumed with another master's byte ----
+        // The three conditions are deliberately different questions.  rb_coll_bg
+        // and rb_coll_sp above say an arm and a fetch beat asked for the bus on
+        // one ce: that is arbitration and it is allowed to keep happening.
+        // w3_defer_bad_bg/sp say a displaced beat was OUT-VOTED, i.e. the old
+        // defect: allowed to be zero, and asserted to be.  w3_err_bg/sp say a
+        // fetch unit CONSUMED a byte captured for another master: the corruption
+        // itself, asserted to be zero.  P0-6 cannot make the last statement,
+        // because its expectation is chr_mem[the arbitrated address] and the
+        // corruption makes the arbitrated address the arm's.
+        if (w3_err_bg != 0 || w3_err_sp != 0)
+            $fatal(1, "W3-11 %0d background and %0d sprite fetch beats were consumed with a byte captured for the $2007 read arm",
+                   w3_err_bg, w3_err_sp);
+        if (w3_defer_bad_bg != 0 || w3_defer_bad_sp != 0)
+            $fatal(1, "W3-11 %0d background and %0d sprite beats found mid-flight by a read arm were out-voted instead of deferred",
+                   w3_defer_bad_bg, w3_defer_bad_sp);
+        if ((w3_defer_bg + w3_defer_sp) < 1)
+            $fatal(1, "W3-11 no read arm ever found a fetch unit mid-beat, so the deferral path was never exercised and this group proves nothing");
         rb_cells = CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES;
 
         $display("W3-1 ARMED-ALWAYS %0d $2007 CHR read beats and %0d read arms, one for one.  Every read beat saw u_ppu.g_chr_external.chr_rd_armed_q=1 (violations=%0d) and every arm was consumed by a read beat on the immediately following ce_ppu (stranded=%0d, two arms back to back=%0d).  KILLS the dead path: an arm that never fires leaves no read beat behind, and a read beat without an arm cannot pass, so this cannot go green on a path that is structurally disconnected PASS",
@@ -5696,11 +5883,15 @@ task check_w3_readback;
                  chr_latch_err, chr_pred_race_skip, chr_latch_race_skip);
         $display("W3-8 CROSS-DUT-VALUE-AB the strongest single check in the group.  ab_v5 runs the SAME program on the INTERNAL chr path: g_chr_internal answers $2007 out of nes_ppu2c02's own chr_ram with no external port, no mapper and no bus at all.  ab_v6 answers the same $2007 reads out of a top-level registered 128 KiB array addressed through mapper_ppu_addr.  All %0d ram cells holding a read-back byte are byte identical between the two (differing cells=%0d).  Two completely different storage mechanisms, one program, one answer, so the byte cannot have come from a ppu-side cache of the writes: ab_v5 never performed the external write that put run A's image into chr_mem, and it still returns it.  The same cells on chr_ram_b differ from ab_v6 on %0d of %0d, which is the non-vacuity half: identical code, different data, different answer PASS",
                  rb_cells, rb_v6_diff_v5, rb_rb_diff, rb_cells);
-        $display("W3-9 COLLISION-IS-REAL %0d read arms were raised and %0d of them coincided with a fetch request on the very same ce: %0d against a background fetch beat and %0d against a sprite fetch beat.  That is the displacement the contract names -- one background tile or one sprite slot plane, confined to the scanline the $2007 read was issued on -- produced for real rather than argued about.  P0-8's independent account agrees from the other side: of the %0d consecutive chr_req pairs, %0d had a read arm winning the second beat, %0d of those against a background beat and %0d against a sprite beat.  Arms by where they landed: %0d inside vblank scanlines 240-260 (loop B, rendering ON) and %0d outside it (loop A, PPUMASK=$00), scanlines %0d..%0d.  Without this assertion a design that never actually contended would pass silently PASS",
+        $display("W3-9 COLLISION-IS-REAL %0d read arms were raised and %0d of them coincided with a fetch request on the very same ce: %0d against a background fetch beat and %0d against a sprite fetch beat.  That contention is REAL and it is allowed to keep happening: the arm has zero slack, so it must keep the address, and the arbiter is entitled to pick a winner.  What the rtl no longer does is let the loser CONSUME anything -- see W3-11, which is where the displacement this contract used to name is asserted to be impossible.  P0-8's independent account agrees from the other side: of the %0d consecutive chr_req pairs, %0d had a read arm winning the second beat, %0d of those against a background beat and %0d against a sprite beat.  Arms by where they landed: %0d inside vblank scanlines 240-260 (loop B, rendering ON) and %0d outside it (loop A, PPUMASK=$00), scanlines %0d..%0d.  Without this assertion a design that never actually contended would pass silently PASS",
                  rb_arm_beats, rb_coll_bg + rb_coll_sp, rb_coll_bg, rb_coll_sp,
                  ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
                  ab_consec_arm_vs_sp,
                  rb_arms_vblank, rb_loopa_arms, rb_min_sl, rb_max_sl);
+        $display("W3-11 A-FETCH-BEAT-IS-NEVER-STOLEN this is the hard check for the tile-corruption hazard, and it is not a restatement of W3-9.  W3-9 counts CONTENTION: an arm and a fetch beat both asked for the bus on one ce, which is ordinary arbitration and still happens.  This counts CONSUMPTION: on every ce where a fetch unit was in S_GRAB, the byte it took must be chr_mem[the address in its OWN chr_addr register], because that register is what the unit asked for and the arbiter cannot override it.  Background: %0d beats wanted, %0d consumed, %0d on a beat a $2007 CHR WRITE owned the mapper port for (the separate, separately counted and still-open write hazard, risk L-17, which this group does not absorb), %0d skipped for a write race in the same two ce, %0d consumed with a byte captured for another master.  Sprite: %0d wanted, %0d consumed, %0d write-owned, %0d race skips, %0d wrong.  P0-6 CANNOT make this statement: its expectation is chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a stolen beat the expectation became the arm's byte and the corrupted latch agreed with it -- the expectation followed the defect.  Separately, every displaced beat must have been DEFERRED rather than out-voted: %0d background and %0d sprite beats found mid-flight by an arm had their clock enable suppressed (out-voted instead=%0d and %0d), so the unit neither saw its request serviced nor consumed anything and repeated the same beat on the next ce with its address register untouched.  The arm phase did not move and no pending register was added to the read address path, because the arm has zero slack: the ce_ppu edge that ends div_phase 8 is followed by 9, 10, 11, 0 and the edge that ends div_phase 0 is the one read_buffer_reg latches on, so there is no ce_ppu edge a deferred or registered address could be captured on PASS",
+                 w3_want_bg, w3_grab_bg, w3_wr_bg, w3_race_bg, w3_err_bg,
+                 w3_want_sp, w3_grab_sp, w3_wr_sp, w3_race_sp, w3_err_sp,
+                 w3_defer_bg, w3_defer_sp, w3_defer_bad_bg, w3_defer_bad_sp);
         $display("W3-9b P0-8'S INDEPENDENT ACCOUNT agrees from the other side: of the %0d consecutive chr_req pairs on ab_v6, %0d had a read arm winning the second beat (%0d against a background beat, %0d against a sprite beat) and %0d had a read arm on the first beat with a fetch unit winning the second (%0d against a background beat, %0d against a sprite beat).  A pair with no read arm on either beat, the case the removed invariant covered, is %0d PASS",
                  ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
                  ab_consec_arm_vs_sp,
