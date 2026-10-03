@@ -746,6 +746,83 @@ module tb_nes_zynq_top;
         if (btn_phase == 0) err("BTN_A_NEVER_RELEASED", dut.btn_sync_q[0], 0);
         else $display("CDC key0 released: core copy[0]=%0b", dut.btn_sync_q[0]);
 
+        // ---------------------------------------------- buttons CDC, key[1]
+        // key[1] is the second PL key and now drives B on its own, so pressing
+        // it with key[0] up must give exactly 8'h02: no Start, no Select, no
+        // dpad.  The wait is bounded against the press time rather than against
+        // t_rst_rel_ns, so the budget this section gets does not shrink with
+        // whatever absolute time the sections before it already spent.
+        @(negedge sys_clk);
+        key[1] = 1'b0;
+        t_key_down_ns = $time;
+        btn_phase = 0;
+        while (btn_phase == 0 && $time - t_key_down_ns < 200000) begin
+            @(posedge dut.mmcm_core_clk);
+            #1;
+            if (dut.btn_sync_q[1] === 1'b1) btn_phase = 1;
+        end
+        if (btn_phase == 0)
+            err("BTN_B_NEVER_REACHED_CORE", dut.touch_buttons[1], dut.btn_sync_q[1]);
+        else begin
+            if (dut.touch_buttons !== 8'h02)
+                err("BTN_B_ALONE_PATTERN", dut.touch_buttons, 8'h02);
+            if (dut.btn_sync_q !== 8'h02)
+                err("BTN_B_ALONE_CORE_PATTERN", dut.btn_sync_q, 8'h02);
+            $display("CDC key1: touch buttons=%02h core copy=%02h", dut.touch_buttons, dut.btn_sync_q);
+        end
+        @(negedge sys_clk);
+        key[1] = 1'b1;
+        btn_phase = 0;
+        while (btn_phase == 0 && $time - t_key_down_ns < 400000) begin
+            @(posedge dut.mmcm_core_clk);
+            #1;
+            if (dut.btn_sync_q[1] === 1'b0) btn_phase = 1;
+        end
+        if (btn_phase == 0) err("BTN_B_NEVER_RELEASED", dut.btn_sync_q[1], 0);
+
+        // ------------------------------------- buttons CDC, both keys together
+        // Both PL keys at once is Start as well as A and B, on the real path and
+        // with the panel not yet reporting anything, so this is also the check
+        // that Start no longer depends on the touch panel at all.
+        @(negedge sys_clk);
+        key[0] = 1'b0;
+        key[1] = 1'b0;
+        t_key_down_ns = $time;
+        btn_phase = 0;
+        while (btn_phase == 0 && $time - t_key_down_ns < 200000) begin
+            @(posedge dut.mmcm_core_clk);
+            #1;
+            if (dut.btn_sync_q === 8'h0B) begin
+                btn_phase = 1;
+                btn_converged_ns = $time - t_key_down_ns;
+            end
+        end
+        if (btn_phase == 0)
+            err("BTN_BOTH_NEVER_REACHED_CORE", dut.touch_buttons, dut.btn_sync_q);
+        else begin
+            repeat (2000) begin
+                @(posedge dut.mmcm_core_clk);
+                #1;
+                if (dut.btn_sync_q !== 8'h0B) err("BTN_BOTH_DROPPED_WHILE_HELD", dut.btn_sync_q, 8'h0B);
+            end
+            if (dut.touch_buttons !== 8'h0B)
+                err("BTN_BOTH_PATTERN", dut.touch_buttons, 8'h0B);
+            if (btn_converged_ns < 16000) err("BTN_BOTH_CONVERGED_BEFORE_DEBOUNCE", btn_converged_ns, 16000);
+            if (btn_converged_ns > 40000) err("BTN_BOTH_CONVERGED_TOO_LATE", btn_converged_ns, 40000);
+            $display("CDC both keys: touch buttons=%02h core copy=%02h, Start reached the core %0d ns after press",
+                     dut.touch_buttons, dut.btn_sync_q, btn_converged_ns);
+        end
+        @(negedge sys_clk);
+        key[0] = 1'b1;
+        key[1] = 1'b1;
+        btn_phase = 0;
+        while (btn_phase == 0 && $time - t_key_down_ns < 600000) begin
+            @(posedge dut.mmcm_core_clk);
+            #1;
+            if (dut.btn_sync_q === 8'h00) btn_phase = 1;
+        end
+        if (btn_phase == 0) err("BTN_BOTH_NEVER_RELEASED", dut.btn_sync_q, 0);
+
         // ------------------------- buttons CDC, forced pattern, hold check
         force dut.touch_buttons = btn_drv;
         btn_drv = 8'hA5;
@@ -846,8 +923,10 @@ module tb_nes_zynq_top;
                  sl_start_cnt, sl_stop_cnt, sl_addr_hits, sl_flag_clr, dut.u_touch.touch_error);
 
         // A reported touch has to come back as coordinates and as the dpad half
-        // of the button byte.  (100, 120) is left of the x_left cut at 200, so
-        // dpad is 4'b0010.
+        // of the button byte.  (100, 120) is left of the x_left cut at 200 and
+        // above the y_mid cut at 240, so dpad is 4'b0010 and that same cell is
+        // the Select region, so the low nibble is 4'b0100 and the whole byte is
+        // 8'h24 with both PL keys released.
         //
         // The report has to be staged while the bus is idle.  A real GT9147
         // clears its own data-ready flag when the master writes 0x00 to 16'h814E,
@@ -891,6 +970,10 @@ module tb_nes_zynq_top;
         if (sl_coord_rds < 1) err("TOUCH_COORDINATES_NEVER_READ", sl_coord_rds, 1);
         if (dut.touch_buttons[7:4] !== 4'b0010)
             err("TOUCH_DPAD_LEFT", dut.touch_buttons[7:4], 4'b0010);
+        if (dut.touch_buttons[2] !== 1'b1)
+            err("TOUCH_SELECT_CELL", dut.touch_buttons[2], 1);
+        if (dut.touch_buttons[3:0] !== 4'b0100)
+            err("TOUCH_SELECT_LOW_NIBBLE", dut.touch_buttons[3:0], 4'b0100);
         $display("TOUCH panel reported (%0d, %0d) status %02h, dpad %b, buttons %02h",
                  dut.u_touch.touch_x, dut.u_touch.touch_y, sl_status,
                  dut.touch_buttons[7:4], dut.touch_buttons);
@@ -905,6 +988,7 @@ module tb_nes_zynq_top;
         end
         if (dut.u_touch.touch_valid !== 1'b0) err("TOUCH_REPORT_NEVER_RELEASED", touch_guard, 0);
         if (dut.touch_buttons[7:4] !== 4'b0000) err("TOUCH_DPAD_STUCK", dut.touch_buttons[7:4], 0);
+        if (dut.touch_buttons[2] !== 1'b0) err("TOUCH_SELECT_STUCK", dut.touch_buttons[2], 0);
 
         // The open drain contract over the whole run, not just the probe window.
         if (bus_xcl != 0) err("TOUCH_SCL_CONTENDED", bus_xcl, 0);
