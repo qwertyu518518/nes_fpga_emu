@@ -5,7 +5,7 @@ param(
         'cpu', 'ppu', 'apu', 'bus', 'mapper', 'controller', 'cart', 'video', 'system', 'platform', 'peripheral',
         'cpu-core', 'cpu-integration', 'cpu-bus', 'cpu-inc',
         'ppu-core', 'ppu-sprite', 'ppu-oam-dma', 'ppu-integration', 'chr-feasibility-tb',
-        'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb', 'chr-arb-tb',
+        'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb', 'chr-arb-tb', 'chr-wr-arb-tb',
         'sprite-fetch-core', 'sprite-fetch-tb',
         'apu-core', 'apu-tb',
         'bus-tb',
@@ -316,6 +316,30 @@ $allTargets = @(
         Label       = 'CHR $2007 read-arm vs fetch-beat collision tb'
         Top         = 'tb_chr_arb_collision'
         Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_chr_arb_collision.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    # The mirror image of chr-arb-tb, and the only bench that drives $2007 CHR
+    # WRITES through the visible field with rendering on.  The write half of the
+    # same bus resolves on the mapper port with the WRITE taking priority
+    # (nes_system_v6.v:334), so a write landing on a fetch unit's S_BEAT clk used
+    # to hand that unit the write address's byte one ce later, with no tag to
+    # notice: one 8x8 cell of background or one sprite plane, silently wrong.  No
+    # other bench could see it -- tb_nes_system_v6's 96 upload write beats all run
+    # with PPUMASK=$00, and the cartridge in the tree is CHR-ROM.  This one
+    # streams $2007 CHR stores into a window the renderer provably never reads
+    # (proved by intersecting the measured fetch-address set against the measured
+    # store-address set), streams them at one per three ce so the collisions are
+    # not a matter of luck, checks the consumed byte against the fetch unit's own
+    # address register, and pixel-for-pixel A/Bs against an otherwise identical
+    # PPU whose CHR read address is never taken away from its fetch units.  It
+    # elaborates only $ppuSources, so it is cheap.
+    [pscustomobject]@{
+        Id          = 'chr-wr-arb-tb'
+        Group       = 'ppu'
+        Label       = 'CHR $2007 write-strobe vs fetch-beat collision tb'
+        Top         = 'tb_chr_wr_collision'
+        Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_chr_wr_collision.v')
         Standard    = '2012'
         Run         = $true
     },

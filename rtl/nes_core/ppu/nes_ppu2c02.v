@@ -852,7 +852,7 @@ generate
         wire        chr_rd_win;
         reg         chr_rd_armed_q;
 
-        // CHR read arm versus the two fetch units.
+        // CHR read arm AND CHR write strobe versus the two fetch units.
         //
         // WHY THE ARM CANNOT BE DEFERRABLE, and why the BEAT is deferred
         // instead.  The arm has zero slack and that is arithmetic, not caution:
@@ -868,46 +868,99 @@ generate
         // supposed to carry the address, because the arm does not exist yet on
         // any earlier ce.  A deferred arm is not a slower arm, it is a wrong arm.
         //
+        // THE WRITE STROBE CANNOT BE DEFERRABLE EITHER, and for the same
+        // structural reason one layer down.  chr_we is `reg_cs && reg_we &&
+        // reg_addr == 3'd7 && v_addr < $2000`, reg_cs is ppu_xfer and nes_cpu_bus
+        // gates ppu_xfer on ce_cpu, so chr_we exists on exactly ONE clk, the
+        // div_phase == 0 one.  The module header already states the consequence
+        // in its own words (nes_ppu2c02.v:251-255): "chr_waddr carries the write
+        // address, which is the PRE-increment v_addr: reg_cs is a one-clk pulse
+        // taken at div_phase == 0, and v_addr is incremented by that same beat,
+        // so the address is only correct while it is combinational.  A
+        // registered strobe would have to be paired with a new 14-bit address
+        // register (because v_addr has already moved) and would land one ce
+        // late."  There is no earlier ce on which the strobe exists to be
+        // registered, so a pending write is not a later write, it is a write to
+        // the post-increment address.
+        //
+        // WHY NO TERM IN THE chr_addr MUX CAN FIX THE WRITE, which is worth
+        // stating because it is the obvious first attempt.  chr_addr is the READ
+        // port.  The write never travels on it: nes_system_v6.v:334-336 forms
+        //     mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr
+        //     mapper_ppu_we   = ppu_chr_we
+        // so on a write beat the external CHR memory is addressed from
+        // chr_waddr and never looks at chr_addr at all.  Adding chr_we to the
+        // chr_addr mux would therefore change nothing that the memory can see,
+        // and the fetch unit would still consume the write address's byte.  The
+        // mapper-side selection is likewise already correct: the write HAS to
+        // take the port on its own beat, because that is the only beat it has.
+        //
         // The fetch units are the deferrable party, and they have to be, because
         // they are fixed-latency and non-retrying: chr_req is high for exactly
         // one beat (state S_BEAT) and the byte captured in S_GRAB one ce later
         // is whatever chr_rdata holds, with no tag, no retry and no way to
         // notice it was handed the wrong one.  A unit that finds its own chr_req
-        // already high on an arm beat is therefore FROZEN for exactly that one
-        // ce: its ce is gated off, so its state and its chr_addr and chr_req
-        // registers do not move, and the beat it asked for is neither serviced
-        // nor consumed.  On the next ce it re-runs S_BEAT with the address
-        // register untouched, the memory captures that address one ce later, and
-        // S_GRAB consumes the right byte one ce later.  The address a unit
-        // presents is stable across S_ARM and S_BEAT anyway, which is why the
-        // repeat is the same beat rather than a different one.
+        // already high on an arm beat OR on a $2007 CHR write strobe is
+        // therefore FROZEN for exactly that one ce: its ce is gated off, so its
+        // state and its chr_addr and chr_req registers do not move, and the beat
+        // it asked for is neither serviced nor consumed.  On the next ce it
+        // re-runs S_BEAT with the address register untouched, the memory captures
+        // that address one ce later, and S_GRAB consumes the right byte one ce
+        // later.  The address a unit presents is stable across S_ARM and S_BEAT
+        // anyway, which is why the repeat is the same beat rather than a
+        // different one.
         //
-        // The cost is bounded and was measured rather than assumed.  A unit can
-        // be frozen only on a div_phase 8 clk, the arm is a one-clk level there,
-        // and ce_ppu edges are 4 clk apart, so a unit can never be frozen twice
-        // in a row.  A background tile costs 5 ce of the 24 ce its cadence
-        // allows (bg_fetch_due fires every 8 dots and a dot is 3 ce), and the
-        // sprite prefetch costs 35 ce of the 444 ce between its start at dot 257
-        // and the first dot of the next line that reads its shadow, so neither
-        // unit can miss a start and neither cadence changes.
+        // The cost is bounded and was measured rather than assumed.  An arm can
+        // freeze a unit only on a div_phase 8 clk and a write strobe only on a
+        // div_phase 0 clk; ce_ppu edges are 4 clk apart, and a div_phase 8 clk and
+        // a div_phase 0 clk are never the same clk, so a unit can be frozen at
+        // most on two CONSECUTIVE ce (an arm at the div_phase 8 edge of one
+        // window followed by a write at the div_phase 0 edge of the next), and
+        // the div_phase 4 edge of either window can never freeze it because
+        // neither the arm nor chr_we exists there.  A background tile costs 8 ce
+        // of the 24 ce its cadence allows (bg_fetch_due fires every 8 dots and a
+        // dot is 4 clk), so even two consecutive freezes cannot make it miss a
+        // start.  The sprite prefetch costs 35 ce of the 444 ce between its start
+        // at dot 257 and the first dot of the next line that reads its shadow,
+        // and one freeze per byte at most adds 16, so neither cadence changes.
         //
-        // The hold is the arm ANDed with that unit's own chr_req, which is high
-        // in S_BEAT and in no other state.  Two neighbouring cases cost nothing
-        // and are left alone on purpose:
-        //   * an arm landing while a unit is in S_ARM -- chr_req is still low
-        //     there, so the memory captures the arm's byte, the unit then
-        //     presents its own address for a whole beat in S_BEAT, and its
-        //     capture lands on the following edge;
-        //   * an arm landing while a unit is in S_GRAB -- the unit consumes the
-        //     byte the S_BEAT edge delivered and merely overwrites chr_rdata
-        //     with the arm's byte afterwards.
+        // NO DEADLOCK IS POSSIBLE, structurally rather than by measurement:
+        // chr_req is high in S_BEAT and in NO other state, so a frozen unit is
+        // always in S_BEAT and never in the S_GRAB it still has to reach, and
+        // chr_req is low in S_GRAB so the freeze term is structurally low on the
+        // ce that completes a grab.  This is the asymmetry with the read side
+        // worth naming: on the read side the identifying signal is
+        // chr_rd_win && chr_req, where chr_rd_win can only be true on the
+        // div_phase 8 clk.  For the write the identifying signal is
+        // chr_we && chr_req, and chr_we can only be true on the div_phase 0 clk,
+        // so neither term can mask a state the unit needs to leave.
+        //
+        // The hold is the arm OR the write strobe, ANDed with that unit's own
+        // chr_req, which is high in S_BEAT and in no other state.  Two
+        // neighbouring cases cost nothing and are left alone on purpose:
+        //   * an arm or a write landing while a unit is in S_ARM -- chr_req is
+        //     still low there, so the memory captures the other master's byte,
+        //     the unit then presents its own address for a whole beat in
+        //     S_BEAT, and its capture lands on the following edge;
+        //   * an arm or a write landing while a unit is in S_GRAB -- the unit
+        //     consumes the byte the S_BEAT edge delivered and merely overwrites
+        //     chr_rdata with the other master's byte afterwards.
+        // For the same reason the write needs no sp_bus_sel term on the
+        // background hold: bg_fetch_due fires at dot 7 (mod 8) up to dot 247 and
+        // at dots 324 and 340, and the sprite unit's prefetch owns sp_bus_sel
+        // only from dot 257 to about dot 292, so bg_chr_req is never high while
+        // the sprite unit is on the bus.  When it is, chr_addr already carries
+        // the sprite address on both the read and the write side, so the write
+        // displaces the sprite and not the background -- which is exactly what
+        // chr_hold_sp above acts on.
         //
         // Contention itself is NOT removed and is not meant to be: an arm and a
-        // fetch beat still ask for the bus on the same ce, and the arm still
-        // takes the address, because the read has to be on time.  What is now
-        // impossible is the loser CONSUMING anything.
-        wire chr_hold_bg = chr_rd_win && bg_chr_req;
-        wire chr_hold_sp = chr_rd_win && sp_chr_req;
+        // fetch beat still ask for the bus on the same ce, a write and a fetch
+        // beat still ask for the bus on the same ce, and the other master still
+        // takes the address, because the arm and the store each have to be on
+        // time.  What is now impossible is the loser CONSUMING anything.
+        wire chr_hold_bg = (chr_rd_win || chr_we) && bg_chr_req;
+        wire chr_hold_sp = (chr_rd_win || chr_we) && sp_chr_req;
 
         assign sp_start = (dot == 9'd257);
         assign sp_bus_sel = sp_busy;
