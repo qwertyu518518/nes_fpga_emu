@@ -28,6 +28,22 @@
 // more.  What has to hold is the ratio and the zero-slack arithmetic: one
 // ce of freeze, one whole tile of cost.
 //
+// WHAT THIS CHANGE MOVED, MEASURED HERE, 3 frames, +nt=1 (the default).  The
+// $2007 CHR WRITE no longer takes the CHR read address -- nes_system_v6 feeds
+// the mapper from ppu_chr_addr unconditionally -- so nes_ppu2c02 no longer
+// freezes a fetch unit for chr_we and the write-side drops are gone:
+//   before (263f8c1)          after
+//     rd=0 wr=0  25152/25152/0      25152/25152/0      pixel diffs 0 -> 0
+//     rd=1 wr=0  25152/19916/5236   25152/19916/5236   pixel diffs 11578 -> 11578
+//     rd=0 wr=1  25152/22010/3142   25152/25152/0     pixel diffs 8317 -> 0
+//     rd=1 wr=1  25152/22448/2704   25152/22534/2618   pixel diffs 5996 -> 5774
+// (due / accepted / dropped, out of 25152 requests; pixel diffs out of 184304
+// gated visible dots.)  THE READ-ONLY ROW IS BYTE-IDENTICAL, which is the point:
+// the $2007 read arm still takes the read address and still freezes the unit,
+// so nothing about that row was supposed to move.  The write-only row goes to
+// ZERO DROPS AND ZERO PIXELS.  The both row keeps 2618 drops, which is the
+// arm's share and is not fixed by this change.
+//
 // WHAT IS UNDER TEST
 //   The same A/B shape the two collision benches use, with the ONE thing changed
 //   that makes a stream error visible: the nametable is NOT uniform, and it is
@@ -56,14 +72,14 @@
 //   benches.
 //
 //   Two PPU instances, same register stimulus, same CHR RAM contents:
-//     dut_a  the arbitrated instance: its CHR read memory is addressed on
-//            mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr, i.e.
-//            nes_system_v6.v:334, so the $2007 write owns the address bus on its
-//            own beat and the $2007 read arm owns it on its own beat.
-//     dut_r  the reference: identical in every respect except that its CHR read
-//            memory is addressed on its own chr_addr port, so nothing is ever
-//            taken away from its fetch units.  It is the picture this PPU draws
-//            when no master ever steals a CHR beat.
+//     dut_a  the arbitrated instance: its CHR read memory is addressed on the
+//            PPU's own chr_addr port, which is what nes_system_v6.v now hands the
+//            mapper unconditionally, so the $2007 write owns the CHR array's WRITE
+//            port on its own beat and does not touch the read address at all, and
+//            the $2007 read arm owns the read address on its own beat.
+//     dut_r  the reference: identical in every respect except that its chr_rd_arm
+//            is tied low, so its fetch units are never frozen.  It is the picture
+//            this PPU draws when no master ever steals a CHR read beat.
 //
 //   Both receive the SAME store at the SAME address with the SAME data (checked,
 //   W6), so the two CHR arrays are byte identical and any pixel difference can
@@ -138,8 +154,11 @@
 //       occupancy".  One ce of added slack absorbs one; two absorb two.  W9
 //       histograms that count per accepted fetch and prints the maximum, so the
 //       "give the pipeline one more ce" option is costed against a measurement
-//       rather than against an assumption.  MEASURED on the committed RTL over 3
-//       frames in every mode: the maximum is 1, never 2.  That is consistent with
+//       rather than against an assumption.  MEASURED over 3 frames in every mode:
+//       the maximum is 1 where the $2007 READ arm runs (5585 freeze ce in rd
+//       mode, 2792 in both mode, all of them singly inside a tile) and 0 in the
+//       write-only and control modes, which is what removing the write freeze
+//       from chr_hold_bg predicts.  The maximum is never 2.  That is consistent with
 //       the source argument that two freezes cannot land on CONSECUTIVE ce (an
 //       arm exists only at div_phase 8 and a write strobe only at div_phase 0,
 //       and the div_phase-0 edge of the next window IS the retire beat of the
@@ -345,10 +364,27 @@ module tb_bg_fetch_drop;
     // and v_addr is still the pre-increment value at the capture.
     wire arm_a = (div_phase == 4'd8) && arm_pend && (reset === 1'b0);
 
-    // nes_system_v6.v:334.  This one line is what makes the $2007 write a bus
-    // hazard at all, and it is the ONLY difference in the address path.
-    wire [13:0] mapper_addr_a = (we_a !== 1'b0) ? waddr_a : chr_addr_a;
-    wire [13:0] mapper_addr_r = (we_r !== 1'b0) ? waddr_r : chr_addr_r;
+    // THE MAPPER'S CHR ADDRESS, which used to be a mux with the write taking
+    // priority and no longer is:
+    //
+    //   BEFORE: wire [13:0] mapper_addr_a = (we_a !== 1'b0) ? waddr_a : chr_addr_a;
+    //   NOW:    mapper_addr_a is chr_addr_a, unconditionally.
+    //
+    // nes_system_v6.v now feeds the mapper's read-side banking from ppu_chr_addr
+    // on every beat, and the CHR array already had a write address independent of
+    // the read address (nes_cart_rom.v:193-197, chr_windex beside chr_rindex), so
+    // the write has its own path all the way down and no longer takes the read
+    // address bus.  That is the entire reason the write-side freeze -- and with it
+    // the write-side DROPS this bench was built to measure -- is gone.
+    //
+    // Both instances are addressed this way now.  dut_a still differs from dut_r,
+    // and still the only structural difference that matters is the FREEZE:
+    // nes_ppu2c02 freezes a fetch unit for one ce when chr_rd_win is high and the
+    // unit has chr_req high, dut_a is given the $2007 read arm and dut_r's is
+    // tied low, so dut_r's fetch units are never held.  That is the A/B this bench
+    // measures: the picture drawn when no master ever steals a CHR read beat.
+    wire [13:0] mapper_addr_a = chr_addr_a;
+    wire [13:0] mapper_addr_r = chr_addr_r;
 
     // The reference's READ bus is not arbitrated: its memory is addressed on the
     // PPU's own chr_addr port, so nothing is ever taken away from its units.
@@ -1371,8 +1407,34 @@ $display("W5 OFFSETS FROM THE NEAREST DROP'S TARGET DOT, in ce:");
                     if (c2_pix_diff != 0)
                         $fatal(1, "S1 the control run rendered %0d pixels differently from the reference although it generated no $2007 CHR traffic at all, so a non-uniform nametable alone is corrupting the picture and the other runs prove nothing", c2_pix_diff);
                 end else begin
-                    if (c3_drop_a == 0)
-                        $fatal(1, "S1 this run dropped ZERO background fetches, so it does not exercise the zero-slack pipeline at all");
+                    // A RUN MUST STILL PROVE SOMETHING, and what it has to prove
+                    // depends on which freeze it can still provoke.  This fatal
+                    // used to be unconditional over both $2007 directions, on the
+                    // premise that a $2007 access of either kind drops a fetch.
+                    // That premise is now false for the WRITE direction, and it is
+                    // false BY DESIGN rather than by accident: the $2007 CHR write
+                    // no longer takes the CHR read address (nes_system_v6.v feeds
+                    // the mapper from ppu_chr_addr unconditionally and the array
+                    // has its own chr_windex), so there is nothing for a write to
+                    // displace, nes_ppu2c02 no longer freezes for chr_we, and a
+                    // write-only run is SUPPOSED to drop nothing.  So:
+                    //   +rd=1 (with or without wr) still fatals on zero drops,
+                    //     because the arm freeze is untouched by this change and
+                    //     a zero there would mean the read-side hazard vanished,
+                    //     which it did not;
+                    //   +wr=1 alone REQUIRES zero drops instead, which is the
+                    //     whole point of the change and would fail loudly if a
+                    //     freeze came back.
+                    // This is a tightening for the write-only mode and a
+                    // relaxation for nothing else.
+                    if (m_rd && (c3_drop_a == 0))
+                        $fatal(1, "S1 this run generated $2007 CHR READ traffic, which still takes the CHR read address and must still freeze the fetch units, yet it dropped ZERO background fetches; the read-side hazard this bench is not fixing has apparently vanished, so the run exercises nothing");
+                    if (!m_rd && (c3_drop_a != 0))
+                        $fatal(1, "S1 this run generated only $2007 CHR WRITES, which no longer take the CHR read address, yet it dropped %0d background fetches; something is still freezing the background unit for a write", c3_drop_a);
+                    if (m_rd)
+                        $display("NOTE this run dropped %0d fetches and rendered %0d differing pixels; the drops are the $2007 READ arm's, which is still unresolved", c3_drop_a, c2_pix_diff);
+                    else
+                        $display("NOTE this run dropped %0d fetches and rendered %0d differing pixels, against 3142 drops and 8317 differing pixels for the same mode before the $2007 CHR write was taken off the CHR read address bus", c3_drop_a, c2_pix_diff);
                     if (c2_pix_diff == 0)
                         $display("NOTE this run dropped %0d fetches and rendered 0 differing pixels", c3_drop_a);
                 end

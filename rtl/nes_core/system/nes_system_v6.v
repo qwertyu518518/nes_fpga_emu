@@ -33,7 +33,10 @@
 // nes_mapper.v:221), which is the authoritative post-gate signal; the CHR
 // memory behind this module must observe chr_waddr/chr_we/chr_wdata itself,
 // because external CHR data comes from the top-level chr_rdata port only and
-// has no write-back path.
+// has no write-back path.  mapper_ppu_addr is ppu_chr_addr UNCONDITIONALLY --
+// there is no write-priority mux in front of the mapper's read-side banking
+// any more, and the derivation of every consumer that that could have touched,
+// including chr_ram_we's ppu_addr[13] term, is written out at the wire below.
 // mapper_ppu_a12 is tied 0, so MMC3 scanline IRQ still cannot self-clock at
 // system level.
 // The external CHR port has no ready/backpressure signal: the CHR memory must
@@ -331,7 +334,151 @@ wire        ppu_chr_rd_arm;
 assign ppu_chr_rd_arm = sel_ppu && !cpu_we && (ppu_addr == 3'd7) &&
                          cpu_bus_ready && (div_phase == 4'd8);
 
-wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;
+// The mapper's CHR address is the READ address, UNCONDITIONALLY.  It used to be
+// a 14-bit 2:1 mux with the write taking priority:
+//
+//     wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;
+//
+// WHY IT IS GONE.  The CHR array already has a write address that is
+// independent of the read address: nes_cart_rom.v:193-197 declares
+// chr_rindex = chr_addr[CHR_LOCAL_BITS-1:0] and
+// chr_windex = chr_waddr[CHR_LOCAL_BITS-1:0] as two separate index wires, and
+// rtl/platform/zynq/nes_zynq_top.v wires the raw core chr_waddr (the port
+// exported below, unchanged) straight into chr_windex.  So nothing about the
+// CHR memory ever needed the write address on the mapper's read port; what
+// shared ONE address was the mapper's banking.  That is what has changed.
+//
+// WHAT THE MUX COST, and it was not free in either direction.
+//
+//   1. WRONG BYTES, paid for with a freeze.  On a write beat the fetch unit's
+//      address never reached the CHR memory, so a fetch unit that happened to be
+//      in S_BEAT on that ce consumed the write address's byte one ce later, with
+//      no tag on it.  The mitigation was to freeze the fetch unit for that one
+//      ce (chr_hold_bg/chr_hold_sp included chr_we).  That stopped the wrong
+//      byte, and it also DROPPED the request outright, because the background
+//      fetch pipeline has zero slack: bg_fetch_due fires every 8 ce and one tile
+//      occupies 8 ce, so a freeze on the last S_BEAT pushes the request past the
+//      next bg_fetch_due.  Measured on a deliberately non-uniform nametable in
+//      tb/ppu/tb_bg_fetch_drop.v over 3 frames: with $2007 CHR writes only,
+//      25152 requests due, 22010 accepted, 3142 DROPPED, 8317 of 184304 visible
+//      pixels wrong; at tb_chr_wr_collision.v's cadence 2955 of 5238 drops were
+//      the write's share.
+//
+//   2. TIMING.  This is a 14-bit 2:1 mux sitting in the CHR read address chain
+//      v_addr -> chr_addr -> mapper -> chr_final_addr -> CHR memory, which
+//      nes_ppu2c02's module header declares to have ZERO SLACK.  Removing a mux
+//      from a zero-slack path is a gain, not a wash.
+//
+// With the mux gone the fetch unit receives its own byte on a write beat, so
+// nes_ppu2c02 no longer freezes for chr_we and there is nothing left to arbitrate
+// on the write side.  The array is now read and written in the same clk, which
+// is the first same-address read-during-write on this CHR port; it needs the
+// write address to EQUAL the fetch address, and the bound is one dot of one tile
+// versus the 2.4 pixels per dropped request the freeze caused.  Read-during-write
+// ORDER remains a modelling choice (every bench here is READ-FIRST) and is
+// reported from the routed design rather than from simulation.
+//
+// WHAT IS TRUE OF mapper_ppu_addr NOW, and had to be re-derived rather than
+// assumed.  Every consumer of it was read before the mux was removed:
+//
+//   nes_mapper.v:39 ppu_addr          -- the module port, fed straight from here.
+//   nes_mapper.v:221 chr_ram_we       -- chr_ram_enable_r && ppu_we && !ppu_addr[13].
+//   nes_mapper.v:237/257/285/309/334  -- ppu_addr into all four mapper leaf modules.
+//   nes_mapper.v:335                  -- ppu_a12, which is the separate
+//                                        mapper_ppu_a12 = 1'b0 tap below and is
+//                                        NOT affected.
+//
+//   * All four leaf mappers use ppu_addr[12:0] ONLY (nes_mapper_nrom.v:26,
+//     nes_mapper_uxrom.v:47, nes_mapper_cnrom.v:41, nes_mapper_mmc1.v:56/65,
+//     nes_mapper_mmc3.v:110-135), and ppu_addr[13] is dropped by every one of
+//     them, which is why an 8 KiB CHR memory indexes the local address on [12:0]
+//     with no mirroring.  None of them can tell the difference.
+//
+//   * chr_ram_we's ppu_addr[13] TERM IS THE ONE PLACE THE CHANGE DID MATTER,
+//     and it is handled explicitly on the wire below rather than left implicit.
+//     It is a write-side gate: chr_ram_enable_r && ppu_we && !ppu_addr[13]
+//     (nes_mapper.v:221).  On a write beat it used to see ppu_chr_waddr[13] and
+//     now sees the bit-13 substitution at the wire below.
+//
+//       ppu_chr_waddr[13] == 0 ALWAYS on a write beat: chr_waddr is
+//         (v_addr < $2000) ? v_addr[13:0] : 14'h0000 (nes_ppu2c02.v:1032) and
+//         chr_we is itself qualified on v_addr < $2000 (:1033-1034), so
+//         v_addr[14:13] == 0.  The term was therefore a constant 1 on every beat
+//         where ppu_we is high, and it must stay one.
+//
+//       ppu_chr_addr[13] IS **NOT** CONSTANT, and the first version of this
+//         comment claimed it was.  That claim was wrong and the testbench caught
+//         it: chr_addr = chr_rd_win ? v_addr[13:0] : (sp_bus_sel ?
+//         sp_chr_addr_raw : bg_chr_addr_raw) (nes_ppu2c02.v:1029-1030), and
+//         bg_chr_addr_raw comes from nes_chr_fetch_unit, whose fwd_addr is
+//         nxt_addr + 14'd8 (nes_chr_fetch_unit.v:36) with nxt_addr = base_q + 8.
+//         bg_tile_base tops out at 0x1FFF (nes_ppu2c02.v:831-832:
+//         {table,name,4'b0} + fine_y, i.e. 0x1FF8 + 7), so the HIGH plane byte of
+//         the last tile row of the $1000-$1FFF window is requested at
+//         0x1FFF + 8 = 0x2007 and bit 13 IS set on that address.  Measured on
+//         tb/system/tb_nes_system_v6.v's chr_ram_b board: with the raw read
+//         address, mapper_chr_ram_we was LOW on 11 of that board's $2007 CHR
+//         write beats, i.e. 11 legal CHR-RAM stores were being refused by a gate
+//         that was reading somebody else's address bit.  (That high-plane address
+//         is also why the module header says ppu_addr[13] has no address to
+//         carry: it is a dead bit in the READ path -- every mapper drops it -- but
+//         it is NOT dead in the chr_ram_we gate, and that gate is write-side.)
+//
+//     So bit 13 is substituted, not the whole word.  The write address's bit 13
+//     is put back on a write beat, which makes chr_ram_we bit-identical to what
+//     it was, and bits [12:0] -- which is every bit any mapper leaf and every
+//     CHR bank decode actually consumes -- stay mux-free.  The substitution lands
+//     on ppu_addr[13], whose only consumer in the whole tree is that one
+//     comparison, so the LUT level it costs is on chr_ram_we and on nothing else:
+//     chr_ram_we is an output port of this module that rtl/platform/zynq/
+//     nes_zynq_top.v does not even consume (the top gates the array on
+//     chr_ram_enable), so it is not on the zero-slack chain the module header
+//     talks about, and the 13-bit win on the real CHR read address is intact.
+//
+//     The alternative -- a second 14-bit address port on nes_mapper -- was
+//     rejected for a concrete reason rather than taste: nes_mapper is
+//     instantiated by nes_system_v5.v as well, that file is not part of this
+//     change, and a mandatory input left unconnected there would be a latent
+//     hazard rather than a clean interface.  tb/mapper/tb_nes_mapper.v:402-403
+//     ("nrom ppu write above chr ignored", ppu_write(14'h2123)) is the check
+//     that keeps the gate's meaning pinned for a generic caller, and it is
+//     untouched by all of this.
+//
+//   * chr_final_addr = mapper_chr_bank_offset (:343) is therefore computed from
+//     the fetch address on a write beat instead of from chr_waddr.  That is a
+//     READ-side observability tap; the top wires it to the CHR memory's read
+//     port only (nes_zynq_top.v:563), and the write port takes chr_waddr.  Every
+//     mapper drops ppu_addr[13], so chr_final_addr is bit-identical on a write
+//     beat for every mapper that has no CHR bank register in ppu_addr[12] or
+//     ppu_addr[11] either; for MMC3, which does read those two bits, chr_final_addr
+//     on a write beat is now the fetch's window rather than the write's, so
+//     tb/system/tb_nes_system_v6.v P0-2 and W2 were rewritten to assert the NEW
+//     contract (on a write beat the read port carries the PPU's own read address)
+//     and to check the write's translation where it is actually observable, which
+//     is the byte that lands in the tb's CHR model.
+//
+//   * mapper_ppu_we = ppu_chr_we and mapper_ppu_dout = ppu_chr_wdata are
+//     unchanged, so the write path still reaches chr_ram_we with the correct
+//     write data, and the CHR memory still observes chr_waddr/chr_we/chr_wdata
+//     itself.
+//
+// WHAT DID NOT MOVE: the arm.  ppu_chr_rd_arm is raised on div_phase 8 and rides
+// chr_addr, which nes_ppu2c02 still muxes in front of the fetch arbiter, so the
+// $2007 CHR READ is exactly as it was -- same phase, same zero-slack lead, same
+// byte.
+// BIT 13 IS THE ONE SUBSTITUTION, and it is the whole of the write side's
+// interest in this port.  chr_ram_we (nes_mapper.v:221) is
+// chr_ram_enable_r && ppu_we && !ppu_addr[13], a WRITE-side gate, and before
+// this change ppu_addr[13] on a write beat was ppu_chr_waddr[13] -- which is
+// structurally 0, because chr_we is qualified on v_addr < $2000.  The read
+// address is NOT structurally 0 there: the high plane byte of the last tile row
+// of the $1000-$1FFF window is requested at 0x2007 (see the full derivation at
+// this wire).  Putting the write address's bit 13 back on a write beat makes
+// chr_ram_we bit-identical to what it was, costs one LUT on a signal nothing in
+// the hardware consumes, and leaves bits [12:0] -- every bit the mapper bank
+// decodes -- mux-free.
+wire [13:0] mapper_ppu_addr = {ppu_chr_we ? 1'b0 : ppu_chr_addr[13],
+                               ppu_chr_addr[12:0]};
 wire mapper_ppu_we = ppu_chr_we;
 wire [7:0] mapper_ppu_dout = ppu_chr_wdata;
 wire mapper_ppu_a12 = 1'b0;

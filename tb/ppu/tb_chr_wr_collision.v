@@ -13,35 +13,47 @@
 //   the background fetch unit, the sprite fetch unit, and the CPU.  Only the
 //   third one's DIRECTION is different here.
 //
-//   A $2007 write to CHR is a SEPARATE port (chr_waddr/chr_we/chr_wdata), not a
-//   term in the chr_addr read mux, and nes_system_v6.v:334 resolves the two on
-//   the mapper port with the WRITE taking priority:
+//   A $2007 write to CHR is a SEPARATE port (chr_waddr/chr_we/chr_wdata), and it
+//   stays separate all the way to the array: nes_cart_rom.v:193-197 declares
+//   chr_rindex = chr_addr[CHR_LOCAL_BITS-1:0] and
+//   chr_windex = chr_waddr[CHR_LOCAL_BITS-1:0] as two independent index wires.
+//   nes_system_v6 used to undo that one layer up, resolving the two on the
+//   mapper port with the WRITE taking priority:
 //
 //       wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;
 //       wire        mapper_ppu_we   = ppu_chr_we;
 //
-//   So on the beat the CPU stores a CHR byte, the address that reaches the CHR
-//   memory is the WRITE address, while a fetch unit that happens to be in
-//   S_BEAT on that same ce has already asked for its own address.  The memory
-//   registers chr_rdata unconditionally on every ce_ppu edge (that is the
-//   documented contract, tb_nes_system_v6.v:499-501), so one ce later the
-//   fetch unit's S_GRAB latches THE WRITE ADDRESS'S BYTE.  One 8x8 cell of
-//   background, or one sprite slot plane, silently wrong, with no tag on the
-//   byte and no way for the unit to notice.
+//   That line is GONE.  mapper_ppu_addr is ppu_chr_addr unconditionally now, so
+//   on the beat the CPU stores a CHR byte the address that reaches the CHR
+//   memory's READ port is the fetch unit's own address, exactly as on any other
+//   ce, and the store reaches the array on its own write port at its own
+//   address.
+//
+//   WHAT THIS BENCH NOW CHECKS.  It still asks the same question -- can a $2007
+//   CHR store make a fetch unit consume a byte that was not its own -- and the
+//   answer is now "no" for a different and stronger reason than before.  Before,
+//   the answer came from FREEZING the unit (chr_hold_bg/chr_hold_sp included
+//   chr_we): the unit's clock enable was suppressed for that one ce, the beat
+//   was neither serviced nor consumed, and it was re-run the next ce.  Now the
+//   unit is not frozen at all, because it does not need to be: W4 below asserts
+//   the positive claim that replaces the freeze, that on a colliding ce the
+//   address on the read port IS the unit's own address register AND the unit's
+//   clock enable was NOT suppressed, i.e. the unit consumed exactly the byte it
+//   asked for on exactly the ce it asked for it.
 //
 //   Why it was invisible: it needs a program that WRITES CHR through $2007,
 //   i.e. a CHR-RAM title.  The cartridge in the tree is CHR-ROM and its program
 //   never issues one, and tb_nes_system_v6's own upload runs with PPUMASK=$00,
 //   so all 22 of its colliding write beats land where nothing is displayed.
 //
-// WHY NO TERM IN chr_addr CAN FIX THIS, and why the FETCH UNIT HAS TO BE THE
-// DEFERRABLE PARTY.  Both facts are read off the source, not assumed:
+// WHY THE FIX IS UPSTREAM OF THIS MODULE, and why neither deferring nor
+// protecting the fetch unit was the right shape.  All three facts are read off
+// the source, not assumed:
 //
-//   1. Adding chr_we to the chr_addr read mux changes nothing.  mapper_ppu_addr
-//      ignores chr_addr entirely while ppu_chr_we is high, so on a write beat
-//      the memory never looks at the read mux.  The only way the byte a fetch
-//      unit consumes can be the byte it asked for is for that unit not to be
-//      consuming one.
+//   1. A term in the chr_addr READ mux could never have worked.  The write does
+//      not travel on chr_addr at all; the only place it used to reach the array
+//      was mapper_ppu_addr, upstream of the memory.  So the fix had to be made
+//      there, and it was: the write now keeps its own address all the way down.
 //
 //   2. The WRITE cannot be deferred, and this is arithmetic rather than
 //      caution.  chr_we is `reg_cs && reg_we && reg_addr == 3'd7 && v_addr <
@@ -56,24 +68,24 @@
 //      There is no earlier ce on which the strobe exists, so a pending register
 //      cannot be loaded in time, exactly as on the read side.
 //
-//   3. The fetch units ARE the deferrable party and they HAVE to be: they are
-//      fixed-latency and non-retrying.  chr_req is high for exactly one beat
-//      (state S_BEAT) and the byte captured in S_GRAB one ce later is whatever
-//      chr_rdata holds, with no tag, no retry and no way to notice.  So the
-//      unit is frozen for that one ce: ce is gated off, its state and its
-//      chr_addr and chr_req registers do not move, and the beat it asked for is
-//      neither serviced nor consumed.  On the next ce it re-runs S_BEAT with
-//      the address register untouched.
+//   3. FREEZING THE FETCH UNIT WAS THE WRONG PARTY TO PROTECT, and this bench
+//      is what showed it.  It does stop the wrong byte: the unit is fixed-
+//      latency and non-retrying, so its state and its chr_addr and chr_req
+//      registers do not move for that one ce and the beat is neither serviced
+//      nor consumed.  But the background fetch pipeline has ZERO slack --
+//      bg_fetch_due fires every 8 ce and one tile occupies 8 ce -- so a freeze
+//      on the unit's LAST S_BEAT pushes the request past the next bg_fetch_due
+//      and the request is DROPPED.  On a deliberately non-uniform nametable that
+//      is visible: tb/ppu/tb_bg_fetch_drop.v measured 3142 dropped requests and
+//      8317 wrong pixels for the write half alone.  With the write off the read
+//      address bus there is nothing to displace, so nothing to freeze.
 //
 //   NO DEADLOCK, and the reason is structural rather than measured: chr_req is
-//   high in S_BEAT and in NO other state, so a frozen unit is always in S_BEAT
-//   and never in the S_GRAB it has to reach.  S_GRAB has chr_req low, so
-//   chr_hold_* is structurally low there and the ce that completes a grab is
-//   never suppressed.  The freeze costs at most one extra ce per byte (a
-//   retrigger needs a second colliding ce, and ce_ppu edges are 4 clk apart so
-//   two consecutive freezes need two consecutive colliding write strobes) and a
-//   background tile costs 8 ce of the 24 its cadence allows, a sprite prefetch
-//   35-51 ce of the 444 between dot 257 and the next line's use of its shadow.
+//   high in S_BEAT and in NO other state, and it is now the only term of
+//   chr_hold_bg/chr_hold_sp, so the hold can only ever be true on a beat the
+//   unit chose itself.  A frozen unit is always in S_BEAT and never in the
+//   S_GRAB it has to reach, and S_GRAB has chr_req low, so chr_hold_* is
+//   structurally low there and the ce that completes a grab is never suppressed.
 //
 // TWO INDEPENDENT PROOFS, PLUS TWO MORE
 //   W1  THE BYTE THE UNIT ASKED FOR.  Same construction as the read bench's
@@ -82,7 +94,7 @@
 //       which its chr_req was high.  It reads the UNIT's address register, not
 //       the muxed bus, so an arbiter that overrode the bus cannot make it pass
 //       by redefining the expectation.  This is the wrong-BYTE signature.
-//   W2  PIXEL A/B AGAINST A REFERENCE PPU WHOSE READ BUS IS NOT ARBITRATED.
+//   W2  PIXEL A/B AGAINST A REFERENCE PPU WHOSE FETCH UNITS ARE NEVER HELD.
 //       Same register stimulus, so v_addr/temp_addr/write_toggle and every
 //       nametable/palette/OAM write evolve identically, and BOTH instances'
 //       CHR RAMs receive the SAME store at the SAME address with the SAME data
@@ -94,9 +106,22 @@
 //       deferring or dropping the store fails here: the strobe shape, and the
 //       byte in memory one ce after the strobe.  C3 in the read bench is the
 //       read-direction twin of this.
-//   W4  EVERY DISPLACED BEAT WAS DEFERRED, NOT OUT-VOTED: on the ce after a
-//       write beat that found a unit mid-beat, that unit's clock enable must
-//       have been suppressed.
+//   W4  A COLLIDING BEAT WAS NOT DISPLACED AT ALL.  On a write beat that found a
+//       unit mid-beat, TWO things must hold, and both are asserted:
+//         * the address on the CHR read port IS that unit's own chr_addr
+//           register, i.e. the write did not take the address bus;
+//         * that unit's clock enable was NOT suppressed, i.e. it ran and
+//           consumed the byte it had asked for on the ce it had asked for it.
+//       This REPLACES an older W4 in this bench that asserted the opposite shape
+//       -- "every displaced beat was deferred, not out-voted", i.e. that the
+//       unit's clock enable HAD been suppressed on that ce.  That check is
+//       invalidated by this fix rather than weakened: there are no displaced
+//       beats left to defer, so the freeze it required is gone and asserting it
+//       would assert the defect.  The replacement is strictly more informative,
+//       because it tests both halves of the new mechanism (the address AND the
+//       enable) instead of only the enable, and it is non-vacuous: W5 requires
+//       the run to provoke both background and sprite collisions and W4 checks
+//       every one of them.
 //
 // BENIGN CONTENTION IS NOT WHAT W1 ASSERTS
 //   "The write and a fetch beat both asked for the bus on this ce" is ordinary
@@ -230,11 +255,30 @@ module tb_chr_wr_collision;
     wire       ce = !reset && (div_phase[1:0] == 2'b00);
     wire       reg_cs = (div_phase == 4'd0) && acc_valid;
 
-    // The one line of nes_system_v6 that makes this a write hazard at all.
-    // nes_system_v6.v:334-336.  Upstream of the mapper, so it applies whatever
-    // the mapper then does with the address.
-    wire [13:0] mapper_addr_a = (we_a !== 1'b0) ? waddr_a : chr_addr_a;
-    wire [13:0] mapper_addr_r = (we_r !== 1'b0) ? waddr_r : chr_addr_r;
+    // The mapper's CHR address.  nes_system_v6.v used to form
+    //     wire [13:0] mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr;
+    // with the WRITE taking priority, and that ONE LINE is what made the $2007
+    // CHR write a fetch-beat hazard at all.  It has been removed: the CHR array
+    // already had an independent write address (nes_cart_rom.v:193-197,
+    // chr_windex beside chr_rindex), so nothing above the array needed the write
+    // address on the mapper's read port.  What shares one address is the mapper's
+    // read-side banking, and feeding that from chr_addr unconditionally is the
+    // whole change.  Upstream of the mapper, so it applies whatever the mapper
+    // then does with the address.
+    //
+    // Both instances are addressed this way now, so the A/B below no longer
+    // separates "arbitrated read bus" from "unarbitrated read bus" by that mux.
+    // What still separates them is the freeze: nes_ppu2c02 used to freeze a fetch
+    // unit for one ce on a $2007 CHR write strobe, and dut_a -- the instance this
+    // bench arms -- gets the strobes.  dut_r's freeze has to stay unreachable.
+    // Two things make that true here and both are checked rather than assumed:
+    // this bench ties chr_rd_arm low (:548, :567) so the OTHER freeze term is
+    // structurally 0, and it keeps the store window disjoint from the fetch
+    // window (W6), so a store never changes a byte that was fetched.  Without
+    // the freeze the two instances must render identically, which is what W2
+    // asserts.
+    wire [13:0] mapper_addr_a = chr_addr_a;
+    wire [13:0] mapper_addr_r = chr_addr_r;
 
     // The reference's READ bus is not arbitrated: its memory is addressed on
     // the PPU's own chr_addr port.  That is the ONLY difference in the address
@@ -291,6 +335,12 @@ module tb_chr_wr_collision;
     reg         w4_prev_wr_sp;
     reg         w4_prev_bg_ce;
     reg         w4_prev_sp_ce;
+    reg  [13:0] w4_prev_bg_adr;
+    reg  [13:0] w4_prev_sp_adr;
+    reg  [13:0] w4_prev_bg_qadr;
+    reg  [13:0] w4_prev_sp_qadr;
+    reg  [13:0] w4_prev_bg_wadr;
+    reg  [13:0] w4_prev_sp_wadr;
 
     integer frames;
     integer i;
@@ -304,7 +354,8 @@ module tb_chr_wr_collision;
     integer c3_wr_beats, c3_wr_accepted, c3_wr_late, c3_wr_shape_err;
     integer c3_ctrl2_err;
     integer c3_waddr_err, c3_wdata_err, c3_instr_mismatch;
-    integer c4_bg_checked, c4_bg_not_frozen, c4_sp_checked, c4_sp_not_frozen;
+    integer c4_bg_checked, c4_bg_stolen, c4_bg_ce_sup, c4_bg_sameaddr;
+    integer c4_sp_checked, c4_sp_stolen, c4_sp_ce_sup, c4_sp_sameaddr;
     integer c5_wr_beats, c5_wr_bg_collide, c5_wr_sp_collide, c5_vis_collide;
     integer c6_fetch_marks, c6_write_marks, c6_overlap;
 
@@ -628,7 +679,7 @@ module tb_chr_wr_collision;
                 c1_bg_beats = c1_bg_beats + 1;
                 if (chr_rdata_a !== bg_want_q) begin
                     c1_bg_bad = c1_bg_bad + 1;
-                    $display("W1 BG-WRONG-BYTE frame=%0d sl=%0d dot=%0d unit_addr=%04h expected=%02h chr_rdata=%02h bus_addr=%04h owner=%0d (owner 1 = the $2007 write, 2 = sprite unit, 3 = background unit)",
+                    $display("W1 BG-WRONG-BYTE frame=%0d sl=%0d dot=%0d unit_addr=%04h expected=%02h chr_rdata=%02h bus_addr=%04h owner=%0d (owner 1 = a $2007 CHR write strobe was on this ce, and since the mux removal it no longer takes the address, 2 = sprite unit, 3 = background unit)",
                              frames, sl_a, dot_a, bg_want_addr_q, bg_want_q,
                              chr_rdata_a, bg_bus_addr_q, bg_bus_own_q);
                     if (c1_bg_bad < 3) dump_trace;
@@ -638,7 +689,7 @@ module tb_chr_wr_collision;
                 c1_sp_beats = c1_sp_beats + 1;
                 if (chr_rdata_a !== sp_want_q) begin
                     c1_sp_bad = c1_sp_bad + 1;
-                    $display("W1 SP-WRONG-BYTE frame=%0d sl=%0d dot=%0d unit_addr=%04h expected=%02h chr_rdata=%02h bus_addr=%04h owner=%0d (owner 1 = the $2007 write, 2 = sprite unit, 3 = background unit)",
+                    $display("W1 SP-WRONG-BYTE frame=%0d sl=%0d dot=%0d unit_addr=%04h expected=%02h chr_rdata=%02h bus_addr=%04h owner=%0d (owner 1 = a $2007 CHR write strobe was on this ce, and since the mux removal it no longer takes the address, 2 = sprite unit, 3 = background unit)",
                              frames, sl_a, dot_a, sp_want_addr_q, sp_want_q,
                              chr_rdata_a, sp_bus_addr_q, sp_bus_own_q);
                     if (c1_sp_bad < 3) dump_trace;
@@ -729,36 +780,76 @@ module tb_chr_wr_collision;
     end
 
     // ======================================================================
-    // W4  EVERY DISPLACED BEAT WAS DEFERRED, NOT OUT-VOTED.  On the ce AFTER
-    //     a write beat that found a unit mid-beat, that unit's clock enable must
-    //     have been low, which is what "a $2007 write never steals a fetch beat"
-    //     means in gates.
+    // W4  A COLLIDING BEAT WAS NOT DISPLACED AT ALL.  This REPLACES an older W4
+    //     that asserted "every displaced beat was deferred, not out-voted", i.e.
+    //     that the unit's clock enable HAD been suppressed on that ce.  That
+    //     assertion is invalidated by this fix rather than weakened: the mux that
+    //     made a $2007 write take the CHR read address is gone, so there are no
+    //     displaced beats left to defer and the freeze it required is gone with
+    //     them; asserting the freeze would assert the defect.  What replaces it
+    //     tests BOTH halves of the new mechanism on every colliding beat:
+    //       * the address on the CHR read port IS the unit's own chr_addr
+    //         register, i.e. the write did not take the address bus, and
+    //       * the unit's clock enable was NOT suppressed, i.e. it ran and
+    //         consumed, rather than being frozen and silently losing the request.
+    //     The collision census is W5's and W4 is non-vacuous only because W5
+    //     fatals unless the run provoked background AND sprite collisions.
+    //     The write address and the unit's address are recorded alongside, so
+    //     "a same-address read-during-write actually happened here" is a
+    //     measurement rather than an assumption.
     // ======================================================================
     always @(posedge clk) begin
         if (reset) begin
             c4_bg_checked    = 0;
-            c4_bg_not_frozen = 0;
+            c4_bg_stolen     = 0;
+            c4_bg_ce_sup     = 0;
+            c4_bg_sameaddr   = 0;
             c4_sp_checked    = 0;
-            c4_sp_not_frozen = 0;
+            c4_sp_stolen     = 0;
+            c4_sp_ce_sup     = 0;
+            c4_sp_sameaddr   = 0;
             w4_prev_wr_bg   <= 1'b0;
             w4_prev_wr_sp   <= 1'b0;
             w4_prev_bg_ce    <= 1'b0;
             w4_prev_sp_ce    <= 1'b0;
+            w4_prev_bg_adr  <= 14'd0;
+            w4_prev_sp_adr  <= 14'd0;
+            w4_prev_bg_qadr <= 14'd0;
+            w4_prev_sp_qadr <= 14'd0;
+            w4_prev_bg_wadr <= 14'd0;
+            w4_prev_sp_wadr <= 14'd0;
         end else if (ce) begin
             if (w4_prev_wr_bg !== 1'b0) begin
                 c4_bg_checked = c4_bg_checked + 1;
-                if (w4_prev_bg_ce !== 1'b0)
-                    c4_bg_not_frozen = c4_bg_not_frozen + 1;
+                if (w4_prev_bg_adr !== w4_prev_bg_qadr)
+                    c4_bg_stolen = c4_bg_stolen + 1;
+                // w4_prev_bg_ce is u_chr_fetch's OWN ce PORT, i.e. the gated
+                // value `ce && !chr_hold_bg`, sampled on the colliding beat
+                // itself.  Low on that beat means the unit was frozen.
+                if (w4_prev_bg_ce === 1'b0)
+                    c4_bg_ce_sup = c4_bg_ce_sup + 1;
+                if (w4_prev_bg_adr === w4_prev_bg_wadr)
+                    c4_bg_sameaddr = c4_bg_sameaddr + 1;
             end
             if (w4_prev_wr_sp !== 1'b0) begin
                 c4_sp_checked = c4_sp_checked + 1;
-                if (w4_prev_sp_ce !== 1'b0)
-                    c4_sp_not_frozen = c4_sp_not_frozen + 1;
+                if (w4_prev_sp_adr !== w4_prev_sp_qadr)
+                    c4_sp_stolen = c4_sp_stolen + 1;
+                if (w4_prev_sp_ce === 1'b0)
+                    c4_sp_ce_sup = c4_sp_ce_sup + 1;
+                if (w4_prev_sp_adr === w4_prev_sp_wadr)
+                    c4_sp_sameaddr = c4_sp_sameaddr + 1;
             end
             w4_prev_wr_bg <= (we_a !== 1'b0) && (bg_mid !== 1'b0);
             w4_prev_wr_sp <= (we_a !== 1'b0) && (sp_mid !== 1'b0);
             w4_prev_bg_ce  <= bg_ce_in;
             w4_prev_sp_ce  <= sp_ce_in;
+            w4_prev_bg_adr <= mapper_addr_a;
+            w4_prev_sp_adr <= mapper_addr_a;
+            w4_prev_bg_qadr <= dut_a.g_chr_external.u_chr_fetch.chr_addr;
+            w4_prev_sp_qadr <= dut_a.g_chr_external.u_sprite_chr_fetch.chr_addr;
+            w4_prev_bg_wadr <= waddr_a;
+            w4_prev_sp_wadr <= waddr_a;
         end
     end
 
@@ -1013,15 +1104,15 @@ module tb_chr_wr_collision;
                 $write("\n");
 
                 $display("--------------------------------------------------------------");
-                $display("W7 WHAT-THE-FIX-COSTS bg_fetch_due=%0d accepted=%0d DROPPED=%0d, tiles delivered=%0d.  The background fetch pipeline has no slack at all: the cadence is one request every 8 ce (bg_fetch_due every 8 dots, a dot is one ce) and one tile is 8 ce, so with no fix at all this run measures 25152 requests, 25152 accepted, 0 dropped.  A one-ce freeze therefore costs one tile.  The SAME census inside tb_chr_arb_collision, which only freezes on the $2007 READ arm, measures 25152 / 22869 / 2283, so the zero-slack pipeline is pre-existing and 00ca051 already spends it; a $2007 CHR WRITE lands on div_phase 0, where the background unit's S_BEAT lands far more often than the div_phase 8 an arm lands on, which is why this number is larger.  IT IS NOT VISIBLE HERE and W2 is what proves it: a dropped request makes the tile stream one tile late, the stream re-phases on the next accepted request because the cadence is an exact multiple of the tile length, and the tiles are identical from dot to dot inside a scanline because the whole nametable is tile $01.  A cartridge with a non-uniform nametable would turn these drops into visible tile errors; that is a finding about the fetch pipeline's slack, not about this fix",
+                $display("W7 WHAT THE WRITE-SIDE FREEZE COST, AND WHAT IT COSTS NOW bg_fetch_due=%0d accepted=%0d DROPPED=%0d, tiles delivered=%0d.  The background fetch pipeline has no slack at all: the cadence is one request every 8 ce (bg_fetch_due every 8 dots, a dot is one ce) and one tile is 8 ce, so with no freeze at all this bench measures 25152 requests, 25152 accepted, 0 dropped.  Before the write was taken off the CHR read address bus, nes_ppu2c02 froze a fetch unit for the one ce of every colliding write strobe, and because chr_we lands on div_phase 0 -- where the background unit's S_BEAT lands far more often than the div_phase 8 a $2007 READ arm lands on -- that freeze measured 25152 / 19914 / 5238 here, 2955 of those drops being the write's share.  With mapper_ppu_addr now ppu_chr_addr unconditionally there is no freeze for a write to cause, so the number above must read DROPPED=0.  A cartridge with a non-uniform nametable turns a drop into a visible tile error, and tb/ppu/tb_bg_fetch_drop.v measured exactly that: the write half alone was 3142 drops and 8317 wrong pixels of 184304.  THE READ SIDE'S DROPS ARE NOT FIXED AND ARE NOT MEASURED HERE: this bench ties chr_rd_arm low, and the arm still takes the read address because it has zero slack and must",
                          d_due, d_acc, d_drop, d_tiles);
                 $display("W5 CONTENTION, benign and counted: $2007 CHR write beats=%0d  collided with a background mid-beat=%0d  with a sprite mid-beat=%0d",
                          c5_wr_beats, c5_wr_bg_collide, c5_wr_sp_collide);
                 $display("W5 write beats that landed where a rendered pixel could change: %0d of %0d  (this run has NO invisible-set guard; that is the point)",
                          c5_vis_collide, c5_wr_beats);
-                $display("W4 DISPLACED-BEAT-DEFERRED: bg checks=%0d ce-not-suppressed=%0d   sp checks=%0d ce-not-suppressed=%0d",
-                         c4_bg_checked, c4_bg_not_frozen,
-                         c4_sp_checked, c4_sp_not_frozen);
+                $display("W4 A-COLLIDING-BEAT-WAS-NOT-DISPLACED: bg checks=%0d address-on-the-bus-was-NOT-the-unit's-own=%0d ce-was-suppressed=%0d same-address-as-the-store=%0d   sp checks=%0d address-on-the-bus-was-NOT-the-unit's-own=%0d ce-was-suppressed=%0d same-address-as-the-store=%0d",
+                         c4_bg_checked, c4_bg_stolen, c4_bg_ce_sup, c4_bg_sameaddr,
+                         c4_sp_checked, c4_sp_stolen, c4_sp_ce_sup, c4_sp_sameaddr);
                 $display("W1 CONSUMED-THE-BYTE-IT-ASKED-FOR: bg consuming beats=%0d wrong=%0d   sp consuming beats=%0d wrong=%0d",
                          c1_bg_beats, c1_bg_bad, c1_sp_beats, c1_sp_bad);
                 $display("W3 THE-WRITE-STILL-LANDS: strobes=%0d accepted=%0d not-in-memory-one-ce-later=%0d strobe-shape err=%0d ctrl2 err=%0d chr_waddr err=%0d chr_wdata err=%0d cross-instance mismatch=%0d",
@@ -1078,11 +1169,17 @@ module tb_chr_wr_collision;
                 if (c1_bg_bad != 0 || c1_sp_bad != 0)
                     $fatal(1, "W1 %0d background and %0d sprite fetch units consumed a byte captured for a $2007 CHR write",
                            c1_bg_bad, c1_sp_bad);
-                if (c4_bg_not_frozen != 0 || c4_sp_not_frozen != 0)
-                    $fatal(1, "W4 %0d background and %0d sprite beats were out-voted rather than deferred by a $2007 CHR write",
-                           c4_bg_not_frozen, c4_sp_not_frozen);
+                if (c4_bg_stolen != 0 || c4_sp_stolen != 0)
+                    $fatal(1, "W4 on %0d background and %0d sprite colliding beats the address on the CHR read port was NOT the unit's own chr_addr register, so a $2007 CHR write is still taking the read address bus",
+                           c4_bg_stolen, c4_sp_stolen);
+                if (c4_bg_ce_sup != 0 || c4_sp_ce_sup != 0)
+                    $fatal(1, "W4 on %0d background and %0d sprite colliding beats the unit's clock enable was suppressed, so the write is still being paid for with a freeze and therefore with dropped requests",
+                           c4_bg_ce_sup, c4_sp_ce_sup);
+                if (d_drop != 0)
+                    $fatal(1, "W7 the armed instance dropped %0d of %0d background fetches although this bench ties chr_rd_arm low, so every possible freeze term is structurally 0 and nothing should be able to drop a request",
+                           d_drop, d_due);
                 if (c2_pix_diff != 0)
-                    $fatal(1, "W2 the arbitrated PPU rendered %0d pixels differently from the reference whose read bus is not arbitrated", c2_pix_diff);
+                    $fatal(1, "W2 the armed PPU rendered %0d pixels differently from the reference, whose fetch units are never held", c2_pix_diff);
                 if (c2_shadow_late != 0)
                     $fatal(1, "W2 the sprite shadow had not converged by dot 320 on %0d of %0d visible lines", c2_shadow_late, c2_shadow_checks);
                 $display("PASS tb_chr_wr_collision");

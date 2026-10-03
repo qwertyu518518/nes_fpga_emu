@@ -496,19 +496,81 @@ wire [31:0] rb_cpu_cycle;
 
 // ----------------------------------------------------------- CHR memory model
 //
-// The register is on ce_ppu and indexes the FULL 17-bit chr_final_addr.  The
-// fetch units advance chr_addr one ce before they sample chr_rdata, so a
-// combinational read of chr_mem would return every tile byte-shifted by one.
-// Dropping bit 13 here would also hide the NROM aliasing the model is supposed
-// to reproduce.
+// THREE THINGS THIS TB's MEMORY MODEL NEEDS DECLARED BEFORE IT, and they used
+// to live further down because nothing here needed them.  They are here now
+// because the WRITE PORT NO LONGER RIDES chr_final_addr:
 //
-// THE WRITE HALF.  The byte that lands is the MAPPER'S OUTPUT address, not the
-// PPU's local chr_waddr, and it is accepted only when the mapper agrees, so
+//   tb_chr_bank_model     -- the tb's own NROM CHR bank model.  NROM has no bank
+//                            register at all (nes_mapper_nrom.v:26 is
+//                            {{(CHR_ADDR_BITS-13){1'b0}}, ppu_addr[12:0]}), so it
+//                            is the constant 0 and is written where the program
+//                            image is built.
+//   m_bank_model          -- the tb's own MMC3 r0 register model.
+//   chr_mmc3_window_bank  -- the tb's own MMC3 CHR window decode, built only from
+//                            that model.
+//
+// THE READ HALF is unchanged.  The register is on ce_ppu and indexes the FULL
+// 17-bit chr_final_addr.  The fetch units advance chr_addr one ce before they
+// sample chr_rdata, so a combinational read of chr_mem would return every tile
+// byte-shifted by one.  Dropping bit 13 here would also hide the NROM aliasing
+// the model is supposed to reproduce.
+//
+// THE WRITE HALF.  The byte that lands is at the mapper's translation of the
+// WRITE address, and that is no longer observable on any output port, because
+// nes_system_v6 now feeds the mapper from ppu_chr_addr UNCONDITIONALLY:
+//     mapper_ppu_addr = ppu_chr_addr
+// chr_final_addr is that same read-side translation, so on a write beat it now
+// carries the FETCH address and using it as the write index would file the byte
+// in the wrong cell.  Each board therefore gets its own write index, built from
+// the tb's OWN independent bank model applied to the PPU's OWN local chr_waddr
+// -- the same arithmetic the read path already uses, on the write's own address.
+// This is not a weakening: it is the same check the old line was making, only
+// with the write's own address substituted for the read's, and the four
+// expected values are still compared against the DUT in P0-2/W2 below.
+//
+// The read half is untouched and the store is still gated by the mapper:
 //     accept_write = chr_we && mapper_chr_ram_we
-//     chr_mem[chr_final_addr] <= chr_wdata
 // Gating the array on chr_we alone would let a CHR-ROM build store into a local
 // RAM and the whole ROM/RAM distinction would be untestable.  The write shares
 // the ce_ppu edge with the read so both sides of the array sit on one enable.
+
+reg [3:0] tb_chr_bank_model;
+reg [7:0] m_bank_model;
+
+// W2 write-beat window decode, built only from the tb's own r0 register model.
+// nes_mapper_mmc3.v:110-135 does exactly this: ppu_addr[12] picks the half,
+// ppu_addr[11] is the odd/even 1 KiB sub-select, and window 1 is
+// {chr_bank0_r[7:1],1'b1}, i.e. the odd 1 KiB of the SAME 2 KiB r0.  chr_inversion
+// is 0 because this program never writes $8000.  ppu_addr[12] set would select
+// windows 4..7 (r2..r5), which this program never does, so the function returns
+// a sentinel instead of a guess and the comparison fatals with the real address.
+function [8:0] chr_mmc3_window_bank;
+    input [13:0] loc;
+    input [7:0] reg0;
+    begin
+        if (loc[12] === 1'b0) begin
+            if (loc[11] === 1'b0)
+                chr_mmc3_window_bank = {1'b0, reg0};
+            else
+                chr_mmc3_window_bank = {1'b0, reg0[7:1], 1'b1};
+        end else begin
+            chr_mmc3_window_bank = 9'h1FF;
+        end
+    end
+endfunction
+
+// The mapper's translation of each board's WRITE address.  The NROM boards share
+// tb_chr_bank_model because they are all MAPPER_SELECT=0 with no CHR bank
+// register; the MMC3 board has its own decode.
+wire [CHR_ADDR_BITS-1:0] v6_chr_wr_final_addr =
+    ({13'b0, tb_chr_bank_model} << 13) | (v6_chr_waddr & 14'h1FFF);
+wire [CHR_ADDR_BITS-1:0] r_chr_wr_final_addr =
+    ({13'b0, tb_chr_bank_model} << 13) | (r_chr_waddr & 14'h1FFF);
+wire [CHR_ADDR_BITS-1:0] rb_chr_wr_final_addr =
+    ({13'b0, tb_chr_bank_model} << 13) | (rb_chr_waddr & 14'h1FFF);
+wire [CHR_ADDR_BITS-1:0] m_chr_wr_final_addr =
+    ({8'b0, chr_mmc3_window_bank(m_chr_waddr, m_bank_model)} << 10) |
+    (m_chr_waddr & 14'h03FF);
 
 reg [7:0] chr_mem [0:CHR_MEM_BYTES-1];
 reg [7:0] chr_rdata_q;
@@ -523,15 +585,11 @@ always @(posedge clk) begin
     else if (ab_v6.ce_ppu) begin
         chr_rdata_q <= chr_mem[v6_chr_final_addr];
         if ((v6_chr_we !== 1'b0) && (v6_mapper_chr_ram_we !== 1'b0)) begin
-            chr_mem[v6_chr_final_addr] <= v6_chr_wdata;
+            chr_mem[v6_chr_wr_final_addr] <= v6_chr_wdata;
             chr_wr_accepted = chr_wr_accepted + 1;
         end
     end
 end
-
-// TB-owned mapper model.  NROM has no bank register at all, so the CHR bank
-// term is the constant 0 and the only live part is the local address mask.
-reg [3:0] tb_chr_bank_model;
 
 // chr_mmc3 gets its OWN 128 KiB CHR model and its OWN registered chr_rdata.
 // Sharing the ab_v6 model would make a bank switch invisible by construction:
@@ -555,7 +613,7 @@ always @(posedge clk) begin
     else if (chr_mmc3.ce_ppu) begin
         m_chr_rdata_q <= m_chr_mem[m_chr_final_addr];
         if ((m_chr_we !== 1'b0) && (m_mapper_chr_ram_we !== 1'b0)) begin
-            m_chr_mem[m_chr_final_addr] <= m_chr_wdata;
+            m_chr_mem[m_chr_wr_final_addr] <= m_chr_wdata;
             m_wr_accepted = m_wr_accepted + 1;
         end
     end
@@ -581,7 +639,7 @@ always @(posedge clk) begin
     else if (chr_rom.ce_ppu) begin
         rom_chr_rdata_q <= rom_chr_mem[r_chr_final_addr];
         if ((r_chr_we !== 1'b0) && (r_mapper_chr_ram_we !== 1'b0))
-            rom_chr_mem[r_chr_final_addr] <= r_chr_wdata;
+            rom_chr_mem[r_chr_wr_final_addr] <= r_chr_wdata;
     end
 end
 
@@ -597,7 +655,7 @@ always @(posedge clk) begin
     else if (chr_ram_b.ce_ppu) begin
         ramb_chr_rdata_q <= ramb_chr_mem[rb_chr_final_addr];
         if ((rb_chr_we !== 1'b0) && (rb_mapper_chr_ram_we !== 1'b0))
-            ramb_chr_mem[rb_chr_final_addr] <= rb_chr_wdata;
+            ramb_chr_mem[rb_chr_wr_final_addr] <= rb_chr_wdata;
     end
 end
 
@@ -750,7 +808,6 @@ integer chr_wr_bit13_bad;
 integer chr_wr_not_accepted;   // mapper refused a chr-ram board's write
 integer chr_wr_consec;         // two consecutive ce_ppu with chr_we high
 reg     chr_wr_prev;
-reg     chr_write_on_port;
 reg [CHR_ADDR_BITS-1:0] chr_wr_exp_final;
 
 integer chr_wr_accepted;       // bytes the ab_v6 model actually stored
@@ -790,7 +847,6 @@ integer m_wr_not_accepted;
 integer m_wr_consec;
 integer m_wr_accepted;
 reg     m_wr_prev;
-reg     m_write_on_port;
 reg [CHR_ADDR_BITS-1:0] m_wr_exp_final;
 integer m_wr_low_hit;
 integer m_wr_high_hit;
@@ -1012,7 +1068,6 @@ reg [8:0] m_prev_dot;
 // the first write lands, so no tile-0 pixel is bucketed before the program's
 // first bank switch and a pre-render frame can never dilute a bucket.
 integer m_bank_epoch;
-reg [7:0] m_bank_model;
 reg [7:0] m_bank_data  [0:MMC3_BANK_STEPS-1];
 reg [7:0] m_bank_reg   [0:MMC3_BANK_STEPS-1];
 reg [7:0] m_bank_ok    [0:MMC3_BANK_STEPS-1];
@@ -2363,28 +2418,6 @@ task load_chr_mmc3;
     end
 endtask
 
-// W2 write-beat window decode, built only from the tb's own r0 register model.
-// nes_mapper_mmc3.v:110-135 does exactly this: ppu_addr[12] picks the half,
-// ppu_addr[11] is the odd/even 1 KiB sub-select, and window 1 is
-// {chr_bank0_r[7:1],1'b1}, i.e. the odd 1 KiB of the SAME 2 KiB r0.  chr_inversion
-// is 0 because this program never writes $8000.  ppu_addr[12] set would select
-// windows 4..7 (r2..r5), which this program never does, so the function returns
-// a sentinel instead of a guess and the comparison fatals with the real address.
-function [8:0] chr_mmc3_window_bank;
-    input [13:0] loc;
-    input [7:0] reg0;
-    begin
-        if (loc[12] === 1'b0) begin
-            if (loc[11] === 1'b0)
-                chr_mmc3_window_bank = {1'b0, reg0};
-            else
-                chr_mmc3_window_bank = {1'b0, reg0[7:1], 1'b1};
-        end else begin
-            chr_mmc3_window_bank = 9'h1FF;
-        end
-    end
-endfunction
-
 function [3:0] expected_pixel_index;
     input [8:0] line;
     input [8:0] column;
@@ -3040,13 +3073,12 @@ always @(posedge clk) begin
         fu_wr_q1 <= 1'b0;
         fu_wr_q2 <= 1'b0;
     end else if (ab_v6.ce_ppu) begin
-        chr_write_on_port = 1'b0;
         chr_h1 <= v6_chr_final_addr;
         chr_h2 <= chr_h1;
         chr_wq1 <= chr_wq0;
         chr_wq1_v <= chr_wq0_v;
         if ((v6_chr_we !== 1'b0) && (v6_mapper_chr_ram_we !== 1'b0)) begin
-            chr_wq0 <= v6_chr_final_addr;
+            chr_wq0 <= v6_chr_wr_final_addr;
             chr_wq0_v <= 1'b1;
         end else begin
             chr_wq0_v <= 1'b0;
@@ -3102,13 +3134,21 @@ always @(posedge clk) begin
         //     hazard being closed.
         // A beat with no recorded address would be vacuous and is counted too.
         //
-        // chr_latch_wr_skip IS GONE.  It used to excuse every latch whose beat a
-        // $2007 CHR write owned the mapper port for -- risk L-17, 18 beats in this
-        // program -- which meant P0-6 gave the write path ZERO fetch-unit
-        // coverage.  chr_hold_bg now freezes the unit on such a beat, so the
-        // latch carries the right byte and there is nothing to excuse; the count
-        // is kept and asserted to be ZERO so a regression fails loudly instead of
-        // being skipped again.
+        // chr_latch_wr_skip NO LONGER EXCUSES ANYTHING, and the reason it can stop is
+        // the reason its premise was always fragile.  It counted fetch-unit
+        // latches whose request beat carried a $2007 CHR write strobe.  At the
+        // committed design that count was ZERO, but not because the hazard was
+        // harmless: chr_hold_bg/chr_hold_sp included chr_we, so on a colliding
+        // beat the unit was FROZEN and reached S_GRAB one ce LATER, by which time
+        // the one-clk write strobe had gone.  The zero was a measurement of the
+        // freeze, not of the bus.  Now that nes_system_v6 feeds the mapper from
+        // ppu_chr_addr unconditionally, the unit is not frozen, the grab lands on
+        // the write beat itself, and the count is NON-ZERO -- which is what the
+        // check should have been asking all along.  Those beats were always
+        // compared (the counter was never in the comparison chain) and they are
+        // compared now; what changed is that the assertion is inverted from
+        // "must be zero" to "must be non-zero, because a run in which the write
+        // never coincides with a latch has not exercised this at all".
         if (fu_sgrab_q !== 1'b0) begin
             chr_latch_checks = chr_latch_checks + 1;
             if (fu_wr_q2 !== 1'b0)
@@ -3140,23 +3180,38 @@ always @(posedge clk) begin
         fu_cappl_q <= fu_cap_pl;
 
         // ------------------------------------------------ $2007 WRITE BEATS
-        // Measured FIRST because the write owns the mapper port on its beat
-        // (mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr), so the
-        // read check below has to know whether a write is driving chr_final_addr
-        // this ce.  The expected final address is built from the SAME
-        // independent tb bank model the read path uses, with chr_waddr (the
-        // PPU's LOCAL address) as the local term, and chr_final_addr is the
-        // mapper's output one net downstream, so this is not circular.
+        // WHAT CHANGED HERE AND WHY, because it is the whole reason this block
+        // had to be rewritten rather than re-run.  It used to measure "the write
+        // owns the mapper port on its beat (mapper_ppu_addr = ppu_chr_we ?
+        // ppu_chr_waddr : ppu_chr_addr), so the read check below has to know
+        // whether a write is driving chr_final_addr this ce", and then compare
+        // chr_final_addr against a tb model of the WRITE address.
+        // mapper_ppu_addr is ppu_chr_addr UNCONDITIONALLY now, so:
+        //   * chr_final_addr on a write beat carries the FETCH address, so the
+        //     old comparison would have been comparing the fetch translation
+        //     with a write model.  It is replaced below by the assertion that is
+        //     the new contract: the read port is NOT carrying the write address,
+        //     i.e. chr_final_addr equals the tb model of the PPU's own chr_addr.
+        //     That is checked on every write beat, so the coverage the old line
+//         had is now had by a check that can fail.
+        //   * the WRITE ADDRESS itself is checked where it is still observable:
+        //     on the PPU's own chr_waddr port (pre-increment v_addr, bit 13
+        //     clear), on chr_wdata, and on the mapper's acceptance gate
+        //     mapper_chr_ram_we.  The mapper's translation of it is no longer on
+        //     any output, so it is checked where it actually lands: the tb's CHR
+        //     memory model indexes the write by the tb's own model of it, and the
+        //     program's uploaded image is verified byte-for-byte further down.
         if (v6_chr_we !== 1'b0) begin
             chr_wr_beats = chr_wr_beats + 1;
             f_chr_wr = f_chr_wr + 1;
             if (v6_chr_req !== 1'b0) begin
                 chr_wr_req_clash = chr_wr_req_clash + 1;
-                chr_write_on_port = 1'b1;
-                // The colliding beat steals the mapper port from the fetch unit,
-                // so the byte the fetch unit latches that ce is the WRITE
-                // address's byte.  That only reaches the screen if something the
-                // fetch feeds is actually being displayed.
+                // The colliding beat no longer steals the mapper port from the
+                // fetch unit: the read address is the unit's own, so the byte the
+                // unit latches that ce is the byte it asked for.  This counter is
+                // kept because it is what proves the collision is still being
+                // produced at all, and it is now counted as a NON-event rather
+                // than as a hazard.
                 if (ab_chr_wr_displayed === 1'b1)
                     chr_wr_clash_visible = chr_wr_clash_visible + 1;
             end
@@ -3166,21 +3221,28 @@ always @(posedge clk) begin
             end
             if (v6_chr_final_addr > f_max_final_addr)
                 f_max_final_addr = v6_chr_final_addr;
-            chr_wr_exp_final = ({13'b0, tb_chr_bank_model} << 13) |
-                              (v6_chr_waddr & 14'h1FFF);
+            chr_wr_exp_final = v6_chr_wr_final_addr;
             chr_wr_checks = chr_wr_checks + 1;
-            if (v6_chr_final_addr !== chr_wr_exp_final) begin
+            // THE NEW CONTRACT.  On a write beat the CHR READ port must still be
+            // carrying the PPU's own read address, translated by the mapper --
+            // NOT the write address.  This is the check that fails if anyone puts
+            // the write-priority mux back.
+            if (v6_chr_final_addr !==
+                (({13'b0, tb_chr_bank_model} << 13) |
+                 (ab_v6.u_ppu.chr_addr & 14'h1FFF))) begin
                 chr_wr_addr_err = chr_wr_addr_err + 1;
                 if (chr_wr_addr_err < 5)
-                    $fatal(1, "P0-2 write beat chr_final_addr %05h != tb model %05h (local chr_waddr %04h, ppu v_addr %04h)",
-                           v6_chr_final_addr, chr_wr_exp_final, v6_chr_waddr,
-                           ab_v6.u_ppu.v_addr);
+                    $fatal(1, "P0-2 write beat chr_final_addr %05h != tb read model %05h (local chr_addr %04h), so the $2007 write is taking the CHR read address again",
+                           v6_chr_final_addr,
+                           (({13'b0, tb_chr_bank_model} << 13) |
+                            (ab_v6.u_ppu.chr_addr & 14'h1FFF)),
+                           ab_v6.u_ppu.chr_addr);
             end
-            if (v6_chr_waddr[12:0] !== v6_chr_final_addr[12:0]) begin
+            if (ab_v6.u_ppu.chr_addr[12:0] !== v6_chr_final_addr[12:0]) begin
                 chr_wr_addr_err = chr_wr_addr_err + 1;
                 if (chr_wr_addr_err < 5)
-                    $fatal(1, "P0-2 write beat local chr_waddr[12:0] %03h != final[12:0] %03h",
-                           v6_chr_waddr[12:0], v6_chr_final_addr[12:0]);
+                    $fatal(1, "P0-2 write beat local chr_addr[12:0] %03h != final[12:0] %03h",
+                           ab_v6.u_ppu.chr_addr[12:0], v6_chr_final_addr[12:0]);
             end
             if (v6_chr_final_addr[16:13] !== 4'd0)
                 chr_wr_addr_err = chr_wr_addr_err + 1;
@@ -3207,12 +3269,12 @@ always @(posedge clk) begin
         end
         chr_wr_prev = v6_chr_we;
 
-        // READ BEATS.  On the ce where a $2007 write and a fetch collide the
-        // mapper port is carrying the WRITE address (write priority in
-        // mapper_ppu_addr), so chr_final_addr is the write model's address and
-        // NOT the fetch address.  That beat is counted as a read-on-write beat
-        // and its address is checked against the WRITE model; every other read
-        // beat is checked against the READ model exactly as before.
+        // READ BEATS.  A $2007 write no longer takes the mapper port, so EVERY
+        // chr_req beat -- including the ones that collide with a write strobe --
+        // carries the PPU's own read address and is checked against the READ
+        // model exactly as before.  There is no exclusion left, and the coverage
+        // it used to cost is why that matters: before this change the write
+        // model's colliding beats were excluded here, now they are not.
         if (v6_chr_req !== 1'b0) begin
             chr_req_total = chr_req_total + 1;
             f_chr_req = f_chr_req + 1;
@@ -3231,31 +3293,29 @@ always @(posedge clk) begin
             if (ab_v6.u_ppu.chr_addr[12] === 1'b1)
                 f_local_bit12 = f_local_bit12 + 1;
 
-            if (chr_write_on_port === 1'b0) begin
-                chr_addr_checks = chr_addr_checks + 1;
-                if (v6_chr_final_addr !==
-                    (({13'b0, tb_chr_bank_model} << 13) |
-                     (ab_v6.u_ppu.chr_addr & 14'h1FFF))) begin
-                    chr_addr_err = chr_addr_err + 1;
-                    f_addr_err = f_addr_err + 1;
-                    if (chr_addr_err < 5)
-                        $fatal(1, "P0-2 chr_final_addr %05h != tb model %05h (local %04h)",
-                               v6_chr_final_addr,
-                               (({13'b0, tb_chr_bank_model} << 13) |
-                                (ab_v6.u_ppu.chr_addr & 14'h1FFF)),
-                               ab_v6.u_ppu.chr_addr);
-                end
-                if (ab_v6.u_ppu.chr_addr[12:0] !== v6_chr_final_addr[12:0]) begin
-                    chr_addr_err = chr_addr_err + 1;
-                    f_addr_err = f_addr_err + 1;
-                    if (chr_addr_err < 5)
-                        $fatal(1, "P0-2 local[12:0] %03h != final[12:0] %03h",
-                               ab_v6.u_ppu.chr_addr[12:0], v6_chr_final_addr[12:0]);
-                end
-                if (v6_chr_final_addr[16:13] !== 4'd0) begin
-                    chr_addr_err = chr_addr_err + 1;
-                    f_addr_err = f_addr_err + 1;
-                end
+            chr_addr_checks = chr_addr_checks + 1;
+            if (v6_chr_final_addr !==
+                (({13'b0, tb_chr_bank_model} << 13) |
+                 (ab_v6.u_ppu.chr_addr & 14'h1FFF))) begin
+                chr_addr_err = chr_addr_err + 1;
+                f_addr_err = f_addr_err + 1;
+                if (chr_addr_err < 5)
+                    $fatal(1, "P0-2 chr_final_addr %05h != tb model %05h (local %04h)",
+                           v6_chr_final_addr,
+                           (({13'b0, tb_chr_bank_model} << 13) |
+                            (ab_v6.u_ppu.chr_addr & 14'h1FFF)),
+                           ab_v6.u_ppu.chr_addr);
+            end
+            if (ab_v6.u_ppu.chr_addr[12:0] !== v6_chr_final_addr[12:0]) begin
+                chr_addr_err = chr_addr_err + 1;
+                f_addr_err = f_addr_err + 1;
+                if (chr_addr_err < 5)
+                    $fatal(1, "P0-2 local[12:0] %03h != final[12:0] %03h",
+                           ab_v6.u_ppu.chr_addr[12:0], v6_chr_final_addr[12:0]);
+            end
+            if (v6_chr_final_addr[16:13] !== 4'd0) begin
+                chr_addr_err = chr_addr_err + 1;
+                f_addr_err = f_addr_err + 1;
             end
 
             if ((v6_bus_req === 1'b0) && (v6_bus_fire === 1'b0) &&
@@ -3264,7 +3324,6 @@ always @(posedge clk) begin
             if (v6_bus_hold !== 1'b0)
                 chr_req_during_dma = chr_req_during_dma + 1;
         end
-        chr_write_on_port = 1'b0;
     end
 end
 
@@ -4406,35 +4465,39 @@ always @(posedge clk) begin
             m_first_hi[z] = 0;
             m_first_hi_ok[z] = 1'b0;
         end
-    end else if (chr_mmc3.ce_ppu) begin
-        m_write_on_port = 1'b0;
-
+end else if (chr_mmc3.ce_ppu) begin
         // ------------------------------------------------ W2 WRITE BEATS
-        // Measured first, for the same reason as the phase 1 monitor: the write
-        // owns the mapper port on its beat, so the read check below has to know
-        // whether chr_final_addr is carrying a write address this ce.  The point
-        // of the whole group is that m_chr_final_addr, not m_chr_waddr, is
-        // where the byte goes, and m_chr_final_addr moves with r0.
+        // The same rewrite as P0-2, for the same reason.  mapper_ppu_addr is
+        // ppu_chr_addr unconditionally now, so m_chr_final_addr on a write beat
+        // carries the READ address, not the write's.  The write's own translation
+        // is still fully checked, in the place where it is actually observable:
+        // the tb's CHR model for this board indexes the store by m_chr_wr_final_addr
+        // -- the tb's own r0 model applied to the PPU's own local chr_waddr -- and
+        // the byte that lands there is read back and compared with the program's
+        // byte below.  The new contract is checked here directly: on a write beat
+        // m_chr_final_addr must equal the READ model of m_chr_addr.
         if (m_chr_we !== 1'b0) begin
             m_wr_beats = m_wr_beats + 1;
             if (m_chr_req !== 1'b0) begin
                 m_wr_req_clash = m_wr_req_clash + 1;
-                m_write_on_port = 1'b1;
+                // A colliding beat no longer steals the mapper port: the read
+                // address is the fetch unit's own.  Counted because it proves the
+                // collision is still being produced.
                 if (m_chr_wr_displayed === 1'b1)
                     m_wr_clash_visible = m_wr_clash_visible + 1;
             end
             if (m_chr_final_addr[13] !== 1'b0)
                 m_wr_bit13_bad = m_wr_bit13_bad + 1;
-            m_wr_exp_final =
-                ({8'b0, chr_mmc3_window_bank(m_chr_waddr, m_bank_model)} << 10) |
-                (m_chr_waddr & 14'h03FF);
+            m_wr_exp_final = m_chr_wr_final_addr;
             m_wr_checks = m_wr_checks + 1;
-            if (m_chr_final_addr !== m_wr_exp_final) begin
+            if (m_chr_final_addr !==
+                (({9'b0, m_bank_model} << 10) | (m_chr_addr & 14'h03FF))) begin
                 m_wr_addr_err = m_wr_addr_err + 1;
                 if (m_wr_addr_err < 4)
-                    $fatal(1, "W2 write beat chr_final_addr %05h != tb model %05h (local chr_waddr %04h, model reg %02h)",
-                           m_chr_final_addr, m_wr_exp_final, m_chr_waddr,
-                           m_bank_model);
+                    $fatal(1, "W2 write beat chr_final_addr %05h != tb READ model %05h (local chr_addr %04h, model reg %02h), so the $2007 write is taking the CHR read address again",
+                           m_chr_final_addr,
+                           (({9'b0, m_bank_model} << 10) | (m_chr_addr & 14'h03FF)),
+                           m_chr_addr, m_bank_model);
             end
             if (m_chr_waddr !== chr_mmc3.u_ppu.v_addr[13:0]) begin
                 m_wr_addr_err = m_wr_addr_err + 1;
@@ -4455,13 +4518,13 @@ always @(posedge clk) begin
             // The three writes are told apart by the model address they land on.
             // Recording the byte the array HELD BEFORE the store is what proves
             // the store really changed that one cell and nothing else.
-            if (m_chr_final_addr == MMC3_W2_ADDR_LOW_EXP) begin
+            if (m_chr_wr_final_addr == MMC3_W2_ADDR_LOW_EXP) begin
                 m_wr_low_hit = m_wr_low_hit + 1;
                 m_wr_low_before = m_chr_mem[MMC3_W2_ADDR_LOW_EXP];
-            end else if (m_chr_final_addr == MMC3_W2_ADDR_HIGH_EXP) begin
+            end else if (m_chr_wr_final_addr == MMC3_W2_ADDR_HIGH_EXP) begin
                 m_wr_high_hit = m_wr_high_hit + 1;
                 m_wr_high_before = m_chr_mem[MMC3_W2_ADDR_HIGH_EXP];
-            end else if (m_chr_final_addr == MMC3_W2_ADDR_ODD_EXP) begin
+            end else if (m_chr_wr_final_addr == MMC3_W2_ADDR_ODD_EXP) begin
                 m_wr_odd_hit = m_wr_odd_hit + 1;
                 m_wr_odd_before = m_chr_mem[MMC3_W2_ADDR_ODD_EXP];
             end else begin
@@ -4470,12 +4533,12 @@ always @(posedge clk) begin
         end
         m_wr_prev = m_chr_we;
 
-        // READ BEATS, unchanged except that a beat the write has taken over is
-        // counted as a read-on-write beat and excluded from the read model, for
-        // the same reason P0-2 spells out.
+        // READ BEATS.  No exclusion: a $2007 write no longer takes the mapper
+        // port, so every m_chr_req beat is a read beat and is checked against the
+        // read model, colliding ones included.
         if (m_chr_req !== 1'b0) begin
             m_chr_req_total = m_chr_req_total + 1;
-            if (m_write_on_port === 1'b0) begin
+            begin
                 if ((m_bank_epoch >= 0) && (m_bank_epoch < MMC3_BANK_STEPS)) begin
                     m_addr_checks[m_bank_epoch] = m_addr_checks[m_bank_epoch] + 1;
                     if (m_first_hi_ok[m_bank_epoch] !== 1'b1) begin
@@ -4931,6 +4994,8 @@ integer w3_grab_bg, w3_grab_sp;
 integer w3_want_bg, w3_want_sp;
 integer w3_race_bg, w3_race_sp;
 integer w3_wr_bg, w3_wr_sp;
+integer w3_wr_steal_bg, w3_wr_steal_sp;
+integer w3_wr_frz_bg, w3_wr_frz_sp;
 integer w3_err_bg,  w3_err_sp;
 integer w3_defer_bg, w3_defer_sp;
 integer w3_defer_bad_bg, w3_defer_bad_sp;
@@ -4950,6 +5015,10 @@ always @(posedge clk) begin
         w3_race_sp       = 0;
         w3_wr_bg         = 0;
         w3_wr_sp         = 0;
+        w3_wr_steal_bg   = 0;
+        w3_wr_steal_sp   = 0;
+        w3_wr_frz_bg     = 0;
+        w3_wr_frz_sp     = 0;
         w3_err_bg        = 0;
         w3_err_sp        = 0;
         w3_defer_bg      = 0;
@@ -4971,21 +5040,18 @@ always @(posedge clk) begin
         //      that the rtl defers repeats the same address on the next ce, so
         //      re-recording it is harmless and keeps the two cases identical.
         //
-        //      w3_bg_wr_q records whether chr_we owned the mapper address bus on
-        //      that beat.  mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr :
-        //      ppu_chr_addr (nes_system_v6.v:334), so a $2007 CHR WRITE took the
-        //      address from the fetch unit exactly the way a read arm did, and
-        //      that was a SECOND, SEPARATE hazard: risk L-17, measured here as
-        //      w3_wr_bg/w3_wr_sp and by P0-2 as chr_wr_req_clash.  It is closed
-        //      now, by the same mechanism as the read arm:
-        //      nes_ppu2c02.v's chr_hold_bg/chr_hold_sp are
-        //      (chr_rd_win || chr_we) && <unit>_chr_req, so a $2007 CHR write
-        //      freezes a unit found mid-beat for exactly that one ce and the
-        //      unit neither has its beat serviced nor consumes anything.  These
-        //      beats are therefore COMPARED like every other beat, and the
-        //      counters below are asserted to be ZERO rather than excused: if a
-        //      future change lets a write own the port under a mid-beat unit
-        //      again, this fatal fires on the beat instead of counting it.
+        //      w3_wr_bg/w3_wr_sp is the census of a $2007 CHR WRITE that found a unit
+        //      mid-beat.  That hazard (risk L-17) is closed now by the mux
+        //      removal rather than by a freeze: nes_system_v6 now feeds the
+        //      mapper from ppu_chr_addr unconditionally, and nes_ppu2c02's
+        //      chr_hold_bg/chr_hold_sp are `chr_rd_win && <unit>_chr_req`, so
+        //      chr_we no longer freezes anything.  A colliding write beat is
+        //      therefore no longer a displacement to be excused -- it is the
+        //      condition that has to be PRODUCED and then shown to be harmless,
+        //      which is what w3_wr_steal_* / w3_wr_frz_* below check, both
+        //      fatalled.  The counters that used to sit at zero here and were
+        //      claimed as a regression test without being measured are now
+        //      actually incremented.
         if (ab_bg_chr_req !== 1'b0) begin
             w3_bg_final_q <= w3fu_final;
             w3_bg_byte_q  <= chr_mem[w3fu_final];
@@ -4997,6 +5063,23 @@ always @(posedge clk) begin
             w3_sp_byte_q  <= chr_mem[w3sfu_final];
             w3_sp_wr_q    <= (v6_chr_we !== 1'b0);
             w3_want_sp    = w3_want_sp + 1;
+        end
+
+        // ---- and that a colliding $2007 CHR WRITE neither took the address bus
+        //      nor froze the unit it found mid-beat.
+        if ((v6_chr_we !== 1'b0) && (ab_bg_chr_req !== 1'b0)) begin
+            w3_wr_bg = w3_wr_bg + 1;
+            if (v6_chr_final_addr !== w3fu_final)
+                w3_wr_steal_bg = w3_wr_steal_bg + 1;
+            if (w3fu_ce === 1'b0)
+                w3_wr_frz_bg = w3_wr_frz_bg + 1;
+        end
+        if ((v6_chr_we !== 1'b0) && (ab_sp_chr_req !== 1'b0)) begin
+            w3_wr_sp = w3_wr_sp + 1;
+            if (v6_chr_final_addr !== w3sfu_final)
+                w3_wr_steal_sp = w3_wr_steal_sp + 1;
+            if (w3sfu_ce === 1'b0)
+                w3_wr_frz_sp = w3_wr_frz_sp + 1;
         end
 
         // ---- and now the byte each unit actually consumes
@@ -5031,13 +5114,10 @@ always @(posedge clk) begin
             end
         end
 
-        // ---- and that every displaced beat was deferred rather than out-voted.
-        //      Both displacing masters are covered: the $2007 READ arm (rb_arm)
-        //      and the $2007 CHR WRITE strobe (v6_chr_we).  chr_hold_bg and
-        //      chr_hold_sp in nes_ppu2c02.v are
-        //      (chr_rd_win || chr_we) && <unit>_chr_req, so a beat either of
-        //      them found mid-flight must have had that unit's clock enable
-        //      suppressed for exactly that ce.
+        // ---- and that every beat the READ ARM displaced was deferred rather than
+        //      out-voted.  This is the arm only: a $2007 CHR WRITE no longer
+        //      freezes anything (it cannot, chr_hold_* no longer mention
+        //      chr_we) so it is checked above as a non-displacement instead.
         if (w3_arm_bg_q !== 1'b0) begin
             w3_defer_bg = w3_defer_bg + 1;
             if (w3_ce_bg_q !== 1'b0)
@@ -5048,10 +5128,8 @@ always @(posedge clk) begin
             if (w3_ce_sp_q !== 1'b0)
                 w3_defer_bad_sp = w3_defer_bad_sp + 1;
         end
-        w3_arm_bg_q <= ((rb_arm !== 1'b0) || (v6_chr_we !== 1'b0)) &&
-                       (ab_bg_chr_req !== 1'b0);
-        w3_arm_sp_q <= ((rb_arm !== 1'b0) || (v6_chr_we !== 1'b0)) &&
-                       (ab_sp_chr_req !== 1'b0);
+        w3_arm_bg_q <= (rb_arm !== 1'b0) && (ab_bg_chr_req !== 1'b0);
+        w3_arm_sp_q <= (rb_arm !== 1'b0) && (ab_sp_chr_req !== 1'b0);
         w3_ce_bg_q  <= w3fu_ce;
         w3_ce_sp_q  <= w3sfu_ce;
     end
@@ -5426,10 +5504,10 @@ task check_p0_2;
         if (chr_wr_beats != chr_wr_exp_total)
             $fatal(1, "P0-2 the ppu raised chr_we on %0d beats but the bus saw %0d $2007 writes into the chr half",
                    chr_wr_beats, chr_wr_exp_total);
-        $display("P0-2 WRITE-TRANSLATION chr_we never raises chr_req, so the read-beat check above gave ZERO coverage of the write address before this line existed.  On every $2007 write beat the tb now rebuilds the expected final address from its own bank model and the ppu's LOCAL chr_waddr, expected=(tb_chr_bank_model<<13)|(chr_waddr & 0x1fff), and compares it with chr_final_addr one net downstream; it also asserts chr_waddr==(pre-increment u_ppu.v_addr), chr_waddr[13]==0, local[12:0]==final[12:0], final[16:13]==0 and chr_wdata==reg_din.  write beats=%0d checked=%0d err=%0d, refused by the mapper on a chr-ram board=%0d, and the strobe count EQUALS the bus-side count of $2007 writes into the chr half=%0d PASS",
+        $display("P0-2 WRITE-TRANSLATION chr_we never raises chr_req, so the read-beat check above gives the write address no direct coverage, and mapper_ppu_addr is now ppu_chr_addr UNCONDITIONALLY so chr_final_addr on a write beat carries the READ address and the mapper's translation of the WRITE address is not on any output port at all.  What is asserted on every one of the $2007 write beats is therefore the NEW contract plus everything about the write address that is still observable: chr_final_addr == (tb_chr_bank_model<<13)|(u_ppu.chr_addr & 0x1fff), i.e. the read port was NOT taken by the write (this $fataled at once if the write-priority mux were put back), local chr_addr[12:0]==final[12:0], final[16:13]==0, chr_waddr==(pre-increment u_ppu.v_addr), chr_waddr[13]==0 and chr_wdata==reg_din.  The mapper's translation of the write address is checked where it is actually OBSERVABLE, which is the tb's own CHR model: it indexes the store by (tb_chr_bank_model<<13)|(chr_waddr & 0x1fff), and W1 below verifies all 96 uploaded bytes against the program's own constant with none left at the sentinel.  write beats=%0d checked=%0d err=%0d, refused by the mapper on a chr-ram board=%0d, and the strobe count EQUALS the bus-side count of $2007 writes into the chr half=%0d PASS",
                  chr_wr_beats, chr_wr_checks, chr_wr_addr_err,
                  chr_wr_not_accepted, chr_wr_exp_total);
-        $display("P0-2 WRITE-READ-ARBITRATION MEASURED, NOT ASSUMED.  mapper_ppu_addr = ppu_chr_we ? ppu_chr_waddr : ppu_chr_addr gives the WRITE priority, and chr_req is produced by the free-running fetch units and is NOT suppressed by a write, so the two CAN be high on the same ce_ppu.  That happened on %0d of the %0d $2007 write beats.  On such a beat chr_final_addr carries the write address, so that beat is checked against the WRITE model instead of the read model (%0d such read beats were excluded from the read translation count, which stayed exact on the remaining %0d).  THE COST THAT USED TO BE HERE IS GONE.  This line previously ended by saying the fetch unit latches the write address's byte for that one ce, so a $2007 write while the background or the sprites are displayed would corrupt one tile beat, and that 0 of the 22 collisions landed where a pixel could change.  That was risk L-17 and it was real.  It is closed the same way the read arm was: chr_we cannot be deferred (nes_ppu2c02.v:251-255 -- a one-clk strobe qualified by reg_cs, which nes_cpu_bus gates on ce_cpu, so it exists only on the div_phase 0 clk, and chr_waddr is the PRE-increment v_addr), and no chr_addr mux term can help because mapper_ppu_addr ignores chr_addr while ppu_chr_we is high, so nes_ppu2c02.v freezes a fetch unit found mid-beat by chr_we for exactly that one ce.  Contention is still measured, and it is NOT unchanged: %0d of the %0d write beats collided with a chr_req beat, %0d of those while the ppu's own bg_pa_enable was high or with sprites enabled below scanline 240, so the deferral path is exercised %0d times where a rendered pixel could have changed.  The collision count RISES when this fix lands, and that is correct rather than alarming: chr_we freezes the unit it displaces for one ce, so the deferred unit re-presents chr_req on the next ce and is counted colliding a second time.  The visible-collision count is 0 HERE only because this program uploads with PPUMASK=$00, so bg_pa_enable is low and the sprites are off for all 96 write beats; tb_chr_wr_collision is the bench that streams $2007 CHR stores through the visible field with rendering on and measures 27268 of 29767 collisions where a rendered pixel could have changed, with 0 of them reaching a pixel PASS",
+        $display("P0-2 WRITE-READ-ARBITRATION MEASURED, NOT ASSUMED.  chr_req is produced by the free-running fetch units and is NOT suppressed by a $2007 write, so a write strobe and a fetch request CAN be high on the same ce_ppu; that happened on %0d of the %0d $2007 write beats, %0d of them while the ppu's own bg_pa_enable was high or with sprites enabled below scanline 240.  WHAT A COLLIDING BEAT MEANS NOW: NOTHING IS TAKEN.  mapper_ppu_addr is ppu_chr_addr UNCONDITIONALLY -- bit 13 is the only substitution, and it exists solely so chr_ram_we's write-side ppu_addr[13]==0 term (nes_mapper.v:221) still sees the WRITE address's bit 13, which is structurally 0 because chr_we is qualified on v_addr < $2000 -- so on a colliding beat the fetch unit is handed its OWN byte and needs no freeze.  chr_hold_bg/chr_hold_sp are therefore chr_rd_win && <unit>_chr_req and chr_we is not in them.  The coverage that used to be given up is given back: those %0d colliding read beats are NO LONGER EXCLUDED from the read translation count above, which stayed exact on all %0d of its checks.  RISK L-17 IS CLOSED UPSTREAM, NOT WITH A FREEZE.  It used to be closed by freezing the unit for that one ce, which stopped the wrong byte and cost a whole background TILE per colliding beat because the fetch pipeline has zero slack: tb/ppu/tb_bg_fetch_drop.v measured the write half of that at 3142 dropped requests and 8317 wrong pixels of 184304 on a deliberately non-uniform nametable.  THE TRADE IS EXPLICIT: the CHR array is now read and written in the same clk, so a same-address collision is possible for the first time, and it is bounded at one dot of one tile where the freeze cost 2.4 pixels per dropped request.  The visible-collision count is 0 HERE only because this program uploads with PPUMASK=$00, so bg_pa_enable is low and the sprites are off for all 96 write beats; tb_chr_wr_collision is the bench that streams $2007 CHR stores through the visible field with rendering on and measures 27268 of 29767 collisions where a rendered pixel could have changed, with 0 of them reaching a pixel PASS",
                  chr_wr_req_clash, chr_wr_beats, chr_wr_req_clash,
                  chr_addr_checks,
                  chr_wr_req_clash, chr_wr_beats, chr_wr_clash_visible,
@@ -5531,8 +5609,8 @@ task check_p0_6;
                    chr_model_pred_err);
         if (chr_latch_err != 0)
             $fatal(1, "P0-6 the fetch unit latched %0d wrong bytes", chr_latch_err);
-        if (chr_latch_wr_skip != 0)
-            $fatal(1, "P0-6 %0d fetch-unit latches still landed on a beat a $2007 CHR WRITE owned the mapper port for, which is risk L-17 reopening", chr_latch_wr_skip);
+        if (chr_latch_wr_skip == 0)
+            $fatal(1, "P0-6 not one of the %0d fetch-unit latches coincided with a $2007 CHR WRITE strobe.  At the committed design that count was zero ONLY because chr_hold_bg/chr_hold_sp included chr_we, so the unit was frozen on a colliding beat and reached S_GRAB one ce later, after the one-clk strobe had gone.  mapper_ppu_addr is now ppu_chr_addr unconditionally, so the latch lands on the write beat itself and the coincidence is expected; a zero here means the write-side non-displacement was never exercised in this run", chr_latch_checks);
         if (chr_latch_noexp != 0)
             $fatal(1, "P0-6 %0d fetch-unit latches had no recorded address of their own, so the comparison below was vacuous on them",
                    chr_latch_noexp);
@@ -5550,7 +5628,7 @@ task check_p0_6;
         $display("P0-6 CHR-MODEL registered chr_rdata shadowed against chr_mem[chr_final_addr delayed 1 ce] on %0d request beats (err=%0d) -- that half is a check of the MEMORY MODEL and stays on the arbitrated address on purpose, because the memory really is asked for the byte at whatever address is on the bus.  The fetch-unit half is NOT on that address any more: bg_lo/bg_hi are shadowed against chr_mem[the address in the fetch unit's OWN u_chr_fetch.chr_addr register, sampled on the ce it raised chr_req and carried through S_GRAB, banked by (tb_chr_bank_model<<13)|(local&0x1fff)] on %0d beats (err=%0d) PASS",
                  chr_model_pred_checks, chr_model_pred_err, chr_latch_checks,
                  chr_latch_err);
-        $display("P0-6 WHY-THE-EXPECTATION-IS-NOT-THE-BUS the old expectation was chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a beat where the $2007 read arm won the bus the expectation became chr_mem[the arm's address], the corrupted latch was chr_mem[the arm's address], and the check agreed with the corruption: it could not have caught a stolen beat at any program.  The address now comes from u_chr_fetch.chr_addr, a register inside the fetch unit that the arbiter has no path into, and the byte from the tb's own chr_mem, so nothing in the comparison is a function of the arbiter's choice.  Of the %0d fetch-unit latches, %0d were compared and %0d were not, and the %0d that were not are TWO classes, and the class that used to be the biggest one is GONE: %0d on a beat a $2007 CHR WRITE owned the mapper port for was 18 beats here and was EXCUSED rather than compared, which meant P0-6 gave the write path zero fetch-unit coverage (risk L-17).  chr_hold_bg now freezes the unit on such a beat so the latch carries the right byte, those beats are compared like every other, and the count is asserted to be zero.  What remains: %0d whose expected cell was itself written in the last two ce -- about the CONTENT of the expected cell moving, not about who owned the bus -- and %0d with no recorded address.  The record is also re-taken on every chr_req beat rather than shifted, because a deferred beat repeats the same address and if the store landed on that very address the second record is the post-store byte the unit then consumes PASS",
+        $display("P0-6 WHY-THE-EXPECTATION-IS-NOT-THE-BUS the old expectation was chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a beat where the $2007 read arm won the bus the expectation became chr_mem[the arm's address], the corrupted latch was chr_mem[the arm's address], and the check agreed with the corruption: it could not have caught a stolen beat at any program.  The address now comes from u_chr_fetch.chr_addr, a register inside the fetch unit that the arbiter has no path into, and the byte from the tb's own chr_mem, so nothing in the comparison is a function of the arbiter's choice.  Of the %0d fetch-unit latches, %0d were compared and %0d were not, and the %0d that were not are TWO classes.  THE FIRST CLASS CHANGED ITS MEANING, and the old text here was describing a measurement of the freeze rather than of the bus: %0d latches coincided with a $2007 CHR WRITE strobe, that number was 18 beats here and ZERO at the committed design, and the zero was because chr_hold_bg/chr_hold_sp included chr_we so the unit was FROZEN on a colliding beat and reached S_GRAB one ce later, after the one-clk strobe had gone.  Those beats were never actually EXCLUDED from the comparison -- the counter was only ever printed -- but the fatal asserted it was zero, which a collision-free run could satisfy while the write was still taking the read address.  Now mapper_ppu_addr is ppu_chr_addr unconditionally, the latch lands ON the write beat, and the count is asserted NON-ZERO instead: a run where the write never coincides with a latch has not exercised the write-side non-displacement at all.  What remains genuinely uncompared: %0d whose expected cell was itself written in the last two ce -- about the CONTENT of the expected cell moving, not about who owned the bus -- and %0d with no recorded address.  The record is also re-taken on every chr_req beat rather than shifted, because a deferred beat repeats the same address and if the store landed on that very address the second record is the post-store byte the unit then consumes PASS",
                  chr_latch_checks,
                  chr_latch_checks - chr_latch_wr_skip - chr_latch_race_skip
                  - chr_latch_noexp,
@@ -5735,7 +5813,7 @@ task check_p0_8;
         if (m_bgsp_beats < 100000)
             $fatal(1, "P0-8 chr_mmc3 only produced %0d fetch-unit chr_req beats, the units were barely sampled",
                    m_bgsp_beats);
-        $display("P0-8 NO-BUS-COLLISION RE-SCOPED TWICE, NOT WEAKENED.  WHAT CHANGED AND WHY: the old line asserted that chr_req is NEVER high on two consecutive ce on ab_v6.  chr_rd_win now feeds chr_req directly, so a $2007 CHR read that lands on the ce_ppu edge right after a fetch request beat makes that assertion false by construction, and qualifying it on mask_reg[3] is not available because the fetch units are free-running regardless of the mask.  So the invariant was restated over the beats that can legitimately collide, and it is still asserted.  On all %0d ce_ppu of ab_v6 there were %0d consecutive chr_req pairs.  Of those, %0d had NO read arm on EITHER beat -- exactly the case the old assertion covered, exactly what a run with chr_rd_arm tied to 1'b0 would have measured -- and that count is %0d.  EVERY ONE of the remaining pairs touches a read arm, and each is attributed by the same expression the ppu uses to drive chr_addr: %0d had the READ ARM winning the second beat (%0d against a background beat on the first, %0d against a sprite beat, %0d against a $2007 CHR write, %0d arm after arm) and %0d had a fetch unit winning the second beat, of which %0d followed a background read arm and %0d followed a sprite read arm.  THE WRITE HALF OF THE EXCLUSION IS NEW.  chr_we is the third master on this bus and it freezes the unit it displaces for exactly that one ce, so the deferred unit re-presents chr_req on the next ce: %0d of the pairs are consecutive because a $2007 CHR WRITE owned the first beat and a fetch unit took the second (%0d against a background chr_req, %0d against a sprite chr_req, %0d neither).  That is the write twin of the arm case and it is why the old wording, which forbade a consecutive pair with no arm in it, is no longer true; what is still forbidden is a consecutive pair with no arm AND no write in it, and that count is %0d.  chr_mmc3 runs a program with no $2007 reads and no $2007 CHR stores at all, so nothing can raise an arm or a write-owned beat there and chr_req was never high on two consecutive ce there either (%0d of %0d ce, %0d violations).  The background fetch unit chr_req (u_ppu.g_chr_external.u_chr_fetch.chr_req) and the sprite fetch unit chr_req (u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req) were never both high on the same ce: %0d and %0d sampled beats, %0d and %0d collisions.  The port has no backpressure, so a fetch-vs-fetch collision would be a silently dropped background beat.  That a read arm's ADDRESS survives the collision is asserted separately in W3-3, on every arm beat, and that a $2007 CHR WRITE cannot consume a fetch beat is asserted in W3-11 (both units, chr_rdata at S_GRAB) and P0-6 (the background unit's own bg_lo/bg_hi).  ab_v5 is not in this check because nes_system_v5 has no external CHR port at all PASS",
+        $display("P0-8 NO-BUS-COLLISION RE-SCOPED TWICE, NOT WEAKENED.  WHAT CHANGED AND WHY: the old line asserted that chr_req is NEVER high on two consecutive ce on ab_v6.  chr_rd_win now feeds chr_req directly, so a $2007 CHR read that lands on the ce_ppu edge right after a fetch request beat makes that assertion false by construction, and qualifying it on mask_reg[3] is not available because the fetch units are free-running regardless of the mask.  So the invariant was restated over the beats that can legitimately collide, and it is still asserted.  On all %0d ce_ppu of ab_v6 there were %0d consecutive chr_req pairs.  Of those, %0d had NO read arm on EITHER beat -- exactly the case the old assertion covered, exactly what a run with chr_rd_arm tied to 1'b0 would have measured -- and that count is %0d.  EVERY ONE of the remaining pairs touches a read arm, and each is attributed by the same expression the ppu uses to drive chr_addr: %0d had the READ ARM winning the second beat (%0d against a background beat on the first, %0d against a sprite beat, %0d against a $2007 CHR write, %0d arm after arm) and %0d had a fetch unit winning the second beat, of which %0d followed a background read arm and %0d followed a sprite read arm.  THE WRITE HALF OF THE EXCLUSION IS NOW VACUOUS, AND THAT IS THE POINT.  chr_we used to be a third master on this bus that froze the unit it displaced for exactly that one ce, so the deferred unit re-presented chr_req on the next ce: %0d of the pairs were consecutive because a $2007 CHR WRITE owned the first beat and a fetch unit took the second (%0d against a background chr_req, %0d against a sprite chr_req, %0d neither).  mapper_ppu_addr is now ppu_chr_addr unconditionally, so a write displaces nothing, is deferred by nothing, and re-presents nothing -- all four of those counts are 0 and the write side of the exclusion has nothing left to exclude.  The old wording, which forbade a consecutive pair with no arm in it, is therefore true again for a different reason; what is still forbidden is a consecutive pair with no arm AND no write in it, and that count is %0d.  chr_mmc3 runs a program with no $2007 reads and no $2007 CHR stores at all, so nothing can raise an arm or a write-owned beat there and chr_req was never high on two consecutive ce there either (%0d of %0d ce, %0d violations).  The background fetch unit chr_req (u_ppu.g_chr_external.u_chr_fetch.chr_req) and the sprite fetch unit chr_req (u_ppu.g_chr_external.u_sprite_chr_fetch.chr_req) were never both high on the same ce: %0d and %0d sampled beats, %0d and %0d collisions.  The port has no backpressure, so a fetch-vs-fetch collision would be a silently dropped background beat.  That a read arm's ADDRESS survives the collision is asserted separately in W3-3, on every arm beat, and that a $2007 CHR WRITE cannot consume a fetch beat is asserted in W3-11 (both units, chr_rdata at S_GRAB) and P0-6 (the background unit's own bg_lo/bg_hi).  ab_v5 is not in this check because nes_system_v5 has no external CHR port at all PASS",
                   ab_req_beats, ab_req_consec,
                   ab_req_consec - ab_consec_arm - ab_consec_arm_first_bg
                   - ab_consec_wr,
@@ -5749,7 +5827,7 @@ task check_p0_8;
                   ab_consec_nocollider,
                   m_req_consec, m_req_beats, m_req_consec,
                   ab_bgsp_beats, m_bgsp_beats, ab_bgsp_clash, m_bgsp_clash);
-        $display("P0-8 WRITE-STROBE the new write path takes the same mapper port the fetch arbiter uses, so it was re-checked for contention: chr_we was never high on two consecutive ce_ppu on ab_v6 (%0d violations) or on chr_mmc3 (%0d violations), and the arbitration between the two was counted rather than assumed -- %0d and %0d of the %0d and %0d write beats coincided with a chr_req beat (write wins in mapper_ppu_addr), with %0d and %0d of those while bg or sprites were enabled PASS",
+        $display("P0-8 WRITE-STROBE the new write path shares the mapper port the fetch arbiter uses, so it was re-checked for contention: chr_we was never high on two consecutive ce_ppu on ab_v6 (%0d violations) or on chr_mmc3 (%0d violations), and the coincidence between a write strobe and a chr_req beat was counted rather than assumed -- %0d and %0d of the %0d and %0d write beats coincided with a chr_req beat.  NEITHER MASTER WINS ANY MORE: mapper_ppu_addr is ppu_chr_addr unconditionally, so the write takes nothing from the fetch unit and the fetch unit takes nothing from the write (bit 13 excepted, and only so chr_ram_we keeps seeing the write address's structurally-zero bit 13).  A colliding beat is now a beat on which the fetch unit receives its own byte, which is why the count is kept rather than treated as a hazard; what is asserted about it is in W3-11 and P0-6, and how many landed where a rendered pixel could change is %0d and %0d PASS",
                  ab_we_consec, m_we_consec, chr_wr_req_clash, m_wr_req_clash,
                  chr_wr_beats, m_wr_beats,
                  chr_wr_clash_visible, m_wr_clash_visible);
@@ -6082,26 +6160,37 @@ task check_w3_readback;
         // S_GRAB, from its own corrected expectation, so this is a second
         // witness and not the only one.
         //
-        // w3_wr_bg/w3_wr_sp used to be an EXCUSE and are now a REGRESSION TEST.
-        // They counted the consuming beats on which chr_we owned the mapper port
-        // and were skipped from the comparison, because a $2007 CHR write really
-        // did take the address bus under a mid-beat fetch unit (risk L-17).
-        // That is closed: nes_ppu2c02.v freezes the unit instead, so those
-        // beats carry a correct byte and there is nothing left to excuse.  They
-        // are counted and asserted to be ZERO, which is the point -- if a change
-        // ever lets a write own the port under a mid-beat unit again, the count
-        // moves and this fatal fires rather than the check quietly skipping.
+        // w3_wr_bg/w3_wr_sp are the census of a $2007 CHR WRITE that found a unit
+        // mid-beat, and that census is REQUIRED to be non-zero: it is the proof
+        // that the hazard is still being provoked by this program.  What has to
+        // hold on every one of those beats is the opposite of the old claim.
+        // The old line asserted they were ZERO, on the reasoning that a write
+        // owning the port under a mid-beat unit was the defect (risk L-17) and
+        // that the freeze had closed it.  The freeze did close it, but by DROPPING
+        // background fetches -- tb/ppu/tb_bg_fetch_drop.v measured 3142 dropped
+        // requests and 8317 wrong pixels for the write half alone on a
+        // non-uniform nametable -- so the defect moved rather than went away.
+        // mapper_ppu_addr is now ppu_chr_addr unconditionally, so the write has
+        // its own address all the way to the CHR array and there is nothing to
+        // displace: w3_wr_steal_* must be 0 (the read port carried the unit's own
+        // address on every colliding beat) and w3_wr_frz_* must be 0 (no unit was
+        // frozen, so no request was dropped).
         if (w3_err_bg != 0 || w3_err_sp != 0)
             $fatal(1, "W3-11 %0d background and %0d sprite fetch beats were consumed with a byte captured for another $2007 CHR master",
                    w3_err_bg, w3_err_sp);
         if (w3_defer_bad_bg != 0 || w3_defer_bad_sp != 0)
-            $fatal(1, "W3-11 %0d background and %0d sprite beats found mid-flight by a $2007 CHR access were out-voted instead of deferred",
+            $fatal(1, "W3-11 %0d background and %0d sprite beats found mid-flight by the $2007 CHR READ arm were out-voted instead of deferred",
                    w3_defer_bad_bg, w3_defer_bad_sp);
-        if (w3_wr_bg != 0 || w3_wr_sp != 0)
-            $fatal(1, "W3-11 %0d background and %0d sprite consuming beats still had a $2007 CHR WRITE owning the mapper port, which is risk L-17 reopening",
-                   w3_wr_bg, w3_wr_sp);
+        if (w3_wr_steal_bg != 0 || w3_wr_steal_sp != 0)
+            $fatal(1, "W3-11 on %0d background and %0d sprite beats a $2007 CHR WRITE still took the CHR read address bus under a mid-beat unit, which is risk L-17 reopening",
+                   w3_wr_steal_bg, w3_wr_steal_sp);
+        if (w3_wr_frz_bg != 0 || w3_wr_frz_sp != 0)
+            $fatal(1, "W3-11 on %0d background and %0d sprite beats a $2007 CHR WRITE still froze the fetch unit it found mid-beat, so the request is still being dropped",
+                   w3_wr_frz_bg, w3_wr_frz_sp);
+        if ((w3_wr_bg + w3_wr_sp) < 1)
+            $fatal(1, "W3-11 no $2007 CHR WRITE ever found a fetch unit mid-beat, so the write-side non-displacement was never exercised and this part of the group proves nothing");
         if ((w3_defer_bg + w3_defer_sp) < 1)
-            $fatal(1, "W3-11 no $2007 CHR access ever found a fetch unit mid-beat, so the deferral path was never exercised and this group proves nothing");
+            $fatal(1, "W3-11 no $2007 CHR READ arm ever found a fetch unit mid-beat, so the deferral path was never exercised and this group proves nothing");
         rb_cells = CHR_RB_WINDOWS * CHR_RB_WINDOW_BYTES;
 
         $display("W3-1 ARMED-ALWAYS %0d $2007 CHR read beats and %0d read arms, one for one.  Every read beat saw u_ppu.g_chr_external.chr_rd_armed_q=1 (violations=%0d) and every arm was consumed by a read beat on the immediately following ce_ppu (stranded=%0d, two arms back to back=%0d).  KILLS the dead path: an arm that never fires leaves no read beat behind, and a read beat without an arm cannot pass, so this cannot go green on a path that is structurally disconnected PASS",
@@ -6143,10 +6232,11 @@ task check_w3_readback;
                  ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
                  ab_consec_arm_vs_sp,
                  rb_arms_vblank, rb_loopa_arms, rb_min_sl, rb_max_sl);
-        $display("W3-11 A-FETCH-BEAT-IS-NEVER-STOLEN this is the hard check for the tile-corruption hazard, and it is not a restatement of W3-9.  W3-9 counts CONTENTION: an arm and a fetch beat both asked for the bus on one ce, which is ordinary arbitration and still happens.  This counts CONSUMPTION: on every ce where a fetch unit was in S_GRAB, the byte it took must be chr_mem[the address in its OWN chr_addr register], because that register is what the unit asked for and the arbiter cannot override it.  Background: %0d beats wanted, %0d consumed, %0d still on a beat a $2007 CHR WRITE owned the mapper port (risk L-17 -- that count was an EXCUSE until this change, now it is a regression test asserted to be zero, and those beats are compared like every other beat), %0d skipped for a write race in the same two ce, %0d consumed with a byte captured for another master.  Sprite: %0d wanted, %0d consumed, %0d write-owned, %0d race skips, %0d wrong.  RISK L-17 IS CLOSED, and by the same mechanism as the read arm rather than by a new one: chr_we cannot be deferred (nes_ppu2c02.v:251-255 -- it is a one-clk strobe qualified by reg_cs, which nes_cpu_bus gates on ce_cpu, so it exists only on the div_phase 0 clk, and chr_waddr is the PRE-increment v_addr, so a registered strobe would carry the post-increment address and land one ce late), and no term in the chr_addr mux can help because mapper_ppu_addr ignores chr_addr entirely while ppu_chr_we is high.  So nes_ppu2c02.v holds chr_hold_bg/chr_hold_sp at (chr_rd_win || chr_we) && <unit>_chr_req: a fetch unit found mid-beat by a $2007 CHR WRITE is frozen for exactly that ce, exactly as one found by the arm is.  WHAT CHANGED SINCE THIS GROUP WAS WRITTEN: P0-6's fetch-unit latch expectation was chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a stolen beat the expectation became the arm's byte and the corrupted latch agreed with it -- the expectation followed the defect and P0-6 could not have caught this.  P0-6 has since been corrected to derive its background expectation from u_chr_fetch.chr_addr exactly as W3-11 does here, so the coverage is no longer arm-path-only and no longer lives in one check; it lives in both, over different registers (P0-6 on the latched bg_lo/bg_hi, W3-11 on chr_rdata at S_GRAB) and over different units (P0-6 background, W3-11 both).  This group is kept, not folded into P0-6, because it is the only place the DEFERRED rather than OUT-VOTED half is asserted.  Separately, every displaced beat must have been DEFERRED rather than out-voted, and now for BOTH displacing masters, the $2007 read arm and the $2007 CHR write strobe: %0d background and %0d sprite beats found mid-flight by one of them had their clock enable suppressed (out-voted instead=%0d and %0d), so the unit neither saw its request serviced nor consumed anything and repeated the same beat on the next ce with its address register untouched.  The arm phase did not move and no pending register was added to the read address path, because the arm has zero slack: the ce_ppu edge that ends div_phase 8 is followed by 9, 10, 11, 0 and the edge that ends div_phase 0 is the one read_buffer_reg latches on, so there is no ce_ppu edge a deferred or registered address could be captured on PASS",
+        $display("W3-11 A-FETCH-BEAT-IS-NEVER-STOLEN this is the hard check for the tile-corruption hazard, and it is not a restatement of W3-9.  W3-9 counts CONTENTION: an arm and a fetch beat both asked for the bus on one ce, which is ordinary arbitration and still happens.  This counts CONSUMPTION: on every ce where a fetch unit was in S_GRAB, the byte it took must be chr_mem[the address in its OWN chr_addr register], because that register is what the unit asked for and the arbiter cannot override it.  Background: %0d beats wanted, %0d consumed, %0d found mid-beat by a $2007 CHR WRITE (that is the hazard being provoked, and the assertion is now on the two things that must be TRUE on those beats rather than on their absence: the read port carried the unit own address on all of them and no unit was frozen on any of them), %0d skipped for a write race in the same two ce, %0d consumed with a byte captured for another master.  Sprite: %0d wanted, %0d consumed, %0d write collisions, %0d race skips, %0d wrong.  RISK L-17 IS CLOSED, AND IT IS CLOSED UPSTREAM RATHER THAN WITH A FREEZE.  It used to be closed by freezing: chr_hold_bg/chr_hold_sp were (chr_rd_win || chr_we) && <unit>_chr_req, so a fetch unit found mid-beat by a $2007 CHR WRITE was frozen for exactly that ce.  That stopped the wrong byte and cost a whole background TILE per colliding beat, because the fetch pipeline has zero slack -- bg_fetch_due every 8 ce and one tile 8 ce -- and tb/ppu/tb_bg_fetch_drop.v measured the write half of that at 3142 dropped requests and 8317 wrong pixels of 184304 on a deliberately non-uniform nametable.  It is now closed by removing the cause: nes_system_v6 feeds the mapper from ppu_chr_addr UNCONDITIONALLY, because the CHR array already had a write address independent of the read address (nes_cart_rom.v:193-197, chr_windex beside chr_rindex), so there is nothing left for a write to take and chr_hold_bg/chr_hold_sp are now chr_rd_win && <unit>_chr_req.  The trade is that the array is now read and written in the same clk, which can only bite when the write address EQUALS the fetch address, and that is bounded at one dot where the freeze cost 2.4 pixels per dropped request.  WHAT CHANGED SINCE THIS GROUP WAS WRITTEN: P0-6's fetch-unit latch expectation was chr_mem[chr_final_addr delayed 2 ce] and chr_final_addr is the ARBITRATED address, so on a stolen beat the expectation became the arm's byte and the corrupted latch agreed with it -- the expectation followed the defect and P0-6 could not have caught this.  P0-6 has since been corrected to derive its background expectation from u_chr_fetch.chr_addr exactly as W3-11 does here, so the coverage is no longer arm-path-only and no longer lives in one check; it lives in both, over different registers (P0-6 on the latched bg_lo/bg_hi, W3-11 on chr_rdata at S_GRAB) and over different units (P0-6 background, W3-11 both).  This group is kept, not folded into P0-6, because it is the only place the DEFERRED rather than OUT-VOTED half is asserted.  Separately, every beat displaced by the $2007 READ ARM must have been DEFERRED rather than out-voted: %0d background and %0d sprite beats found mid-flight by an arm had their clock enable suppressed (out-voted instead=%0d and %0d), so the unit neither saw its request serviced nor consumed anything and repeated the same beat on the next ce with its address register untouched.  The $2007 CHR write is NOT in that list any more and must not be added back: it displaces nothing, so there is nothing to defer, and the two counters above assert exactly that on all %0d of its colliding beats.  The arm phase did not move and no pending register was added to the read address path, because the arm has zero slack: the ce_ppu edge that ends div_phase 8 is followed by 9, 10, 11, 0 and the edge that ends div_phase 0 is the one read_buffer_reg latches on, so there is no ce_ppu edge a deferred or registered address could be captured on PASS",
                  w3_want_bg, w3_grab_bg, w3_wr_bg, w3_race_bg, w3_err_bg,
                  w3_want_sp, w3_grab_sp, w3_wr_sp, w3_race_sp, w3_err_sp,
-                 w3_defer_bg, w3_defer_sp, w3_defer_bad_bg, w3_defer_bad_sp);
+                 w3_defer_bg, w3_defer_sp, w3_defer_bad_bg, w3_defer_bad_sp,
+                 w3_wr_bg + w3_wr_sp);
         $display("W3-9b P0-8'S INDEPENDENT ACCOUNT agrees from the other side: of the %0d consecutive chr_req pairs on ab_v6, %0d had a read arm winning the second beat (%0d against a background beat, %0d against a sprite beat) and %0d had a read arm on the first beat with a fetch unit winning the second (%0d against a background beat, %0d against a sprite beat).  and %0d of the pairs are consecutive because a $2007 CHR WRITE owned the first beat and a fetch unit took the second.  A pair with neither a read arm nor a $2007 CHR write on either beat, the case the removed invariant covered, is %0d PASS",
                  ab_req_consec, ab_consec_arm, ab_consec_arm_vs_bg,
                  ab_consec_arm_vs_sp,
@@ -7053,7 +7143,6 @@ initial begin
     chr_wr_not_accepted = 0;
     chr_wr_consec = 0;
     chr_wr_prev = 1'b0;
-    chr_write_on_port = 1'b0;
     chr_wr_exp_final = 17'd0;
     chr_wr_accepted = 0;
     m_wr_beats = 0;
@@ -7067,7 +7156,6 @@ initial begin
     m_wr_consec = 0;
     m_wr_accepted = 0;
     m_wr_prev = 1'b0;
-    m_write_on_port = 1'b0;
     m_wr_exp_final = 17'd0;
     m_wr_low_hit = 0;
     m_wr_high_hit = 0;
