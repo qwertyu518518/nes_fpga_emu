@@ -42,9 +42,10 @@
 // buttons[7:0] drives nes_controller.v: bit 0 is the first bit shifted out on
 // $4016, so the order is A, B, Select, Start, Up, Down, Left, Right, and
 // buttons[7:4] is exactly the touch dpad {Up, Down, Left, Right}.
-// key[0] and key[1] are the two active low PL keys. While touch_valid is high
-// they drive Start and Select instead of A and B, because those two pairs of
-// NES buttons are never needed at the same time.
+// key[0] and key[1] are the two active low PL keys.  touch_key is the board
+// TPAD, a third discrete button on its own pin.  While it is held the two keys
+// drive Start and Select instead of A and B, because those two pairs of NES
+// buttons are never needed at the same time.
 
 module nes_touch_input #(
     parameter integer CLK_HZ             = 50_000_000,
@@ -76,6 +77,7 @@ module nes_touch_input #(
     input  wire        sda_i,
     input  wire        key0,
     input  wire        key1,
+    input  wire        touch_key,
     output wire [7:0]  buttons,
     output wire [3:0]  dpad,
     output wire        touch_valid,
@@ -336,18 +338,28 @@ module nes_touch_input #(
         end
     end
 
-    wire [1:0] key_async = {key1, key0};
+    // touch_key is the board TPAD: a discrete momentary button on its own pin F16,
+    // NOT a point on the GT9147, so the substitution is keyed off it and not off
+    // touch_valid_q.  Gating the substitution on touch_valid_q, as this did, meant
+    // that touching the screen to steer turned the two keys into Start and Select,
+    // making steering and firing mutually exclusive.  The polarity is also the
+    // opposite of key0/key1: touch_key is ACTIVE HIGH, idle low, from the vendor's
+    // own RTL for this pin (touch_led.v:51 detects a RISING edge as the press,
+    // tb_touch_led.v:22 drives 1 to press).  Hence the idle vector below is 3'b011:
+    // bits [1:0] are the two active low keys idle high, bit [2] is the active high
+    // TPAD idle low.
+    wire [2:0] key_async = {touch_key, key1, key0};
 
-    reg [1:0] key_meta_q;
-    reg [1:0] key_sync_q;
-    reg [1:0] key_candidate_q;
-    reg [1:0] key_stable_q;
+    reg [2:0] key_meta_q;
+    reg [2:0] key_sync_q;
+    reg [2:0] key_candidate_q;
+    reg [2:0] key_stable_q;
     reg [DB_CW-1:0] key_cnt_q;
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            key_meta_q <= 2'b11;
-            key_sync_q <= 2'b11;
+            key_meta_q <= 3'b011;
+            key_sync_q <= 3'b011;
         end else begin
             key_meta_q <= key_async;
             key_sync_q <= key_meta_q;
@@ -356,8 +368,8 @@ module nes_touch_input #(
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            key_candidate_q <= 2'b11;
-            key_stable_q    <= 2'b11;
+            key_candidate_q <= 3'b011;
+            key_stable_q    <= 3'b011;
             key_cnt_q       <= {DB_CW{1'b0}};
         end else if (key_sync_q == key_candidate_q) begin
             key_cnt_q <= {DB_CW{1'b0}};
@@ -372,7 +384,8 @@ module nes_touch_input #(
 
     wire       key0_pressed  = ~key_stable_q[0];
     wire       key1_pressed  = ~key_stable_q[1];
-    wire       ab_substituted = touch_valid_q;
+    wire       touch_key_debounced = key_stable_q[2];
+    wire       ab_substituted = touch_key_debounced;   // was: touch_valid_q
     wire       key_start     = ab_substituted & key0_pressed;
     wire       key_select    = ab_substituted & key1_pressed;
     wire       btn_a         = ~ab_substituted & key0_pressed;

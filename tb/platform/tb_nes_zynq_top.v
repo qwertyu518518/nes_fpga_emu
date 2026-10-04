@@ -68,6 +68,9 @@ module tb_nes_zynq_top;
     reg sys_clk;
     reg sys_rst_n;
     reg [1:0] key;
+    // The board TPAD, a discrete button on F16, ACTIVE HIGH: idle low, high
+    // while held.  It is not a point on the capacitive panel.
+    reg touch_key;
     wire [23:0] lcd_rgb;
     wire lcd_hs;
     wire lcd_vs;
@@ -111,6 +114,7 @@ module tb_nes_zynq_top;
     integer btn_converged_ns;
     integer t_key_down_ns;
     integer btn_phase;
+    integer tpad_guard;
     integer touch_base;
     integer touch_guard;
     integer touch_err_base;
@@ -137,6 +141,7 @@ module tb_nes_zynq_top;
     nes_zynq_top dut (        .sys_clk     (sys_clk),
         .sys_rst_n   (sys_rst_n),
         .key         (key),
+        .touch_key   (touch_key),
         .lcd_rgb     (lcd_rgb),
         .lcd_hs      (lcd_hs),
         .lcd_vs      (lcd_vs),
@@ -541,6 +546,7 @@ module tb_nes_zynq_top;
         sys_clk  = 1'b0;
         sys_rst_n = 1'b0;
         key      = 2'b11;
+        touch_key = 1'b0;
         touch_int= 1'b1;
         errors = 0; idx = 0;
         core_frames = 0; lcd_frames = 0;
@@ -552,6 +558,7 @@ module tb_nes_zynq_top;
         core_rst_release_ns = 0; lcd_rst_release_ns = 0;
         lcd_rst_pin_high_ns = 0; lcd_bl_pin_high_ns = 0;
         btn_converged_ns = 0; btn_phase = 0; t_key_down_ns = 0;
+        tpad_guard = 0;
         z_seen = 0; de_seen = 0;
         core_frame_d_r = 1'b0; lcd_frame_p_r = 1'b0; locked_r = 1'b0;
         pal_drv = 8'h00; exp_drv = 16'h0000; btn_drv = 8'h00; de_drv = 1'b0;
@@ -871,6 +878,24 @@ module tb_nes_zynq_top;
         if (sl_in_txn !== 1'b0) err("TOUCH_BUS_NEVER_WENT_IDLE", sl_in_txn, 0);
         $display("TOUCH bus went idle after %0d START, %0d STOP", sl_start_cnt, sl_stop_cnt);
 
+        // ------------------------------- a screen touch must not touch the keys
+        // The keys are pressed here and left pressed, so the report that follows is
+        // checked against already settled A and B.  Pressing them AFTER the report
+        // would give the old RTL time to expire the report, which hides the
+        // substitution instead of exposing it.
+        @(negedge sys_clk);
+        key = 2'b00;
+        tpad_guard = 0;
+        while (dut.touch_buttons[1:0] !== 2'b11 && tpad_guard < 40000) begin
+            @(posedge sys_clk);
+            tpad_guard = tpad_guard + 1;
+        end
+        if (dut.touch_buttons[1:0] !== 2'b11)
+            err("KEYS_AB_NOT_REACHED_BEFORE_TOUCH", dut.touch_buttons[1:0], 2'b11);
+        if (dut.touch_buttons !== 8'h03)
+            err("KEYS_ALONE_ARE_NOT_A_AND_B", dut.touch_buttons, 8'h03);
+        $display("KEYS both keys pressed, no screen touch: buttons=%02h", dut.touch_buttons);
+
         sl_x      = 16'd100;
         sl_y      = 16'd120;
         sl_status = 8'h81;
@@ -894,6 +919,60 @@ module tb_nes_zynq_top;
         $display("TOUCH panel reported (%0d, %0d) status %02h, dpad %b, buttons %02h",
                  dut.u_touch.touch_x, dut.u_touch.touch_y, sl_status,
                  dut.touch_buttons[7:4], dut.touch_buttons);
+
+        // ------------------------------- a screen touch must not touch the keys
+        // The report is latched above and both keys have been held down since
+        // before it, so this check is immediate and has no window for the report to
+        // expire in.  The substitution used to be keyed off touch_valid_q, so with
+        // the report latched the two keys became Start and Select and A and B were
+        // released, which is what made steering with the screen and firing with a
+        // key mutually exclusive on the board.  Under that RTL buttons is 8'h2c
+        // here, not 8'h23.
+        if (dut.u_touch.touch_valid !== 1'b1)
+            err("TOUCH_REPORT_EXPIRED_BEFORE_THE_KEY_CHECK", dut.u_touch.touch_valid, 1);
+        if (dut.touch_buttons[1:0] !== 2'b11)
+            err("SCREEN_TOUCH_RELEASED_A_AND_B", dut.touch_buttons[1:0], 2'b11);
+        if (dut.touch_buttons[3:2] !== 2'b00)
+            err("SCREEN_TOUCH_PROMOTED_KEYS_TO_START_SELECT", dut.touch_buttons[3:2], 0);
+        if (dut.touch_buttons[7:4] !== 4'b0010)
+            err("TOUCH_DPAD_LOST_WHILE_KEYS_HELD", dut.touch_buttons[7:4], 4'b0010);
+        if (dut.touch_buttons !== 8'h23)
+            err("SCREEN_TOUCH_CHANGED_THE_KEYS", dut.touch_buttons, 8'h23);
+        $display("KEYS screen touch latched, keys still A/B: buttons=%02h (dpad %b, start/select %b, A/B %b)",
+                 dut.touch_buttons, dut.touch_buttons[7:4], dut.touch_buttons[3:2],
+                 dut.touch_buttons[1:0]);
+
+        // Holding the on-board TPAD is what promotes them.  It is active high, so
+        // it is driven high, and it debounces on the same 800 sys_clk window as the
+        // keys.  The screen dpad and this substitution are independent.
+        @(negedge sys_clk);
+        touch_key = 1'b1;
+        tpad_guard = 0;
+        while (dut.touch_buttons[3:2] !== 2'b11 && tpad_guard < 40000) begin
+            @(posedge sys_clk);
+            tpad_guard = tpad_guard + 1;
+        end
+        if (dut.touch_buttons[3:2] !== 2'b11)
+            err("TPAD_DID_NOT_PROMOTE_KEYS_TO_START_SELECT", dut.touch_buttons[3:2], 2'b11);
+        if (dut.touch_buttons[1:0] !== 2'b00)
+            err("A_B_STILL_ASSERTED_WHILE_TPAD_HELD", dut.touch_buttons[1:0], 0);
+        $display("TPAD held with a screen report: buttons=%02h (dpad %b, start/select %b, A/B %b)",
+                 dut.touch_buttons, dut.touch_buttons[7:4], dut.touch_buttons[3:2],
+                 dut.touch_buttons[1:0]);
+
+        // Release the TPAD and the keys; the keys must be A and B again.
+        @(negedge sys_clk);
+        touch_key = 1'b0;
+        tpad_guard = 0;
+        while (dut.touch_buttons[1:0] !== 2'b11 && tpad_guard < 40000) begin
+            @(posedge sys_clk);
+            tpad_guard = tpad_guard + 1;
+        end
+        if (dut.touch_buttons[1:0] !== 2'b11)
+            err("A_B_DID_NOT_COME_BACK_AFTER_TPAD_RELEASE", dut.touch_buttons[1:0], 2'b11);
+        @(negedge sys_clk);
+        key = 2'b11;
+        $display("TPAD released: buttons=%02h, A/B restored", dut.touch_buttons);
 
         // Release it and let the flag clear consume the report.
         @(negedge sys_clk);

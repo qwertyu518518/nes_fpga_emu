@@ -2,8 +2,14 @@
 
 // tb_nes_touch_input drives the vendor GT9147 I2C protocol from a behavioural
 // capacitive touch controller slave, then checks the region map, the key
-// debounce, the Start/Select substitution, the reset sequence, the decoded
-// transaction stream and the NACK recovery path.
+// debounce, the TPAD driven Start/Select substitution, the reset sequence, the
+// decoded transaction stream and the NACK recovery path.
+//
+// The substitution is driven by touch_key, the board's discrete TPAD on F16, and
+// NOT by the panel report.  The two are checked apart on purpose: a held panel
+// report must leave the two keys on A and B, because keying the substitution off
+// touch_valid made steering with the screen and firing with a key mutually
+// exclusive, which is the defect that was found on the board.
 //
 // The slave resolves the open drain bus, decodes START / repeated START / STOP,
 // samples bytes on the SCL rising edge, drives ACK or NACK per byte, and drives
@@ -52,6 +58,9 @@ module tb_nes_touch_input;
     reg        ct_int = 1'b1;
     reg        key0 = 1'b1;
     reg        key1 = 1'b1;
+    // touch_key is the board TPAD on F16, ACTIVE HIGH: idle low, high while
+    // held.  See the TPAD block in rtl/platform/zynq/nes_zynq_top.xdc.
+    reg        touch_key = 1'b0;
 
     wire       ct_rst_n;
     wire       scl_o;
@@ -110,6 +119,7 @@ module tb_nes_touch_input;
         .sda_i       (sda_bus),
         .key0        (key0),
         .key1        (key1),
+        .touch_key   (touch_key),
         .buttons     (buttons),
         .dpad        (dpad),
         .touch_valid (touch_valid),
@@ -506,6 +516,38 @@ module tb_nes_touch_input;
         end
     endtask
 
+    task release_touch;
+        // exp_btn is the low nibble expected once the report is gone: 03 for the
+        // two keys on A and B, 0c for them promoted to Start and Select by the TPAD.
+        input [7:0] exp_btn;
+        begin
+            x_val      = 16'h0000;
+            y_val      = 16'h0000;
+            status_val = 8'h00;
+            int_drive  = 1'b1;
+            ct_int     = 1'b1;
+            guard = 0;
+            while (touch_valid !== 1'b0 && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+            end
+            if (touch_valid !== 1'b0)
+                $fatal(1, "the touch never released");
+            if (touch_int !== 1'b0)
+                $fatal(1, "touch_int must drop once the report has been consumed");
+            guard = 0;
+            while (buttons[3:0] !== exp_btn[3:0] && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+            end
+            if (buttons[3:0] !== exp_btn[3:0])
+                $fatal(1, "releasing the touch gave buttons %02h, %02h expected", buttons, exp_btn);
+            if (dpad !== 4'b0000)
+                $fatal(1, "releasing the touch must clear the dpad, it is %b", dpad);
+            wait_quiet();
+        end
+    endtask
+
     task expect_dpad;
         input [15:0] x;
         input [15:0] y;
@@ -716,40 +758,71 @@ module tb_nes_touch_input;
         if (buttons !== 8'h03)
             $fatal(1, "key[0] and key[1] gave buttons %02h, 03 expected", buttons);
 
+        // A screen touch on its own must NOT change what the two keys do.  This is
+        // the regression for the defect that was found on the board: the
+        // substitution used to be keyed off touch_valid_q, so touching the screen
+        // to steer turned the two keys into Start and Select and firing with a key
+        // became impossible.  Both keys are already pressed here and stay pressed
+        // across the whole report, so under the old RTL buttons would be 8'h2c at
+        // this point (dpad 0010 with A and B released and Start and Select set)
+        // instead of 8'h23.
+        present_touch(16'd0, 16'd0, 8'h81);
+        if (touch_valid !== 1'b1)
+            $fatal(1, "the panel report must still be latched when the keys are checked");
+        if (dpad !== 4'b0010)
+            $fatal(1, "touch (0, 0) gave dpad %b, 0010 expected", dpad);
+        if (buttons[7:4] !== 4'b0010)
+            $fatal(1, "touch (0, 0) put %b in buttons[7:4], 0010 expected", buttons[7:4]);
+        if (buttons[1:0] !== 2'b11)
+            $fatal(1, "a screen touch released A and B, buttons[1:0] is %b", buttons[1:0]);
+        if (buttons[3:2] !== 2'b00)
+            $fatal(1, "a screen touch turned the keys into Start and Select, buttons[3:2] is %b",
+                   buttons[3:2]);
+        if (buttons !== 8'h23)
+            $fatal(1, "a screen touch changed what the keys do: buttons %02h, 23 expected", buttons);
+
+        release_touch(8'h03);
+
+        // The TPAD is what promotes them.  It is a discrete button on F16 and it is
+        // ACTIVE HIGH, the opposite of the two keys, so it is driven high here.
+        touch_key = 1'b1;
+        settle(DEBOUNCE + 32);
+        if (buttons !== 8'h0C)
+            $fatal(1, "holding the TPAD gave buttons %02h, 0c expected (Start and Select)", buttons);
+        if (buttons[0] !== 1'b0 || buttons[1] !== 1'b0)
+            $fatal(1, "A and B must be released while the TPAD is held");
+        if (buttons[3] !== 1'b1 || buttons[2] !== 1'b1)
+            $fatal(1, "key[0] must drive Start and key[1] must drive Select while the TPAD is held");
+        if (dpad !== 4'b0000)
+            $fatal(1, "the TPAD must not drive the dpad, dpad is %b", dpad);
+
+        // The screen dpad and the TPAD substitution are independent: both held at
+        // once must give dpad 0010 with Start and Select and A and B released.
         present_touch(16'd0, 16'd0, 8'h81);
         if (buttons !== 8'h2C)
-            $fatal(1, "while a touch is held the two keys gave buttons %02h, 2c expected", buttons);
+            $fatal(1, "the TPAD held with a reported touch gave buttons %02h, 2c expected", buttons);
         if (dpad !== 4'b0010)
-            $fatal(1, "the touch dpad must survive the substitution, dpad is %b", dpad);
-        if (buttons[0] !== 1'b0 || buttons[1] !== 1'b0)
-            $fatal(1, "A and B must be released while a touch is held");
-        if (buttons[3] !== 1'b1 || buttons[2] !== 1'b1)
-            $fatal(1, "key[0] must drive Start and key[1] must drive Select while a touch is held");
+            $fatal(1, "the touch dpad must survive the TPAD substitution, dpad is %b", dpad);
 
-        x_val      = 16'h0000;
-        y_val      = 16'h0000;
-        status_val = 8'h00;
-        int_drive  = 1'b1;
-        ct_int     = 1'b1;
-        guard = 0;
-        while (touch_valid !== 1'b0 && guard < 400000) begin
-            @(negedge clk);
-            guard = guard + 1;
-        end
-        if (touch_valid !== 1'b0)
-            $fatal(1, "the touch never released");
-        if (touch_int !== 1'b0)
-            $fatal(1, "touch_int must drop once the report has been consumed");
-        guard = 0;
-        while (buttons !== 8'h03 && guard < 400000) begin
-            @(negedge clk);
-            guard = guard + 1;
-        end
+        release_touch(8'h0C);
+
+        touch_key = 1'b0;
+        settle(DEBOUNCE + 32);
         if (buttons !== 8'h03)
-            $fatal(1, "releasing the touch gave buttons %02h, 03 expected", buttons);
-        if (dpad !== 4'b0000)
-            $fatal(1, "releasing the touch must clear the dpad, it is %b", dpad);
-        wait_quiet();
+            $fatal(1, "releasing the TPAD gave buttons %02h, 03 expected (A and B again)", buttons);
+
+        // The TPAD gets the same debounce as the keys: a pulse shorter than the
+        // window must neither substitute nor latch.
+        touch_key = 1'b1;
+        settle(DEBOUNCE - 8);
+        if (buttons[3:2] !== 2'b00)
+            $fatal(1, "a TPAD pulse shorter than the debounce window reached Start and Select");
+        touch_key = 1'b0;
+        settle(DEBOUNCE * 3);
+        if (buttons[3:2] !== 2'b00)
+            $fatal(1, "a TPAD pulse shorter than the debounce window latched the substitution");
+        if (buttons !== 8'h03)
+            $fatal(1, "the short TPAD pulse disturbed the keys, buttons %02h", buttons);
 
         key1 = 1'b1;
         guard = 0;
@@ -834,6 +907,7 @@ module tb_nes_touch_input;
                  addr_ok_cnt, clr_cnt, abort_stop_cnt, poll_cnt);
         $display("tb_nes_touch_input: cuts x_left=%0d x_right=%0d y_mid=%0d, debounce %0d clk, A after %0d clk",
                  XL, XR, YM, DEBOUNCE, a_press_g);
+        $display("tb_nes_touch_input: keys alone give A/B, a screen touch leaves them at A/B, only the TPAD promotes them to Start/Select");
         $display("PASS nes_touch_input");
         $finish;
     end
