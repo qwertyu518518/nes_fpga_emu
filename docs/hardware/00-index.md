@@ -80,6 +80,8 @@
 5. **按外设阅读 `05` 至 `09`**：VGA/LCD、TF/SD、SDRAM、WM8978、输入和引脚复用。
 6. **最后阅读 `10-board-validation.md` 和 `11-portability.md`**：用 P0 实验验收，并把可复用部分与 EP4CE10 适配部分分开。
 
+**工具侧另有一条路线（不属于上面 1–6 的板级顺序）**：要把任何面积或时序数字复现出来，先读 [`../00-overview/vivado-runbook.md`](../00-overview/vivado-runbook.md)——它是 Vivado 2018.3 在本机的操作手册（怎么起流程、2018.3 哪些选项不存在、负对照怎么写、结果怎么引用才有意义）。它记录的是**过程**，而过程产出的数字由 [`../00-overview/toolchains.md`](../00-overview/toolchains.md) 与 [`../00-overview/risk-register.md`](../00-overview/risk-register.md) 登记。**上板之前不需要读它；一旦要引用任何工具数字，它必须先读。**
+
 ## 6. 三个必须先建立的观念
 
 ### 6.1 硬件不是“执行语句的 CPU”

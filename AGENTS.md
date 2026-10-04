@@ -26,7 +26,7 @@ All files in this repository are **UTF-8 without BOM and LF line endings**.
 
 - Do **not** round-trip this repository's text files through PowerShell `Get-Content` / `Set-Content` / `Out-File`. Under Windows PowerShell 5.1 those cmdlets use the system ANSI code page, so UTF-8 Chinese is decoded as mojibake and the GBK decoder silently swallows LF bytes, collapsing line breaks. A real incident destroyed about 90 newlines in `README.md` (283 lines became 193) and the file had to be rebuilt by hand.
 - Use the editor tools for document edits. When a shell measurement of a text file is unavoidable, read it with `[IO.File]::ReadAllText($path, [Text.UTF8Encoding]::new($false, $true))` and never write it back that way.
-- After any bulk edit, verify: LF-only, no BOM, no U+FFFD, and a plausible line count.
+- After any bulk edit, verify: LF-only, no BOM, no U+FFFD, and a plausible line count. Run `.\tools\check_text_encoding.ps1`; it reads raw bytes, checks all four conditions, and exits non-zero on any violation. Add `-MinLines <n>` when an edit should not have reduced a file's length.
 
 ## Verification gate
 

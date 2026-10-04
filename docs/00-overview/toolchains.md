@@ -47,6 +47,10 @@
 
 **Quartus 侧另一条已知限制**：`quartus_sh --flow syn` 在 Lite Edition 上失败（`Error (18169): The Quartus Prime Pro Edition Design Software must be installed to use quartus_syn.`），改用 `quartus_map` / `quartus_fit` / `quartus_sh --flow compile`。旧版 `quartus` 13.1 在 `D:\altera\13.1\quartus\bin64\`，仅作回退；**第 10 节的全部数字都来自 23.1。**
 
+### 1.1 如何复现这些运行
+
+**本文件是"跑过什么"，不是"怎么跑"。** 本仓库每一次 Vivado 运行都留下了报告与日志，但**过程本身从未被写下来过**：要敲哪条命令才能得到这些数字、2018.3 上哪些选项不存在、负对照怎么写、结果该怎么引用，全部在 **[`vivado-runbook.md`](vivado-runbook.md)**。分工是固定的——**`toolchains.md` 继续是"跑了什么"的记录，`vivado-runbook.md` 是"怎么跑"的操作手册**，两者互相引用而不合并。**本节是那个文件的入口，不是它的摘要。**
+
 ---
 
 ## 2. 两次 PPU 探针用的是同一份东西
