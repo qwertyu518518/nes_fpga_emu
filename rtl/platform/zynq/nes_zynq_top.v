@@ -270,9 +270,13 @@ module nes_zynq_top #(
     input  wire        sys_clk,
     input  wire        sys_rst_n,
     // The two PL keys, active low on the board.  nes_touch_input debounces them
-    // and owns their polarity; it drives A/B or Select/Start depending on
-    // whether the touch panel is being used.
+    // and owns their polarity; it drives A/B, or Select/Start while the board
+    // TPAD below is held.
     input  wire [1:0]  key,
+    // The board's third discrete button, a momentary push button on its own pin,
+    // NOT a point on the capacitive panel.  It is active HIGH, unlike key[]; see
+    // the TPAD block in nes_zynq_top.xdc for the vendor evidence.
+    input  wire        touch_key,
     // Genuinely bidirectional: the vendor reads the panel ID back over these
     // pins (lcd_rgb_char.v:54).  Tri-stated whenever lcd_de is low.
     inout  wire [23:0] lcd_rgb,
@@ -509,6 +513,7 @@ module nes_zynq_top #(
         .sda_i      (touch_sda_i),
         .key0       (key[0]),
         .key1       (key[1]),
+        .touch_key  (touch_key),
         .buttons    (touch_buttons),
         .dpad       (touch_dpad),
         .touch_valid(touch_valid),

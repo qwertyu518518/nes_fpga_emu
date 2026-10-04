@@ -45,12 +45,34 @@
 #     is the inout requirement below actually holding.
 #   * The clock measurements are recorded next to the create_clock lines.
 #
-# What has NOT been checked, because the platform top does not exist yet: that
-# this file's port names match what the real top will declare.  Until then a
-# rename in the top silently produces Vivado 12-584 "No ports matched" instead
-# of a build failure, and a pin left unconstrained places wherever the placer
-# likes.  That is the remaining risk on this file, and it is not closable from
-# here.
+# COUNTS ABOVE ARE THE STUB PROBE'S, AND THE TPAD LINE MAKES THEM STALE.  They were
+# measured before this file constrained touch_key, so "38 PACKAGE_PIN lines" is now
+# 39 and "Total User IO = 38" is now 45.  The authoritative count for the file as it
+# stands is no longer the stub probe but the real routed build, measured on the full
+# platform top in D:\vivadoProject\zynq_bitstream_v6\ (Vivado 2018.3,
+# xc7z020-clg400-2, full non-OOC flow, real cartridge):
+#
+#   * 48 active [get_ports] lines, resolving to 45 DISTINCT port targets, and
+#     report_utilization-independent get_ports on the routed design returns exactly
+#     45 ports.  The 48-vs-45 gap is the create_clock targets on sys_clk, lcd_clk
+#     and aud_bclk, each of which carries a pin line as well.
+#   * report_io on that build: Total User IO = 45, placed 45 of 45, unplaced 0,
+#     DRC 0 errors, 0 routing errors.  So every line in this file, touch_key
+#     included, is a real pin of the real package.
+#   * touch_key read back by name AND by pin from that routed checkpoint:
+#     PACKAGE_PIN F16, IOSTANDARD LVCMOS33, DIRECTION IN; F16 carries exactly one
+#     port.  report_io agrees:
+#       | F16 | touch_key | High Range | IO_L6P_T0_35 | INPUT | LVCMOS33 |
+#   * check_timing on that build reports 0 lines of Vivado 12-584 "No ports
+#     matched", and report_io reports none either, so no line in this file names a
+#     port the real top does not declare.  That is the risk the next paragraph
+#     called open, and it is now closed by measurement.
+#
+# What has NOT been checked: nothing below is a guess, but the stub-probe block
+# above is a stub measurement, and the v6 numbers are the ones that describe this
+# file as it actually reads today.  A future edit that changes a port name in the
+# top must re-run the v6 probe or an equivalent, or the names can drift apart again
+# and Vivado 12-584 will report it silently rather than as a build failure.
 # =============================================================================
 
 
@@ -73,6 +95,34 @@ set_property -dict {PACKAGE_PIN N16 IOSTANDARD LVCMOS33} [get_ports sys_rst_n]
 # -----------------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN L14 IOSTANDARD LVCMOS33} [get_ports {key[0]}]
 set_property -dict {PACKAGE_PIN K16 IOSTANDARD LVCMOS33} [get_ports {key[1]}]
+
+
+# -----------------------------------------------------------------------------
+# TPAD: the board's third discrete button, on its own pin.
+# board XDC:21  touch_key F16, in the board file's own "#---- 触摸按键 ----"
+# section rather than under PL_KEY, and cross-checked against four per-example
+# XDCs that all carry the identical line, e.g.
+#     4_touch_led\...\touch_led.xdc:4      PACKAGE_PIN F16
+#     25_mdio_rw_test\...\mdio_rw_test.xdc:8
+#     26_eth_arp_test\...\eth_arp_test.xdc:7
+#     3_pl_key\...\ (none; no PL_KEY example constrains F16)
+#
+# It sits here with the keys because it IS a key, not because the board file
+# groups it there: it is a momentary push button, not a point on the GT9147.
+# The distinction matters, because key[0] and key[1] are active low and this one
+# is not.  Nothing in any XDC states the polarity, so it is taken from the
+# vendor's own RTL for this pin, in 4_touch_led:
+#     touch_led.v:51   assign touch_en = (~touch_key_d1) & touch_key_d0;
+#     touch_led.v:65   根据触摸按键上升沿的脉冲信号切换led状态
+#     tb_touch_led.v:22 #40 touch_key = 1'b1;   // 触摸按键按下
+# A RISING edge is the press, and the stimulus drives 1 to press, so touch_key is
+# ACTIVE HIGH: idle low, high while held.  nes_touch_input.v therefore reads
+# key_stable_q[2] with no inversion while inverting key_stable_q[0] and [1].
+# 26_eth_arp_test/srcs/sources_1/new/arp_ctrl.v:45 does the same edge detect.
+#
+# F16 was free before this line: no other PACKAGE_PIN in this file names it.
+# -----------------------------------------------------------------------------
+set_property -dict {PACKAGE_PIN F16 IOSTANDARD LVCMOS33} [get_ports touch_key]
 
 
 # -----------------------------------------------------------------------------
