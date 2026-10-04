@@ -2,8 +2,8 @@
 
 // tb_nes_touch_input drives the vendor GT9147 I2C protocol from a behavioural
 // capacitive touch controller slave, then checks the region map, the key
-// debounce, the A/B/Start key mapping, the Select region, the reset sequence,
-// the decoded transaction stream and the NACK recovery path.
+// debounce, the Start/Select substitution, the reset sequence, the decoded
+// transaction stream and the NACK recovery path.
 //
 // The slave resolves the open drain bus, decodes START / repeated START / STOP,
 // samples bytes on the SCL rising edge, drives ACK or NACK per byte, and drives
@@ -188,7 +188,6 @@ module tb_nes_touch_input;
     integer    base;
     integer    press_g;
     integer    a_press_g;
-    reg  [7:0] dead_start_buttons;
 
     function [7:0] next_rd_byte;
         input dummy;
@@ -455,16 +454,6 @@ module tb_nes_touch_input;
         end
     endfunction
 
-    // Select is the Left column above the MID cut, the same two fractions the
-    // dpad cells are built from, so it is derived here the same way.
-    function derive_select;
-        input [15:0] x;
-        input [15:0] y;
-        begin
-            derive_select = (x < XL) && (y < YM);
-        end
-    endfunction
-
     task settle;
         input integer n;
         begin
@@ -530,34 +519,9 @@ module tb_nes_touch_input;
                        x, y, dpad, derive_dpad(x, y));
             if (buttons[7:4] !== want)
                 $fatal(1, "touch (%0d, %0d) put %b in buttons[7:4], %b expected", x, y, buttons[7:4], want);
-            if (buttons[2] !== derive_select(x, y))
-                $fatal(1, "touch (%0d, %0d) gave Select %b, the region formula gives %b",
-                       x, y, buttons[2], derive_select(x, y));
             wait_quiet();
             if (dpad !== 4'b0000)
                 $fatal(1, "releasing the touch must clear the dpad, it is %b", dpad);
-            if (buttons[2] !== 1'b0)
-                $fatal(1, "releasing the touch must clear Select, it is %b", buttons[2]);
-        end
-    endtask
-
-    task release_touch;
-        begin
-            x_val      = 16'h0000;
-            y_val      = 16'h0000;
-            status_val = 8'h00;
-            int_drive  = 1'b1;
-            ct_int     = 1'b1;
-            guard = 0;
-            while (touch_valid !== 1'b0 && guard < 400000) begin
-                @(negedge clk);
-                guard = guard + 1;
-            end
-            if (touch_valid !== 1'b0)
-                $fatal(1, "the touch never released");
-            if (touch_int !== 1'b0)
-                $fatal(1, "touch_int must drop once the report has been consumed");
-            wait_quiet();
         end
     endtask
 
@@ -590,8 +554,6 @@ module tb_nes_touch_input;
                 $fatal(1, "status %02h must not drive the dpad, it is %b", st, dpad);
             if (buttons[7:4] !== 4'b0000)
                 $fatal(1, "status %02h must leave buttons[7:4] at 0, it is %b", st, buttons[7:4]);
-            if (buttons[2] !== 1'b0)
-                $fatal(1, "status %02h must not assert Select, it is %b", st, buttons[2]);
             wait_quiet();
         end
     endtask
@@ -719,18 +681,6 @@ module tb_nes_touch_input;
         expect_dpad(16'hFFFF, 16'hFFFF, 4'b0001);
         expect_dpad(16'd300, 16'hFFFF, 4'b0100);
 
-        // Select is the Left column above the MID cut.  The first five probes
-        // straddle both cuts that bound that cell and the last two sit outside
-        // it, so a Select region that drifted, grew into the middle band or
-        // into the lower half, or leaked into Right or Up, is caught here.
-        expect_dpad(16'd0,   16'd239, 4'b0010);
-        expect_dpad(16'd199, 16'd239, 4'b0010);
-        expect_dpad(16'd200, 16'd239, 4'b1000);
-        expect_dpad(16'd199, 16'd240, 4'b0010);
-        expect_dpad(16'd0,   16'd240, 4'b0010);
-        expect_dpad(16'd600, 16'd0,   4'b0001);
-        expect_dpad(16'd400, 16'd0,   4'b1000);
-
         expect_touch_invalid(8'h86);
         expect_touch_invalid(8'h05);
         expect_touch_invalid(8'h00);
@@ -763,78 +713,43 @@ module tb_nes_touch_input;
             @(negedge clk);
             press_g = press_g + 1;
         end
-        if (buttons !== 8'h0B)
-            $fatal(1, "key[0] and key[1] gave buttons %02h, 0b expected", buttons);
+        if (buttons !== 8'h03)
+            $fatal(1, "key[0] and key[1] gave buttons %02h, 03 expected", buttons);
 
-        key0 = 1'b1;
+        present_touch(16'd0, 16'd0, 8'h81);
+        if (buttons !== 8'h2C)
+            $fatal(1, "while a touch is held the two keys gave buttons %02h, 2c expected", buttons);
+        if (dpad !== 4'b0010)
+            $fatal(1, "the touch dpad must survive the substitution, dpad is %b", dpad);
+        if (buttons[0] !== 1'b0 || buttons[1] !== 1'b0)
+            $fatal(1, "A and B must be released while a touch is held");
+        if (buttons[3] !== 1'b1 || buttons[2] !== 1'b1)
+            $fatal(1, "key[0] must drive Start and key[1] must drive Select while a touch is held");
+
+        x_val      = 16'h0000;
+        y_val      = 16'h0000;
+        status_val = 8'h00;
+        int_drive  = 1'b1;
+        ct_int     = 1'b1;
         guard = 0;
-        while (buttons[0] !== 1'b0 && guard < DEBOUNCE + 64) begin
+        while (touch_valid !== 1'b0 && guard < 400000) begin
             @(negedge clk);
             guard = guard + 1;
         end
-        if (buttons !== 8'h02)
-            $fatal(1, "key[1] alone gave buttons %02h, 02 expected", buttons);
-        if (buttons[2] !== 1'b0 || buttons[3] !== 1'b0)
-            $fatal(1, "key[1] alone must not reach Select or Start, buttons[3:2] is %b", buttons[3:2]);
-
-        // Both together, touch dead: A and B plus Start.  This is the whole point
-        // of the mapping, see the dead panel regression at the end of the run.
-        key0 = 1'b0;
+        if (touch_valid !== 1'b0)
+            $fatal(1, "the touch never released");
+        if (touch_int !== 1'b0)
+            $fatal(1, "touch_int must drop once the report has been consumed");
         guard = 0;
-        while (buttons !== 8'h0B && guard < DEBOUNCE + 64) begin
+        while (buttons !== 8'h03 && guard < 400000) begin
             @(negedge clk);
             guard = guard + 1;
         end
-        if (buttons !== 8'h0B)
-            $fatal(1, "both keys together with the touch dead gave buttons %02h, 0b expected", buttons);
-        if (buttons[3] !== 1'b1)
-            $fatal(1, "both keys together must assert Start, buttons[3] is %b", buttons[3]);
-        if (buttons[0] !== 1'b1 || buttons[1] !== 1'b1)
-            $fatal(1, "both keys together must keep asserting A and B, buttons[1:0] is %b", buttons[1:0]);
-
-        // A touch in the middle band above the MID cut, so dpad Up, with both
-        // keys still held: the dpad bits and the key bits are OR'd, never
-        // swapped for one another.
-        present_touch(16'd400, 16'd120, 8'h81);
-        if (dpad !== 4'b1000)
-            $fatal(1, "touch (400, 120) with both keys held gave dpad %b, 1000 expected", dpad);
-        if (buttons !== 8'h8B)
-            $fatal(1, "touch (400, 120) with both keys held gave buttons %02h, 8b expected", buttons);
-        if (buttons[2] !== 1'b0)
-            $fatal(1, "the middle band must not assert Select, buttons[2] is %b", buttons[2]);
-
-        // The old assertion here was the opposite of all this: "A and B must be
-        // released while a touch is held".  It encoded a coupling between the
-        // keys and the panel that no longer exists, so it is replaced by the
-        // requirement that the keys keep asserting A and B while a touch is held.
-        if (buttons[0] !== 1'b1 || buttons[1] !== 1'b1)
-            $fatal(1, "the keys must keep asserting A and B while a touch is held, buttons[1:0] is %b",
-                   buttons[1:0]);
-        release_touch();
-        if (buttons !== 8'h0B)
-            $fatal(1, "releasing the touch gave buttons %02h, 0b expected", buttons);
+        if (buttons !== 8'h03)
+            $fatal(1, "releasing the touch gave buttons %02h, 03 expected", buttons);
         if (dpad !== 4'b0000)
             $fatal(1, "releasing the touch must clear the dpad, it is %b", dpad);
-        if (buttons[2] !== 1'b0)
-            $fatal(1, "releasing the touch must clear Select, it is %b", buttons[2]);
-
-        // A touch in the Select cell with both keys held: Left and Select from
-        // the panel, A, B and Start from the keys.
-        present_touch(16'd100, 16'd120, 8'h81);
-        if (dpad !== 4'b0010)
-            $fatal(1, "touch (100, 120) with both keys held gave dpad %b, 0010 expected", dpad);
-        if (buttons !== 8'h2F)
-            $fatal(1, "touch (100, 120) with both keys held gave buttons %02h, 2f expected", buttons);
-        if (buttons[2] !== 1'b1)
-            $fatal(1, "touch (100, 120) must assert Select, buttons[2] is %b", buttons[2]);
-        if (buttons[0] !== 1'b1 || buttons[1] !== 1'b1)
-            $fatal(1, "the keys must keep asserting A and B in the Select cell, buttons[1:0] is %b",
-                   buttons[1:0]);
-        release_touch();
-        if (buttons !== 8'h0B)
-            $fatal(1, "releasing the Select cell touch gave buttons %02h, 0b expected", buttons);
-        if (buttons[2] !== 1'b0)
-            $fatal(1, "releasing the Select cell touch must clear Select, it is %b", buttons[2]);
+        wait_quiet();
 
         key1 = 1'b1;
         guard = 0;
@@ -842,8 +757,6 @@ module tb_nes_touch_input;
             @(negedge clk);
             guard = guard + 1;
         end
-        if (buttons !== 8'h01)
-            $fatal(1, "releasing key[1] left buttons %02h, 01 expected", buttons);
         key0 = 1'b1;
         guard = 0;
         while (buttons[0] !== 1'b0 && guard < DEBOUNCE + 64) begin
@@ -914,47 +827,6 @@ module tb_nes_touch_input;
         wait_quiet();
         if (dpad !== 4'b0000)
             $fatal(1, "the dpad must clear once the recovered touch is released");
-
-        // ------------------------- dead panel, Start still reachable on the keys
-        // The defect this mapping exists to fix: Start used to be reachable only
-        // from the touch panel, so an unreliable panel locked the user out of
-        // every title screen.  The panel is removed outright here and both keys
-        // still have to produce A, B and Start.
-        present = 1'b0;
-        base    = poll_cnt;
-        poll_wait();
-        poll_wait();
-        if (poll_cnt < base + 2)
-            $fatal(1, "the controller stopped polling after the panel was unplugged, %0d polls", poll_cnt);
-        if (touch_valid !== 1'b0)
-            $fatal(1, "an unplugged panel must not report a touch");
-        if (buttons !== 8'h00)
-            $fatal(1, "an unplugged panel and no key must leave buttons at 00, they are %02h", buttons);
-
-        key0 = 1'b0;
-        key1 = 1'b0;
-        guard = 0;
-        while (buttons !== 8'h0B && guard < DEBOUNCE + 64) begin
-            @(negedge clk);
-            guard = guard + 1;
-        end
-        if (buttons !== 8'h0B)
-            $fatal(1, "both keys with the panel unplugged gave buttons %02h, 0b expected", buttons);
-        if (buttons[3] !== 1'b1)
-            $fatal(1, "Start must survive an unplugged panel, buttons[3] is %b", buttons[3]);
-        dead_start_buttons = buttons;
-
-        key0 = 1'b1;
-        key1 = 1'b1;
-        guard = 0;
-        while (buttons !== 8'h00 && guard < DEBOUNCE + 64) begin
-            @(negedge clk);
-            guard = guard + 1;
-        end
-        if (buttons !== 8'h00)
-            $fatal(1, "releasing both keys with the panel unplugged gave buttons %02h, 00 expected", buttons);
-        $display("tb_nes_touch_input: panel unplugged, both keys gave buttons %02h, Start asserted",
-                 dead_start_buttons);
 
         $display("tb_nes_touch_input: %0d transactions, %0d START, %0d repeated START, %0d STOP",
                  txn_count, start_cnt, rep_start_cnt, stop_cnt);

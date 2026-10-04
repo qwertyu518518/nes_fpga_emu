@@ -37,19 +37,14 @@
 // them is split at the MID fraction of the panel height into Up and Down. The
 // cuts are the first pixel of the higher region, so x == X_LEFT_EDGE is already
 // in the middle band and x == X_RIGHT_EDGE is already Right, y == Y_MID_EDGE is
-// already Down. Those four cells tile the panel, so every (x, y) is in exactly
-// one of them. Select is the fifth named region laid over one of those cells,
-// the Left column above the MID cut, so it reuses the EDGE_L and MID fractions
-// and adds no new constant; because the four cells already tile the panel it
-// cannot be disjoint, and a touch there asserts Left and Select together.
+// already Down. No (x, y) falls outside all five regions.
 //
 // buttons[7:0] drives nes_controller.v: bit 0 is the first bit shifted out on
 // $4016, so the order is A, B, Select, Start, Up, Down, Left, Right, and
 // buttons[7:4] is exactly the touch dpad {Up, Down, Left, Right}.
-// key[0] and key[1] are the two active low PL keys. The board carries only two
-// physical keys, so they drive A and B for blind play; holding both together
-// asserts Start as well as A and B, because when Start was reachable only from
-// touch an unreliable panel locked the user out of every title screen.
+// key[0] and key[1] are the two active low PL keys. While touch_valid is high
+// they drive Start and Select instead of A and B, because those two pairs of
+// NES buttons are never needed at the same time.
 
 module nes_touch_input #(
     parameter integer CLK_HZ             = 50_000_000,
@@ -377,7 +372,11 @@ module nes_touch_input #(
 
     wire       key0_pressed  = ~key_stable_q[0];
     wire       key1_pressed  = ~key_stable_q[1];
-    wire       key_start     = key0_pressed & key1_pressed;
+    wire       ab_substituted = touch_valid_q;
+    wire       key_start     = ab_substituted & key0_pressed;
+    wire       key_select    = ab_substituted & key1_pressed;
+    wire       btn_a         = ~ab_substituted & key0_pressed;
+    wire       btn_b         = ~ab_substituted & key1_pressed;
 
     wire       region_left   = (touch_x_q <  X_LEFT_EDGE);
     wire       region_right  = (touch_x_q >= X_RIGHT_EDGE);
@@ -389,9 +388,7 @@ module nes_touch_input #(
                                 touch_valid_q & region_left,
                                 touch_valid_q & region_right};
 
-    wire       touch_select  = touch_valid_q & region_left & region_upper;
-
-    assign buttons     = {touch_dpad, key_start, touch_select, key1_pressed, key0_pressed};
+    assign buttons     = {touch_dpad, key_start, key_select, btn_b, btn_a};
     assign dpad        = touch_dpad;
     assign touch_valid = touch_valid_q;
     assign touch_x     = touch_x_q;
