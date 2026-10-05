@@ -116,7 +116,31 @@ module tb_nes_ppu2c02_ext_chr;
     reg [8:0]  trig_dot;
     reg [12:0] lo_addr_q;
     reg [12:0] hi_addr_q;
-    reg        latch_pend;
+    // THE HAND-OFF WINDOW, AND WHY IT IS TWO ce AND NOT ONE.
+    //
+    // Pre-fix the PPU captured the planes whenever chr_fetch_bg_valid rose, so
+    // the check below could sample bg_lo_q on the very next ce.  It no longer
+    // can, and the reason is structural rather than incidental: nes_ppu2c02
+    // captures on a SCHEDULED dot (nes_ppu2c02.v "THE SCHEDULED CAPTURE"),
+    // seven ce after the accepted request, because bg_valid's rising ce does
+    // not name the dot -- it is trigger+7 when the fetch ran at full speed and
+    // trigger+8 when a $2007 read arm froze the unit for one ce.  The tile the
+    // fetch exists for is displayed at trigger+9 either way, so the capture has
+    // to be at trigger+8 in BOTH cases and one of the two cases therefore has
+    // its capture one ce AFTER its valid pulse.  Absorbing the freeze moves the
+    // capture, it does not preserve the old edge, so this sampling window is
+    // two ce wide and that is the whole change.
+    //
+    // What did NOT change is what is compared: bg_lo_q / bg_hi_q against
+    // chr_mem[] AT THE ADDRESS THE FETCH UNIT ITSELF LATCHED (lo_addr_q /
+    // hi_addr_q, recorded from the muxed bus on each beat and gated on
+    // req_idx[0], the same parity the unit uses to pick its plane).  Every
+    // background fetch is checked, not a sampled subset: latch_checked counts
+    // one per rise of bg_valid and is printed as "A3 verified latched plane
+    // pairs" beside addr_checked, the same number of request addresses.  The
+    // window is a shift, not a relaxation -- nothing here can skip a fetch, and
+    // the assertion below still fires on the first mismatched byte.
+    reg  [1:0]  latch_pend;
     reg        bg_valid_q;
     reg        bg_busy_q;
     reg [8:0]  latch_sl;
@@ -863,18 +887,28 @@ module tb_nes_ppu2c02_ext_chr;
                 latch_hi = hi_addr_q;
                 latch_sl = sl_b;
                 latch_dot = dot_b;
-                latch_pend = 1'b1;
+                // 2 = the capture is one ce further out than the pulse.  The
+                // post-fix relation this encodes, measured on a full-speed fetch:
+                // fetch accepted at trigger, chr_req beats at trigger+3/+5,
+                // bg_valid at trigger+7, SCHEDULED capture at trigger+8, tile
+                // live in bg_lo_q at trigger+9.  With a one-ce freeze the
+                // acceptance is still at trigger and the capture is still at
+                // trigger+8, so the window below is the one dot that is common
+                // to both cases.
+                latch_pend = 2'd2;
                 if (run_bg)
                     case_latch = case_latch + 1;
-            end else if (latch_pend === 1'b1) begin
-                latch_pend = 1'b0;
-                if (frame_cnt >= WARMUP_FRAMES) begin
+            end else if (latch_pend !== 2'd0) begin
+                latch_pend = latch_pend - 2'd1;
+                if (latch_pend !== 2'd0) begin
+                    // first ce of the window: the capture has not happened yet
+                end else if (frame_cnt >= WARMUP_FRAMES) begin
                     if (dut_b.g_chr_external.bg_lo_q !== chr_mem[latch_lo])
-                        $fatal(1, "A3 latched low plane %02h != chr_mem[%0d] %02h (pulse at %0d:%0d)",
+                        $fatal(1, "A3 latched low plane %02h != chr_mem[%0d] %02h (bg_valid rose at %0d:%0d; the PPU captures at trigger+8 and this sample is trigger+9)",
                                dut_b.g_chr_external.bg_lo_q, latch_lo,
                                chr_mem[latch_lo], latch_sl, latch_dot);
                     if (dut_b.g_chr_external.bg_hi_q !== chr_mem[latch_hi])
-                        $fatal(1, "A3 latched high plane %02h != chr_mem[%0d] %02h (pulse at %0d:%0d)",
+                        $fatal(1, "A3 latched high plane %02h != chr_mem[%0d] %02h (bg_valid rose at %0d:%0d; the PPU captures at trigger+8 and this sample is trigger+9)",
                                dut_b.g_chr_external.bg_hi_q, latch_hi,
                                chr_mem[latch_hi], latch_sl, latch_dot);
                     case_pairs = case_pairs + 1;
@@ -1084,7 +1118,7 @@ module tb_nes_ppu2c02_ext_chr;
         trig_base = 13'd0;
         req_base = 13'd0;
         trig_name = 8'h00;
-        latch_pend = 1'b0;
+        latch_pend = 2'd0;
         bg_valid_q = 1'b0;
         bg_busy_q = 1'b0;
         latch_lo = 13'd0;

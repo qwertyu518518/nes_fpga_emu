@@ -21,7 +21,6 @@ module nes_chr_fetch_unit (
   localparam [2:0] S_ARM  = 3'd2;
   localparam [2:0] S_BEAT = 3'd3;
   localparam [2:0] S_GRAB = 3'd4;
-  localparam [2:0] S_DONE = 3'd5;
 
   reg  [2:0]  state;
   reg  [12:0] base_q;
@@ -90,17 +89,13 @@ module nes_chr_fetch_unit (
           if (cap_pl) bg_hi <= chr_rdata;
           else        bg_lo <= chr_rdata;
           if (fin_q) begin
-            state <= S_DONE;
+            busy     <= 1'b0;
+            bg_valid <= 1'b1;
+            state    <= S_IDLE;
           end else begin
             chr_req <= 1'b1;
             state   <= S_BEAT;
           end
-        end
-
-        S_DONE: begin
-          busy     <= 1'b0;
-          bg_valid <= 1'b1;
-          state    <= S_IDLE;
         end
 
         default: state <= S_IDLE;

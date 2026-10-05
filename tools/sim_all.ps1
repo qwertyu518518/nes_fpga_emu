@@ -5,7 +5,7 @@ param(
         'cpu', 'ppu', 'apu', 'bus', 'mapper', 'controller', 'cart', 'video', 'system', 'platform', 'peripheral',
         'cpu-core', 'cpu-integration', 'cpu-bus', 'cpu-inc',
         'ppu-core', 'ppu-sprite', 'ppu-oam-dma', 'ppu-integration', 'chr-feasibility-tb',
-        'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb', 'chr-arb-tb', 'chr-wr-arb-tb',
+        'chr-fetch-core', 'chr-fetch-tb', 'ppu-ext-chr-tb', 'chr-arb-tb', 'chr-wr-arb-tb', 'bg-fetch-drop-tb',
         'sprite-fetch-core', 'sprite-fetch-tb',
         'apu-core', 'apu-tb',
         'bus-tb',
@@ -342,6 +342,43 @@ $allTargets = @(
         Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_chr_wr_collision.v')
         Standard    = '2012'
         Run         = $true
+    },
+    # The only bench in the tree with a deliberately NON-UNIFORM nametable, and
+    # that is the whole reason it exists: the two benches above both fill the
+    # nametable with tile $01, so every fetched tile is byte-identical and a
+    # one-tile error in the fetch stream is arithmetically invisible to them.
+    # Here a substituted tile is wrong on 4 of its 8 dots, which is the most
+    # damage a tile substitution can do in this CHR model.
+    #
+    # It MEASURED this defect for four commits: $2007 CHR read traffic froze the
+    # background fetch unit for one ce, the pipeline had zero slack, and the
+    # freeze cost a whole tile -- 5236 dropped requests and 11578 of 184304
+    # gated visible dots wrong over 3 frames.  It was deliberately NOT a gate
+    # target while that was true, because W2 was thousands and a target that ran
+    # it would either enshrine the defect or break the gate.
+    #
+    # The freeze is now absorbed (the tile occupancy is 7 ce against an 8 ce
+    # cadence, and the PPU captures on a scheduled dot rather than on bg_valid's
+    # rising edge), W2 IS ASSERTED TO BE ZERO, and this is the gate that keeps it
+    # there.  What makes the zero worth gating is the anti-vacuity pair around
+    # it: S1 fatals if the run froze the unit on ZERO ce, so the 0 cannot come
+    # from the two instances never differing, and R6 fatals if a read-traffic run
+    # never saw a one-ce freeze.  The freeze count here is ~2800.
+    #
+    # +rd=1 +wr=1 is the mode, which exercises both $2007 directions.  The other
+    # modes (the control, the +fx 0..7 sweep, +mask with the dot-324 pre-fetch
+    # disabled, +mid mid-frame scroll, +carry) are diagnostics run by hand; they
+    # are listed in the bench header.  Elaborates only $ppuSources, so it is
+    # cheap to compile, and takes about 3 minutes of simulation.
+    [pscustomobject]@{
+        Id          = 'bg-fetch-drop-tb'
+        Group       = 'ppu'
+        Label       = 'Background fetch drop / freeze absorption tb (non-uniform nametable)'
+        Top         = 'tb_bg_fetch_drop'
+        Sources     = $ppuSources + (Join-Path $repoRoot 'tb\ppu\tb_bg_fetch_drop.v')
+        Standard    = '2012'
+        Run         = $true
+        RunArgs     = @('+rd=1', '+wr=1', '+nt=1', '+frames=3')
     },
     [pscustomobject]@{
         Id          = 'sprite-fetch-core'
@@ -842,8 +879,15 @@ foreach ($target in $selected) {
 
     if ($status -eq 'PASS' -and $target.Run) {
         $stage = 'simulate'
-        Write-Output ("--- vvp {0}" -f $outputPath)
-        $simulateExitCode = Invoke-SimulationTool -Executable $vvpPath -Arguments @($outputPath)
+        # RunArgs is optional: a target that needs plusargs to reach the
+        # configuration it means to test declares them, and everything else
+        # runs with none.  Only bg-fetch-drop-tb uses it today.
+        $simulateArguments = @($outputPath)
+        if ($target.PSObject.Properties.Name -contains 'RunArgs') {
+            $simulateArguments += $target.RunArgs
+        }
+        Write-Output ("--- vvp {0}{1}" -f $outputPath, $(if ($simulateArguments.Count -gt 1) { ' ' + ($simulateArguments[1..($simulateArguments.Count - 1)] -join ' ') } else { '' }))
+        $simulateExitCode = Invoke-SimulationTool -Executable $vvpPath -Arguments $simulateArguments
         if ($simulateExitCode -ne 0) {
             $status = 'FAIL'
             $detail = "vvp exit $simulateExitCode"

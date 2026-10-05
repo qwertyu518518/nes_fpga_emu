@@ -17,32 +17,58 @@
 // are invisible FOR THAT CARTRIDGE.  It says nothing at all about a cartridge
 // whose nametable is not uniform, which is to say most real ones.
 //
-// The freeze is not free.  bg_fetch_due fires every 8 ce and one background
-// tile is 8 ce (S_PRE, S_ARM, S_BEAT, S_GRAB, S_BEAT, S_GRAB, S_DONE, S_IDLE),
-// so the pipeline has ZERO slack and a one-ce freeze drops a whole request.
-// NOTE ON THE DROP COUNTS: they are STIMULUS SPECIFIC and are not expected to
-// reproduce any particular earlier number.  tb_chr_wr_collision's W7 line
-// measures 25152 due / 22869 accepted / 2283 dropped over 3 frames after
-// 00ca051 and 19914 / 5238 after 263f8c1, at ITS $2007 cadence; this bench
-// runs one $2007 access per two to six div_phase windows and therefore drops
-// more.  What has to hold is the ratio and the zero-slack arithmetic: one
-// ce of freeze, one whole tile of cost.
+// The freeze is not free.  That WAS true, and the fix for it is what this bench
+// now exists to prove.  Before the fix, bg_fetch_due fired every 8 ce and one
+// background tile occupied 8 ce (S_PRE, S_ARM, S_BEAT, S_GRAB, S_BEAT,
+// S_GRAB, S_DONE, S_IDLE), so the pipeline had ZERO slack and a one-ce freeze
+// dropped a whole request.  After the fix the occupancy is 7 ce (S_DONE is
+// merged into the final S_GRAB) and the PPU captures on a SCHEDULED dot seven
+// ce after the accepted request instead of on bg_valid's rising edge, so one
+// freeze is absorbed with the displayed image unchanged.
 //
-// WHAT THIS CHANGE MOVED, MEASURED HERE, 3 frames, +nt=1 (the default).  The
-// $2007 CHR WRITE no longer takes the CHR read address -- nes_system_v6 feeds
-// the mapper from ppu_chr_addr unconditionally -- so nes_ppu2c02 no longer
-// freezes a fetch unit for chr_we and the write-side drops are gone:
+// THE NUMBER THIS BENCH ERASES, which is the whole point of the change:
+//   11578 wrong dots out of 184304 gated visible dots, 3 frames, +nt=1,
+//   $2007 CHR reads only (25152 due / 19916 accepted / 5236 dropped).
+// After the fix that same mode measures 0 wrong dots and 0 freeze-induced
+// drops, and the freeze count is UNCHANGED at 5585 -- so absorption is real
+// rather than the collisions having stopped happening.  That invariance is
+// the single most important number in this file: if the freezes had gone
+// away instead of being absorbed, W2's zero would prove nothing.
+//
+// NOTE ON THE OTHER DROP COUNTS: they are STIMULUS SPECIFIC and are not
+// expected to reproduce any particular earlier number.  tb_chr_wr_collision's
+// W7 line measures 25152 due / 22869 accepted / 2283 dropped over 3 frames
+// after 00ca051 and 19914 / 5238 after 263f8c1, at ITS $2007 cadence; this
+// bench runs one $2007 access per two to six div_phase windows.  The counts
+// that are NOT stimulus specific are the ratios the assertions use: W2's
+// wrong-dot count against the gated dot count, and W3's split of drops into
+// STALLS (a freeze cost, must be 0) versus bg_fetch_due PHASE CHANGES (which
+// the never-frozen reference suffers identically, so they cancel out of the
+// A/B and are reported rather than asserted away).
+//
+// WHAT THE FIRST CHANGE MOVED (263f8c1, the write-side mux removal).  The $2007
+// CHR WRITE no longer takes the CHR read address -- nes_system_v6 feeds the
+// mapper from ppu_chr_addr unconditionally -- so nes_ppu2c02 no longer freezes
+// a fetch unit for chr_we and the write-side drops are gone:
 //   before (263f8c1)          after
 //     rd=0 wr=0  25152/25152/0      25152/25152/0      pixel diffs 0 -> 0
 //     rd=1 wr=0  25152/19916/5236   25152/19916/5236   pixel diffs 11578 -> 11578
 //     rd=0 wr=1  25152/22010/3142   25152/25152/0     pixel diffs 8317 -> 0
 //     rd=1 wr=1  25152/22448/2704   25152/22534/2618   pixel diffs 5996 -> 5774
 // (due / accepted / dropped, out of 25152 requests; pixel diffs out of 184304
-// gated visible dots.)  THE READ-ONLY ROW IS BYTE-IDENTICAL, which is the point:
-// the $2007 read arm still takes the read address and still freezes the unit,
-// so nothing about that row was supposed to move.  The write-only row goes to
-// ZERO DROPS AND ZERO PIXELS.  The both row keeps 2618 drops, which is the
-// arm's share and is not fixed by this change.
+// gated visible dots.)  THE READ-ONLY ROW WAS BYTE-IDENTICAL then, which is the
+// point: the $2007 read arm still took the read address and still froze the
+// unit, so nothing about that row was supposed to move.
+//
+// WHAT THIS CHANGE MOVES, MEASURED HERE, 3 frames, +nt=1 (the default).  The
+// read-side freeze is now ABSORBED rather than fatal, so the read-only row is
+// the one that moves:
+//   rd=1 wr=0  before  25152/19916/5236   pixel diffs 11578
+//              after   25152/25152/0      pixel diffs 0
+// (freeze ce inside a tile: 5585 before, 5585 after -- UNCHANGED, and that
+// invariance is the evidence that the freeze was absorbed rather than avoided.)
+//   rd=0 wr=1  25152/25152/0      pixel diffs 0        (write side, already fixed)
+//   rd=1 wr=1  see the run's own output; the read arm's share is gone too
 //
 // WHAT IS UNDER TEST
 //   The same A/B shape the two collision benches use, with the ONE thing changed
@@ -107,12 +133,25 @@
 //       the reason any pixel difference below is a MISSING tile and not a
 //       WRONG one.
 //   W2  Pixel-for-pixel A/B against the reference over every gated visible dot.
-//       This is the number the question asks for.  It is NOT asserted to be
-//       zero: on the committed RTL it is expected to be non-zero, and the bench
-//       says so out loud rather than hiding a defect behind a fatal.
-//   W3  The drop census, split into drops whose target dot lands in the visible
-//       field and drops whose target lands in vblank, because only the former
-//       can cost a pixel.
+//       This is the number the question asks for, and it is NOW ASSERTED TO BE
+//       ZERO.  It was not, and said so out loud rather than hiding a defect
+//       behind a fatal, because on the RTL of the time it was 11578 and rising.
+//       The freeze is absorbed now and the count is 0, so the assertion is the
+//       point of the bench.
+//   W3  The drop census, split by CAUSE rather than by location alone, because
+//       the two causes need opposite treatment and conflating them is how a
+//       freeze artefact once looked like a trigger-cadence artefact:
+//       * STALLS -- a trigger arriving on the full 8-ce cadence and finding the
+//         unit still busy.  This is THE FREEZE COST and it must be 0.
+//       * PHASE CHANGES -- a trigger arriving inside the previous fetch's
+//         cadence because bg_fetch_due's own phase moved (a $2005 write changes
+//         fine_x, and fine_x appears in two of the three trigger expressions).
+//         The never-frozen reference suffers these identically, so they cancel
+//         out of the A/B, and they are reported rather than asserted away.  The
+//         +fx sweep found both sub-cases: a request DROPPED, and a request
+//         accepted whose CAPTURE was then stranded by the next trigger.
+//       Each is further split by whether the dropped tile's target dot lands in
+//       the visible field, because only the former can cost a pixel.
 //   W3  THE $2007 CHR READ IS STILL CORRECT.  The read arm is on the critical
 //       path of this bench, so the byte it hands the CPU is checked.  The
 //       expectation is the v_addr LATCHED AT THE ARM BEAT, not the v_addr at the
@@ -148,23 +187,45 @@
 //           request past the next bg_fetch_due, so the request is DROPPED: the
 //           dropped tile's own 8-dot window [T, T+7] is then served by whatever
 //           bg_lo_q/bg_hi_q still held, which is the tile for T-8.
-//   W9  HOW MUCH SLACK WOULD BE ENOUGH.  The freeze costs the pipeline ce, so
-//       the number that decides whether a fix can work is not "how many freezes
-//       happen" but "how many frozen ce land inside ONE background tile's 8-ce
-//       occupancy".  One ce of added slack absorbs one; two absorb two.  W9
-//       histograms that count per accepted fetch and prints the maximum, so the
-//       "give the pipeline one more ce" option is costed against a measurement
-//       rather than against an assumption.  MEASURED over 3 frames in every mode:
+//   W9  HOW MUCH SLACK IS ENOUGH, AND WHY ONE IS ENOUGH HERE.  The freeze costs
+//       the pipeline ce, so the number that decides whether a fix can work is not
+//       "how many freezes happen" but "how many frozen ce land inside ONE
+//       background tile's occupancy".  W9 histograms that count per accepted
+//       fetch and prints the maximum.  MEASURED over 3 frames in every mode:
 //       the maximum is 1 where the $2007 READ arm runs (5585 freeze ce in rd
-//       mode, 2792 in both mode, all of them singly inside a tile) and 0 in the
-//       write-only and control modes, which is what removing the write freeze
-//       from chr_hold_bg predicts.  The maximum is never 2.  That is consistent with
-//       the source argument that two freezes cannot land on CONSECUTIVE ce (an
-//       arm exists only at div_phase 8 and a write strobe only at div_phase 0,
-//       and the div_phase-0 edge of the next window IS the retire beat of the
-//       access whose arm was at div_phase 8, so it is a read whenever the arm
-//       fired), but the bench does not rely on that argument: it measures the
-//       number the option depends on.
+//       mode, 2792 in both mode, 5410 with the dot-324 pre-fetch disabled, all
+//       of them singly inside a tile) and 0 in the write-only and control modes,
+//       which is what removing the write freeze from chr_hold_bg predicts.  The
+//       maximum is never 2, which is consistent with the source argument that
+//       two freezes cannot land on CONSECUTIVE ce (an arm exists only at
+//       div_phase 8, and the div_phase-0 edge of the next window IS the retire
+//       beat of the access whose arm was at div_phase 8, so it is a read
+//       whenever the arm fired).  The bench does not rely on that argument: it
+//       measures the number the fix depends on.
+//
+//       WHY A MAXIMUM OF 1 IS SUFFICIENT, and this is the arithmetic the fix
+//       rests on.  The cadence is one request every 8 ce.  Unfrozen, a tile
+//       occupies 7 ce (S_DONE merged into the final S_GRAB), so there is 1 ce of
+//       slack and a single freeze fills it exactly.  With one freeze the tile
+//       occupies 8 ce, which is the cadence, so the next request is still
+//       accepted on time -- MEASURED: W3's STALL count is 0 in every mode, and
+//       the +fx sweep of 0..7 all report 0.  A SECOND freeze on the same tile
+//       would need 9 ce and would drop the request; that is the residual
+//       exposure and it is bounded by W9's maximum of 1, not by an assumption.
+//       The freeze can only land on a beat ce anyway, and with one tile that is
+//       trigger+3 or trigger+5 -- MEASURED on a live PPU, see the header of
+//       nes_ppu2c02.v -- so there is no ce in the occupancy where a freeze could
+//       be adjacent to another freeze.
+//   R7  ARM SPACING, because the fix budgets exactly ONE ce of slack per tile and
+//       that budget is only sufficient if two arms can never freeze the same
+//       fetch.  Measured on this bench's real $2007 cadence: the closest two
+//       arms ever came was 9 ce in +rd mode and 18 ce in +rd+wr mode, 0 pairs one
+//       ce apart, and at most ONE arm ever landed inside a single background
+//       fetch's occupancy.  The structural reason is that an arm exists only on a
+//       div_phase 8 clk and ce_ppu edges sit at div_phase 0, 4 and 8, so an arm
+//       can be no closer than 4 clk = 1 ce to another; the measurement is the
+//       practical form of that bound on this stimulus rather than a substitute
+//       for it, and arms_in_fetch_max is asserted to be 0 above 1.
 //   W6  The two CHR arrays are byte identical and no store ever changed a byte:
 //       the SAME store is applied to both at the same ce, the reference's own
 //       $2007 write strobe is structurally absent (counted, and required to be 0),
@@ -177,24 +238,66 @@
 //       store window is provably out of their reach.  The measured consequence
 //       of not knowing that, with a data-changing store, was 48 wrong pixels in
 //       +wr mode that no drop explained.
-//   W7  The REFERENCE never drops.  If it did, the A/B would be comparing two
-//       broken instances and the difference would prove nothing.
+//   W7  The REFERENCE must not drop for a reason the armed instance does not
+//       share.  It used to be asserted as "zero drops at all", which was right
+//       while the freeze was the only mechanism.  The +fx sweep found the second
+//       one -- bg_fetch_due's own phase changing when a $2005 write moves
+//       fine_x -- which the never-frozen reference suffers identically, so the
+//       assertion became "the two instances drop the SAME number".  That is the
+//       property that actually makes the A/B an A/B, and it is not a relaxation:
+//       a disagreement would mean the only structural difference between the
+//       instances had done something different to them.
 //   W8  The two instances agree on every PPU register that feeds the fetch
 //       address, so the reference's picture is the picture the stimulus asked
 //       for.
+//   R6  THE ABSORPTION ASSERTION, in the form that is actually implementable.
+//       The requirement was first written as a LITERAL IDENTITY between the
+//       freeze count and the wrong-pixel count, and that identity is NOT
+//       implementable, for a reason this bench measured rather than argued.  The
+//       pre-fix wrong-dot run-length histogram was 2535 single-dot runs, 4763
+//       runs of 2..9, 2403 of 10..16, 1201 of 17..32, 595 of 33+, and 81 more
+//       outside the attribution window -- 11497 accounted for out of 11578.  Two
+//       consequences make an integer equality impossible to satisfy honestly:
+//         * a drop costs about 2.2 pixels, not one (11578 over 5236 read-side
+//           drops), because a substituted tile is wrong on 4 of its 8 dots in
+//           this CHR model and the stale tile stays in place for the missing
+//           tile's whole 8-dot window;
+//         * some freezes wounded the picture WITHOUT dropping anything -- a
+//           freeze landing on the unit's FIRST S_BEAT delays the latch by one
+//           ce and costs a single dot, and it has no drop to point at, which is
+//           why the freeze history exists alongside the drop history.
+//       So 11578 is recorded as the number the fix erases, and what is asserted
+//       is the property that actually says "absorption is real":
+//         one_freeze_count > 0   the run really did freeze units, so a zero
+//                                pixel count is not vacuous
+//         wrong_pixels    == 0  and no freeze reached a pixel
+//         captures_missed     -- no accepted request was stranded, beyond the
+//                                bg_fetch_due phase changes that the reference
+//                                suffers identically
+//         torn_relatches  == 0  and no re-latch ever overwrote a byte mid-flight
+//       No integer equality is manufactured to match the original wording.
 //   S1  SETUP.  The nametable really is non-uniform, really does have
 //       horizontally distinct neighbours, and the mode really did provoke the
 //       freezes and the drops it claims to have provoked.  Without these the
 //       bench would silently degenerate back into the uniform case it exists to
 //       leave behind.
 //
-// WHAT THIS BENCH IS, AND WHY IT IS NOT A GATE TARGET
-//   It MEASURES a defect.  W2 is not asserted to be zero and on the committed
-//   RTL it is thousands, so a target that ran this and passed would be a target
-//   that had enshrined the defect, and a target that ran it and failed would
-//   break the gate until the defect is fixed.  tools/sim_all.ps1 is therefore
-//   deliberately left at 62 targets and this file is deliberately left out of
-//   it.  It is a diagnostic to run by hand:
+// WHAT THIS BENCH IS, AND WHY IT IS NOW A GATE TARGET
+//   It USED TO MEASURE A DEFECT and was deliberately left out of
+//   tools/sim_all.ps1: W2 was not asserted to be zero and on the committed RTL
+//   it was thousands, so a target that ran it and passed would have enshrined
+//   the defect and a target that ran it and failed would have broken the gate.
+//   The defect is fixed, W2 IS NOW ASSERTED TO BE ZERO, and the bench is
+//   tools/sim_all.ps1 target #63 (id bg-fetch-drop-tb).  What made it safe to
+//   promote is not the zero on its own -- a zero is only worth gating if it
+//   could have been non-zero -- but the anti-vacuity pair around it:
+//     * S1 fatals if the run froze the background unit on ZERO ce, because then
+//       the two instances were never different and a 0-diff A/B would prove
+//       nothing.  The freeze count is ~5600 in +rd mode.
+//     * R6 reports one_freeze_count (accepted fetches that saw exactly ONE
+//       frozen ce) and fatals if a run generated read traffic without any.
+//   The gate runs the +rd=1 +wr=1 mode, which exercises both $2007 directions.
+//   The other modes below are diagnostics and are run by hand:
 //       iverilog -g2012 -s tb_bg_fetch_drop -o drop.vvp \
 //         rtl/nes_core/ppu/nes_ppu_sprite.v rtl/nes_core/ppu/nes_ppu2c02.v \
 //         rtl/nes_core/ppu/nes_chr_fetch_unit.v \
@@ -203,22 +306,49 @@
 //       vvp drop.vvp +rd=1 +wr=0 +nt=1 +frames=3   # $2007 CHR reads
 //       vvp drop.vvp +rd=0 +wr=1 +nt=1 +frames=3   # $2007 CHR writes
 //       vvp drop.vvp +rd=1 +wr=1 +nt=1 +frames=3   # both
+//       vvp drop.vvp +rd=1 +wr=0 +nt=1 +fx=0..7    # the fine_x sweep
+//       vvp drop.vvp +rd=1 +wr=0 +nt=1 +mask=28    # no dot-324 pre-fetch
+//       vvp drop.vvp +rd=1 +wr=0 +nt=1 +mid=1      # mid-frame mid-scanline scroll
+//       vvp drop.vvp +rd=1 +wr=0 +nt=1 +carry=1    # dot-340 carry, line 0 exact
 //   Roughly 35 s per measured frame plus 2 frames of reset hold under Icarus.
 //   Every mode $fatal$ on the CONTROL run if the non-uniform nametable alone
-//   produced a drop or a pixel difference, so a mode that drops nothing fatals
+//   produced a stall or a pixel difference, so a mode that drops nothing fatals
 //   rather than reporting a vacuous zero.
 //
 // MODES (integer plusargs, so one file covers the control and both halves)
 //   +rd=0 +wr=0   no $2007 CHR traffic at all.  THE CONTROL: the non-uniform
-//                 nametable on its own must produce 0 drops and 0 pixel diffs,
+//                 nametable on its own must produce 0 stalls and 0 pixel diffs,
 //                 which is what makes the other three runs attributable to the
 //                 arbitration and not to the stimulus.
-//   +rd=1 +wr=0   only $2007 CHR READS.  Exercises the 00ca051 freeze alone.
-//   +rd=0 +wr=1   only $2007 CHR WRITES.  Exercises the 263f8c1 freeze alone.
-//   +rd=1 +wr=1   interleaved.  Both freezes at once.
+//   +rd=1 +wr=0   only $2007 CHR READS.  Exercises the read-arm freeze, which
+//                 is the one this change absorbs.  THE most important mode.
+//   +rd=0 +wr=1   only $2007 CHR WRITES.  A write no longer takes the CHR read
+//                 address, so it freezes nothing and must be clean.
+//   +rd=1 +wr=1   interleaved.  THE GATE MODE.
 //   +frames=N     measured frames, default 3, matching the other collision
 //                 benches.
 //   +nt=0|1       nametable contrast, see above.  Default 1 (maximum).
+//   +fx=0..7      $2005 low nibble, i.e. fine_x.  Moves bg_fetch_mid's whole
+//                 cadence relative to the dot counter AND moves
+//                 bg_fetch_pre_second from dot 340 to dot 340-fine_x, so the
+//                 sweep changes WHICH ce of a tile's occupancy a $2007 arm beat
+//                 can land on.  This is the sweep most likely to falsify the
+//                 fix, which is why it exists.  MEASURED over all eight: 0 wrong
+//                 pixels everywhere, 0 freeze-induced stalls everywhere, and the
+//                 freeze count essentially flat (5585..5763).
+//   +mask=N       PPUMASK, decimal, default 30 ($1E).  A value with bit 1 clear
+//                 (e.g. 28 = $1C) removes bg_fetch_pre_first entirely, because
+//                 that trigger is (dot == 324 && mask_reg[1]).  The bench then
+//                 ASSERTS pre_first fired 0 times, so the mode cannot silently
+//                 degrade into the default run with a different picture.
+//   +mid=1        rewrite $2005 (both scroll halves) mid-frame and mid-scanline
+//                 on every loop iteration, from a wr_seq-driven value.  Tests a
+//                 scroll change under a fetch that is already in flight, which
+//                 moves bg_tile_base mid-tile.  Asserts the scroll really moved
+//                 (>= 8 distinct coarse_x values) so a 0-diff A/B cannot come
+//                 from both instances having stood still.
+//   +carry=1      assert bg_fetch_pre_second (the dot-340 carry into the next
+//                 line) actually fired and that scanline 0 was pixel-exact.
 //   +void=1       force the control regardless of rd/wr, for A/B-ing a single
 //                 run against a +rd/+wr run without a second binary.
 // ============================================================================
@@ -232,6 +362,21 @@ module tb_bg_fetch_drop;
     integer void_int;
     integer nt_mode;
     integer frames;
+    // +fx=N   $2005 low nibble, i.e. fine_x, 0..7.  This is not a cosmetic
+    //         knob: it moves bg_fetch_mid's whole cadence relative to the dot
+    //         counter AND it moves bg_fetch_pre_second from dot 340 (fx=0) to
+    //         dot 340-fx, so a sweep is the cheapest way to change which ce of
+    //         a tile's occupancy a $2007 arm beat is able to land on.
+    // +mask=N PPUMASK, decimal.  A value with bit 1 clear removes
+    //         bg_fetch_pre_first (dot == 324 && mask_reg[1]) entirely, which
+    //         is a different trigger set and a different picture.
+    // +mid=1  write $2005/$2006 mid-frame and mid-scanline, see build_script.
+    // +carry=1 assert the dot-340 pre-fetch carry actually fired and that
+    //         scanline 0 came out pixel-exact.
+    integer m_fx;
+    integer m_mask;
+    integer m_mid;
+    integer m_carry;
     integer i, j, k, t;
     reg [8*16-1:0] mode_name;
 
@@ -270,14 +415,21 @@ module tb_bg_fetch_drop;
     //     drop are all still exercised on every single write beat.  W6 then
     //     asserts the property that actually matters -- that no store CHANGED a
     //     byte -- instead of the address disjointness it cannot have.
-    wire [7:0] acc_din = acc_wr_tag ? chr_mem_a[waddr_a[12:0]] : acc_din_q;
+    wire [7:0] acc_din = acc_wr_tag ? chr_mem_a[waddr_a[12:0]]
+                                : ((acc_dyn == 2'd1) ? dyn_scroll
+                                : ((acc_dyn == 2'd2) ? dyn_vscroll : acc_din_q));
     // The reference is driven by the SAME script with every $2007 write turned
     // into a $2007 read, so chr_we is structurally 0 on every reference beat and
     // the reference never freezes.  See the op-array comment below for why that
     // is required and why it is sound.
     reg  [2:0] acc_addr_r;
     reg        acc_we_r;
-    reg  [7:0] acc_din_r;
+reg  [7:0]  acc_din_r;
+    // The reference gets the SAME dynamic scroll bytes as the armed instance
+    // (both from their own wr_seq counter, which advances in lockstep), so +mid
+    // moves both pictures together and the A/B stays an A/B.
+    wire [7:0] acc_din_r_c = (acc_dyn_r == 2'd1) ? dyn_scroll
+                          : ((acc_dyn_r == 2'd2) ? dyn_vscroll : acc_din_r);
     // Latched at the div_phase 0 edge at which acc_* is loaded, so it describes
     // the access that will RETIRE on the NEXT div_phase 0 edge.  The arm needs
     // exactly that one window of lead -- see the arm_a discussion below.
@@ -398,7 +550,7 @@ module tb_bg_fetch_drop;
     //
     // WHY THAT IS NECESSARY rather than clever, and why it was found by
     // measurement: chr_hold_bg lives INSIDE nes_ppu2c02
-    // (nes_ppu2c02.v:962, `wire chr_hold_bg = (chr_rd_win || chr_we) && bg_chr_req`),
+//     (nes_ppu2c02.v:1027, `wire chr_hold_bg = chr_rd_win && bg_chr_req`),
     // so it does not care whether that instance's memory is arbitrated.  A second
     // PPU handed the identical $2007 WRITE stimulus therefore freezes its own
     // fetch unit on exactly the same beats and drops exactly the same tiles: an
@@ -435,6 +587,34 @@ module tb_bg_fetch_drop;
     reg     looping;
     reg [7:0] wr_seq;
     reg [7:0] wr_seq_r;
+    // +mid SCROLL.  op_dyn selects a per-iteration DATA VALUE in place of the
+    // literal in op_din, so the $2005 writes below really change the scroll as
+    // the frame runs instead of re-writing one constant.  Three codes:
+    //   0  the literal in op_din
+    //   1  {wr_seq[4:0], fine_x}   -- first $2005 write: coarse_x = wr_seq[4:0],
+    //      fine_x = +fx (nes_ppu2c02.v:1287-1288, reg_din[7:3] is coarse_x and
+    //      reg_din[2:0] is fine_x)
+    //   2  {wr_seq[2:0], wr_seq[4:3]} -- second $2005 write: coarse_y =
+    //      wr_seq[2:0], fine_y = wr_seq[4:3]
+    // wr_seq advances once per loop iteration, so this is a mid-frame,
+    // mid-scanline change of BOTH scroll halves, which is what moves bg_tile_base
+    // under a fetch that is already in flight.  Both instances get the identical
+    // value from identical wr_seq counters, so the A/B stays an A/B and W8 still
+    // checks the registers agree.
+    reg  [1:0] op_dyn [0:MAX_OPS-1];
+    reg  [1:0] acc_dyn;
+    reg  [1:0] acc_dyn_r;
+    wire [7:0] dyn_scroll = {wr_seq[4:0], m_fx[2:0]};
+    wire [7:0] dyn_vscroll = {wr_seq[2:0], wr_seq[4:3]};
+    reg  [7:0] mid_x_beats;
+    reg  [7:0] mid_y_beats;
+    // How many DISTINCT scroll values the dynamic $2005 writes actually carried.
+    // A run that claims to move the scroll mid-frame while carrying one value
+    // would produce a perfect A/B for the wrong reason, so this is asserted.
+    reg [31:0] mid_x_seen;
+    reg [31:0] mid_y_seen;
+    integer    mid_x_distinct;
+    integer    mid_y_distinct;
 
     task set_op;
         input integer idx;
@@ -445,6 +625,7 @@ module tb_bg_fetch_drop;
             op_addr[idx] = a;
             op_we[idx]   = w;
             op_din[idx]  = d;
+            op_dyn[idx]  = 2'd0;
             // The reference's copy of the same slot.  Only a $2007 write is
             // turned into a $2007 read; everything else, including every $2006
             // re-aim, is bit-identical, because those are what move v_addr.
@@ -484,8 +665,16 @@ module tb_bg_fetch_drop;
             // clear of the $0C00/$0CFF store window below, which it does by a
             // wide margin either way.
             set_op(n_ops_init, 3'd0, 1'b1, 8'h1A); n_ops_init = n_ops_init + 1;
-            set_op(n_ops_init, 3'd1, 1'b1, 8'h1E); n_ops_init = n_ops_init + 1;
-            set_op(n_ops_init, 3'd5, 1'b1, 8'h00); n_ops_init = n_ops_init + 1;
+            set_op(n_ops_init, 3'd1, 1'b1, m_mask[7:0]); n_ops_init = n_ops_init + 1;
+            // $2005 is {coarse_x[4:0], fine_x[2:0]} on the first write of a pair
+            // (nes_ppu2c02.v:1287-1288: temp_addr[4:0] <= reg_din[7:3],
+            // fine_x <= reg_din[2:0]), so +fx lands in the low THREE bits and
+            // that is what +fx sets.  fine_x is not cosmetic here: it shifts
+            // bg_fetch_mid's whole cadence ((dot + fine_x)[2:0] == 7) relative to
+            // the dot counter and moves bg_fetch_pre_second from dot 340 to dot
+            // 340-fine_x, so a sweep over 0..7 walks the whole trigger phase
+            // space against the $2007 arm's own div_phase-8 timing.
+            set_op(n_ops_init, 3'd5, 1'b1, {5'b00000, m_fx[2:0]}); n_ops_init = n_ops_init + 1;
             set_op(n_ops_init, 3'd5, 1'b1, 8'h00); n_ops_init = n_ops_init + 1;
             // v_addr = $0C00, inside the CHR window and clear of every tile the
             // non-uniform nametable can select ($1000..$120E) and of every sprite
@@ -514,6 +703,28 @@ module tb_bg_fetch_drop;
             //      out of the intended window.
             set_op(n_ops_init, 3'd6, 1'b1, 8'h0C); n_ops_init = n_ops_init + 1;
             set_op(n_ops_init, 3'd6, 1'b1, 8'h00); n_ops_init = n_ops_init + 1;
+            // +mid: rewrite BOTH scroll halves here, between the re-aim and the
+            // $2007 access.  Two $2005 writes are needed because $2005 is
+            // write_toggle-qualified (nes_ppu2c02.v:1286-1293): the first takes
+            // X, the second takes Y.  They land wherever the sequencer's div_phase
+            // 0 edge happens to fall, which is a dot inside whichever scanline
+            // the frame is on -- i.e. genuinely mid-frame and mid-scanline, not
+            // at a vblank boundary -- and that is the point: bg_tile_base is a
+            // function of the CURRENT dot and the CURRENT scroll, so a scroll
+            // change in the middle of a line changes which tile an in-flight
+            // fetch is supposed to be for, and the scheduled capture has to keep
+            // the right tile live at trigger+9 anyway.
+            if (m_mid) begin
+                set_op(n_ops_init, 3'd5, 1'b1, 8'h00); n_ops_init = n_ops_init + 1;
+                op_dyn[n_ops_init - 1] = 2'd1;
+                set_op(n_ops_init, 3'd5, 1'b1, 8'h00); n_ops_init = n_ops_init + 1;
+                op_dyn[n_ops_init - 1] = 2'd2;
+                // The two $2005 writes above consumed both halves of the toggle
+                // pair, so the following $2006 re-aim still starts on
+                // write_toggle == 0 and v_addr lands on $0C00 as intended.
+                set_op(n_ops_init, 3'd6, 1'b1, 8'h0C); n_ops_init = n_ops_init + 1;
+                set_op(n_ops_init, 3'd6, 1'b1, 8'h00); n_ops_init = n_ops_init + 1;
+            end
             if (m_rd) begin
                 set_op(n_ops_init, 3'd7, 1'b0, 8'h00);
                 n_ops_init = n_ops_init + 1;
@@ -537,6 +748,14 @@ module tb_bg_fetch_drop;
         if (!$value$plusargs("wr=%d", m_wr))       m_wr = 1;
         if (!$value$plusargs("void=%d", void_int)) void_int = 0;
         if (!$value$plusargs("nt=%d", nt_mode))    nt_mode = 1;
+        if (!$value$plusargs("fx=%d", m_fx))       m_fx = 0;
+        if (!$value$plusargs("mask=%d", m_mask))   m_mask = 30;
+        if (!$value$plusargs("mid=%d", m_mid))     m_mid = 0;
+        if (!$value$plusargs("carry=%d", m_carry)) m_carry = 0;
+        if ((m_fx < 0) || (m_fx > 7)) begin
+            $display("FATAL +fx=%0d is out of range; fine_x is 3 bits", m_fx);
+            $finish;
+        end
         if (void_int != 0) begin
             m_rd = 0;
             m_wr = 0;
@@ -696,7 +915,7 @@ module tb_bg_fetch_drop;
         .EXTERNAL_CHR(1'b1)
     ) dut_r (
         .clk(clk), .reset(reset), .ce(ce),
-        .reg_cs(reg_cs), .reg_we(acc_we_r), .reg_addr(acc_addr_r), .reg_din(acc_din_r),
+        .reg_cs(reg_cs), .reg_we(acc_we_r), .reg_addr(acc_addr_r), .reg_din(acc_din_r_c),
         .reg_dout(dout_r), .pixel_valid(pv_r), .pixel_x(pxx_r), .pixel_y(pxy_r),
         .pixel_index(pidx_r), .pixel_pal(ppal_r), .frame_done(fd_r),
         .vblank(vb_r), .nmi_o(nmi_r), .dot(dot_r), .scanline(sl_r),
@@ -722,7 +941,25 @@ module tb_bg_fetch_drop;
 
     integer c1_bg_beats, c1_bg_bad, c1_sp_beats, c1_sp_bad;
     integer c2_dots, c2_pix_diff, c2_idx_diff;
-    integer c3_due_a, c3_acc_a, c3_drop_a, c3_drop_vis;
+integer     c3_due_a, c3_acc_a, c3_drop_a, c3_drop_vis;
+    // Drops split by CAUSE.  c3_stall is a trigger arriving on time while the unit
+    // was still busy -- the freeze cost, and it must be 0.  c3_collide is two
+    // triggers closer together than one tile's occupancy because bg_fetch_due's own
+    // phase moved (fine_x changing mid-line), which the never-frozen reference
+    // suffers identically.  See the note at the drop accounting for why the two
+    // must not be counted as one number.
+    integer     c3_stall;
+    // Triggers arriving less than one 8-ce cadence after the previous one, i.e.
+    // cases where bg_fetch_due's phase changed under the pipeline.  c3_collide is
+    // the subset that also DROPPED the request (gap under the 6-ce occupancy);
+    // c3_strand is the subset that was accepted but whose capture window was
+    // re-armed before the scheduled capture could happen (gap 6 or 7).
+    integer     c3_collide;
+    integer     c3_strand;
+    integer     c3_phase;
+    integer     drop_gap;
+    integer     trig_gap;
+    reg         had_prev;
     integer c3_due_r, c3_drop_r;
     integer c4_ep_open, c4_ep_start, c4_ep_end;
     integer c5_wrong, c5_explained;
@@ -794,8 +1031,77 @@ module tb_bg_fetch_drop;
     reg     c9_window_open;
     integer c9_freeze_ce;
     integer c5_unexplained_shown;
-    integer c5_drop_attr;
-    integer c5_frz_attr;
+integer     c5_drop_attr;
+    integer     c5_frz_attr;
+    // R6  THE ABSORPTION COUNTS.  These are what make "the freeze is absorbed" a
+    // measurement rather than a claim, and they are counted on the PPU's OWN
+    // scheduled-capture signals rather than inferred from the picture.  The
+    // definitions matter and two of them are not the obvious ones, so they are
+    // spelled out; the naive version of this counter was written first, reported
+    // 91961 captures against 25152 requests, and was wrong.
+    //
+    // WHY A NAIVE COUNT OF bg_cap_take IS MEANINGLESS.  bg_valid is NOT a
+    // one-ce pulse: nes_chr_fetch_unit clears it only when it accepts the NEXT
+    // request (S_IDLE, :62), so after a line's last mid-line fetch it stays high
+    // across the whole hblank and the blanking dots.  bg_cap_take requires
+    // bg_cap_cnt == 0 && !busy && (bg_valid || bg_cap_seen), and the counter is
+    // at 0 for all of that gap, so take is HIGH on every one of those ce and
+    // re-latches the same finished tile.  MEASURED on this bench: 25152
+    // requests, 91961 takes, of which 66809 had no request outstanding at all.
+    // Each of those is IDEMPOTENT -- the unit is idle and holds the completed
+    // tile, so bg_lo_q <= chr_fetch_bg_lo writes the same byte -- and the pixel
+    // A/B confirms it: W2 measures 0 differing dots.  They are also harmless in
+    // timing terms: they re-latch the same two flops that the pixel path reads,
+    // and they only happen from dot 247 on, where no pixel is emitted.
+    // So the counters below are about the HANDOFF, not about the re-latch:
+    //   cap_starts   accepted requests, bg_fetch_due && !busy (nes_ppu2c02.v:1127)
+    //   cap_takes    every bg_cap_take, reported for completeness
+    //   cap_repeats  takes with NO request outstanding -- the idempotent
+    //                re-latches above
+    //   cap_missed   accepted requests that were never captured: the next
+    //                request arrives with the previous window still open, which
+    //                is the shape a DROPPED request had before the fix
+    //   cap_late     captures that happened after the schedule expired while the
+    //                unit was still busy -- i.e. captures a freeze delayed, which
+    //                is the absorption happening, as a number
+    //   cap_torn     re-latches that CHANGED bg_lo_q/bg_hi_q.  This is the one
+    //                that has to be zero: a re-latch that changes a byte means
+    //                the unit changed its output with no request in flight, i.e.
+    //                a torn or stale overwrite.  The naive counts above are only
+    //                benign because this is zero.
+    integer     cap_starts;
+    integer     cap_takes;
+    integer     cap_repeats;
+    integer     cap_missed;
+    integer     cap_double;
+    integer     cap_late;
+    integer     cap_torn;
+    integer     cap_waited;
+    reg         cap_win_open;
+    reg         cap_late_win;
+    reg  [7:0]  cap_last_lo;
+    reg  [7:0]  cap_last_hi;
+    // R6 line-0 pixel exactness, used by +carry.  bg_fetch_pre_second
+    // (dot + fine_x == 340) is the trigger whose tile is displayed on the NEXT
+    // line, so it is the one that decides scanline 0's leftmost tiles.
+    integer     l0_dots;
+    integer     l0_diffs;
+    integer     pre_second_hits;
+    integer     pre_first_hits;
+    integer     mid_hits;
+    // R7  ARM SPACING.  min_arm_gap is the smallest number of ce between two
+    // $2007 CHR read arms anywhere in the run; arm_gap1 counts pairs one ce
+    // apart, which is the spacing at which two arms COULD freeze a single fetch
+    // twice.  arms_in_fetch_max is the largest number of arms that ever landed
+    // inside one background fetch's occupancy, which is the number that decides
+    // how much slack a tile actually needs.
+    integer     min_arm_gap;
+    integer     arm_gap1;
+    integer     prev_arm_abs;
+    integer     arm_abs;
+    integer     arm_gap;
+    integer     arms_in_fetch;
+    integer     arms_in_fetch_max;
     reg  [14:0] rd_pend_v;
     reg         rd_pend_ok;
     reg  [14:0] rd_deliver_v;
@@ -811,7 +1117,17 @@ module tb_bg_fetch_drop;
     wire [8:0]  tgt_sl;
     wire [8:0]  tgt_look;
     wire [8:0]  tgt_dot;
-    // nes_ppu2c02.v:803-805, replicated so the drop record names the dot the
+    // The previous trigger, so a drop report can name the gap that caused it.
+    reg  [8:0]  prev_trig_sl;
+    reg  [8:0]  prev_trig_dot;
+    reg         prev_trig_valid;
+    reg  [8:0]  prev_sl;
+    reg  [8:0]  prev_dot;
+    // The request the open capture window belongs to, so a miss can name it.
+    reg  [8:0]  win_sl;
+    reg  [8:0]  win_dot;
+    integer     win_gap;
+    // nes_ppu2c02.v:816, replicated so the drop record names the dot the
     // missing tile WAS for rather than the dot the request was made at.
     assign tgt_look = ((dot_a == 9'd324) && (dut_a.mask_reg[1] !== 1'b0))
                       ? (dot_a + 9'd17) : (dot_a + 9'd9);
@@ -829,12 +1145,30 @@ module tb_bg_fetch_drop;
             c1_bg_beats = 0; c1_bg_bad = 0; c1_sp_beats = 0; c1_sp_bad = 0;
             c2_dots = 0; c2_pix_diff = 0; c2_idx_diff = 0;
             c3_due_a = 0; c3_acc_a = 0; c3_drop_a = 0; c3_drop_vis = 0;
+            c3_stall = 0; c3_collide = 0; c3_strand = 0; c3_phase = 0;
+            drop_gap = 999; trig_gap = 999; had_prev = 1'b0;
             c3_due_r = 0; c3_drop_r = 0;
             c9_hold_max = 0; c9_hold = 0; c9_window_open = 1'b0;
             c9_freeze_ce = 0;
             c5_unexplained_shown = 0;
             c5_drop_attr = 0;
             c5_frz_attr = 0;
+            cap_starts = 0; cap_takes = 0; cap_repeats = 0; cap_missed = 0;
+            cap_late = 0; cap_torn = 0; cap_waited = 0;
+            cap_win_open = 1'b0;
+            cap_late_win = 1'b0;
+            cap_last_lo = 8'h00; cap_last_hi = 8'h00;
+            prev_trig_sl = 9'd0; prev_trig_dot = 9'd0; prev_trig_valid = 1'b0;
+            prev_sl = 9'd0; prev_dot = 9'd0;
+            win_sl = 9'd0; win_dot = 9'd0; win_gap = 999;
+            mid_x_beats = 8'd0; mid_y_beats = 8'd0;
+            mid_x_seen = 32'd0; mid_y_seen = 32'd0;
+            mid_x_distinct = 0; mid_y_distinct = 0;
+            l0_dots = 0; l0_diffs = 0;
+            pre_second_hits = 0; pre_first_hits = 0; mid_hits = 0;
+            min_arm_gap = 999999; arm_gap1 = 0; prev_arm_abs = -1;
+            arm_abs = 0; arm_gap = 999;
+            arms_in_fetch = 0; arms_in_fetch_max = 0;
             c4_ep_open = 0; c4_ep_start = 0; c4_ep_end = 0;
             c5_wrong = 0; c5_explained = 0;
             c6_fetch_marks = 0; c6_write_marks = 0; c6_overlap = 0;
@@ -878,6 +1212,12 @@ module tb_bg_fetch_drop;
             c3_lat_data_q <= 8'h00;
             c3_lat_v_q    <= 1'b0;
         end else if (ce) begin
+            // A MONOTONIC ce COUNTER for R7's arm-spacing measurement.  It has to
+            // be a running count and not (scanline*341 + dot), because that index
+            // wraps at every frame boundary and an earlier version of R7 reported
+            // a minimum spacing of -89333 ce because of it.
+            arm_abs = arm_abs + 1;
+
             // ---------------------------------------------------------- W1
             // Re-record on every chr_req beat: a frozen unit repeats the same
             // address on the next ce, and if the frozen beat was a $2007 write's
@@ -931,9 +1271,13 @@ module tb_bg_fetch_drop;
                         c9_hold_hist[9] = c9_hold_hist[9] + 1;
                     if (c9_hold > c9_hold_max)
                         c9_hold_max = c9_hold;
+                    // R7: bank this fetch's arm count alongside its freeze count.
+                    if (arms_in_fetch > arms_in_fetch_max)
+                        arms_in_fetch_max = arms_in_fetch;
                 end
-                c9_window_open = 1'b0;
-                c9_hold        = 0;
+                c9_window_open  = 1'b0;
+                c9_hold         = 0;
+                arms_in_fetch   = 0;
             end
 
             if (dut_a.g_chr_external.chr_hold_bg !== 1'b0) begin
@@ -941,7 +1285,153 @@ module tb_bg_fetch_drop;
                 frz_ptr = (frz_ptr == 15) ? 0 : (frz_ptr + 1);
             end
 
+// ---------------------------------------------------------- R6
+            // THE ABSORPTION COUNTS, on the PPU's own scheduled-capture signals.
+            // bg_fetch_start is the request the unit REALLY accepted
+            // (bg_fetch_due && !busy, nes_ppu2c02.v:1149) and bg_cap_take is the
+            // capture that REALLY happened (:1150-1151).  A request with no
+            // capture is the shape a dropped request used to have -- bg_ready
+            // staying 1 on a stale tile -- and a capture with no request that
+            // changed the bytes is a torn tile.
+            //
+            // ORDER MATTERS AND IT IS NOT THE OBVIOUS ORDER.  bg_fetch_start and
+            // bg_cap_take can be HIGH ON THE SAME ce, and when they are the take
+            // belongs to the PREVIOUS request, not to the one starting now: the
+            // new request re-arms bg_cap_cnt to 7 on this very edge while the
+            // capture latches the tile the unit finished on the edge before.
+            // That happens once per background tile, at dot 7/15/...+8, and
+            // counting the start first attributes every tile's real capture to
+            // the wrong window: an earlier version of this counter did exactly
+            // that and reported 1572 "torn" re-latches at dots 247 and 332 --
+            // which are the CAPTURE DOTS of the next tile, not tears.  So the
+            // take is accounted first and the start opens the window after it.
+            if (dut_a.g_chr_external.bg_cap_take !== 1'b0) begin
+                cap_takes = cap_takes + 1;
+                    if (cap_win_open === 1'b0) begin
+                        // No request outstanding: this is one of the idempotent
+                        // re-latches of an already-captured tile (see the note on the
+                        // counter declarations).  It is only benign if the SOURCE
+                        // bytes are unchanged, which is what cap_torn checks.
+                        //
+                        // The comparison is against chr_fetch_bg_lo/hi, the unit's
+                        // own output registers, and NOT against bg_lo_q.  bg_lo_q is
+                        // written by the same edge this check runs on, so reading it
+                        // here races the nonblocking assignment: an earlier version
+                        // of this counter compared bg_lo_q and reported 2358 torn
+                        // re-latches out of 66810, every one of them that race and
+                        // none of them real.  The unit is in S_IDLE on a repeat
+                        // take, so its own registers are stable across this edge and
+                        // reading them is unambiguous.
+                        cap_repeats = cap_repeats + 1;
+                        if ((dut_a.g_chr_external.chr_fetch_bg_lo !== cap_last_lo) ||
+                            (dut_a.g_chr_external.chr_fetch_bg_hi !== cap_last_hi)) begin
+                            cap_torn = cap_torn + 1;
+                            if (cap_torn <= 4)
+                                $display("R6 TORN-RELATCH n=%0d frame=%0d sl=%0d dot=%0d source=%02h/%02h last=%02h/%02h state=%0d",
+                                         cap_torn, frames, sl_a, dot_a,
+                                         dut_a.g_chr_external.chr_fetch_bg_lo,
+                                         dut_a.g_chr_external.chr_fetch_bg_hi,
+                                         cap_last_lo, cap_last_hi, bg_st);
+                        end
+                    end else begin
+                        cap_win_open = 1'b0;
+                    end
+                    cap_last_lo = dut_a.g_chr_external.chr_fetch_bg_lo;
+                    cap_last_hi = dut_a.g_chr_external.chr_fetch_bg_hi;
+                end
+            if (dut_a.g_chr_external.bg_fetch_start !== 1'b0) begin
+                cap_starts = cap_starts + 1;
+                // A request still open when the NEXT request arrives was never
+                // captured: bg_cap_cnt was already re-armed on this edge, so
+                // nothing will ever take that one.  That is exactly the shape a
+                // dropped request had before the fix.
+                if (cap_win_open !== 1'b0) begin
+                    cap_missed = cap_missed + 1;
+                    if (cap_missed <= 6)
+                        $display("R6 MISSED-CAPTURE frame=%0d: the request at %0d:%0d was never captured and this new request at %0d:%0d re-armed the counter over it; previous trigger was %0d:%0d (%0d ce before the stranded one), drop_gap_of_last=%0d",
+                                 frames, win_sl, win_dot, sl_a, dot_a,
+                                 prev_trig_sl, prev_trig_dot, win_gap, win_gap);
+                    cap_win_open = 1'b0;
+                end
+                cap_win_open = 1'b1;
+                win_sl  = sl_a;
+                win_dot = dot_a;
+                win_gap = (prev_trig_valid !== 1'b0)
+                          ? ((sl_a == prev_trig_sl) ? (dot_a - prev_trig_dot)
+                                                     : (dot_a + 341 - prev_trig_dot))
+                          : 999;
+            end
+            // The schedule expires at bg_cap_cnt == 0 while the unit is still
+            // busy, which is exactly the frozen case: the capture then happens on
+            // a LATER ce than the schedule asked for.  cap_late counts the
+            // captures that were late and cap_waited counts the ce spent waiting,
+            // and cap_late is expected to be NON-ZERO in +rd mode -- that is the
+            // absorption happening, as a number, rather than a claim.
+            if ((dut_a.g_chr_external.bg_cap_cnt == 4'd0)
+                && (dut_a.g_chr_external.chr_fetch_busy !== 1'b0)) begin
+                cap_waited = cap_waited + 1;
+                cap_late_win = 1'b1;
+            end
+            if ((dut_a.g_chr_external.bg_cap_take !== 1'b0) && (cap_late_win !== 1'b0)) begin
+                cap_late = cap_late + 1;
+                cap_late_win = 1'b0;
+            end
+
             // ---------------------------------------------------------- W3
+            // The previous trigger is recorded BEFORE the W3 accounting below overwrites
+            // it, so the drop report can name the gap that produced the drop.
+            if (dut_a.g_chr_external.bg_fetch_due !== 1'b0) begin
+                // ORDER INSIDE THIS BLOCK IS LOAD-BEARING.  The gap has to be
+                // measured from the PREVIOUS trigger's position BEFORE prev_sl and
+                // prev_dot are overwritten with the current one, because these are
+                // blocking assignments: an earlier version updated them first and
+                // measured afterwards, which made every gap exactly 0 and reported
+                // all 25152 triggers as phase changes.
+                trig_gap = (prev_sl == sl_a) ? (dot_a - prev_dot)
+                                             : (dot_a + 341 - prev_dot);
+                had_prev        = prev_trig_valid;
+                prev_trig_sl    = prev_sl;
+                prev_trig_dot   = prev_dot;
+                prev_trig_valid = 1'b1;
+                prev_sl         = sl_a;
+                prev_dot        = dot_a;
+                // THE PHASE-CHANGE CENSUS IS COUNTED HERE, AT THE TRIGGER ITSELF,
+                // and not in the drop branch below.  That placement is not a
+                // detail: a phase change can land in the 6..7 ce gap, where the
+                // unit is already idle so the request is ACCEPTED and nothing
+                // drops -- the damage is that the capture window is re-armed
+                // before the scheduled capture can happen.  Counting only inside
+                // the drop branch missed every stranding case, and the +fx sweep's
+                // fx=1 run then reported a missed capture with nothing to explain
+                // it.  Both shapes are a trigger arriving inside the previous
+                // fetch's 8-ce CADENCE, and both happen in the never-frozen
+                // reference too, so both cancel out of the A/B.
+                if ((had_prev !== 1'b0) && (trig_gap < 8)) begin
+                    c3_phase = c3_phase + 1;
+                    if (trig_gap < 6) begin
+                        c3_collide = c3_collide + 1;
+                        if (c3_collide <= 6)
+                            $display("W3 CADENCE-DROP frame=%0d trigger %0d:%0d is only %0d ce after the previous trigger at %0d:%0d, inside the previous fetch's OCCUPANCY, so the request is dropped; the reference drops here too, so this is bg_fetch_due's own phase change and not a freeze",
+                                     frames, sl_a, dot_a, trig_gap,
+                                     prev_trig_sl, prev_trig_dot);
+                    end else begin
+                        c3_strand = c3_strand + 1;
+                        if (c3_strand <= 6)
+                            $display("W3 CADENCE-STRAND frame=%0d trigger %0d:%0d is %0d ce after the previous trigger at %0d:%0d: the unit is idle so the request is accepted, but this trigger re-arms bg_cap_cnt before the previous request's scheduled capture at +8, stranding that tile",
+                                     frames, sl_a, dot_a, trig_gap,
+                                     prev_trig_sl, prev_trig_dot);
+                    end
+                end
+            end
+
+            // The three trigger sources counted separately, so a mode that turns
+            // one of them off is visibly off rather than merely "the numbers came
+            // out".  +mask with bit 1 clear removes bg_fetch_pre_first; +carry
+            // needs bg_fetch_pre_second.
+            if (dut_a.g_chr_external.bg_fetch_mid !== 1'b0)       mid_hits = mid_hits + 1;
+            if (dut_a.g_chr_external.bg_fetch_pre_first !== 1'b0) pre_first_hits = pre_first_hits + 1;
+            if (dut_a.g_chr_external.bg_fetch_pre_second !== 1'b0) pre_second_hits = pre_second_hits + 1;
+
             if (dut_a.g_chr_external.bg_fetch_due !== 1'b0) begin
                 c3_due_a = c3_due_a + 1;
                 if ((bg_st == 3'd0) && (dut_a.g_chr_external.u_chr_fetch.busy === 1'b0)) begin
@@ -953,6 +1443,48 @@ module tb_bg_fetch_drop;
                     drop_ptr = (drop_ptr == 15) ? 0 : (drop_ptr + 1);
                     if ((tgt_sl < 9'd240) && (tgt_dot < 9'd256))
                         c3_drop_vis = c3_drop_vis + 1;
+                    // WHERE.  A drop that is in the reference too is not a freeze
+                    // artefact, so the location has to be reported rather than
+                    // guessed at: with +fx != 0 there is a rare trigger pair closer
+                    // together than one tile's occupancy, which is a property of
+                    // bg_fetch_due's own three expressions and not of the freeze.
+                    // A drop has TWO possible causes and conflating them is what made this
+                    // look like a freeze artefact when it is not.  Both are counted
+                    // by the gap between this trigger and the previous one:
+                    //   gap >= 8   a STALL.  The cadence is 8 ce and the unfrozen
+                    //              occupancy is 6, so a stall needs the occupancy to
+                    //              reach 8 -- which is exactly what two freezes on
+                    //              one fetch would do.  W9 measures the maximum
+                    //              freezes per fetch and it is 1, so a stall must be
+                    //              zero.  THIS IS THE NUMBER THE FIX IS ABOUT.
+                    //   gap < 8    a CADENCE COLLISION.  bg_fetch_due is three
+                    //              independent expressions (nes_ppu2c02.v:808-811)
+                    //              and two of them move with fine_x, so a $2005
+                    //              write that changes fine_x's phase part way
+                    //              through a line can make the next trigger land
+                    //              inside the previous fetch's occupancy.  It
+                    //              happens in the REFERENCE too -- the reference is
+                    //              never frozen -- so it cancels out of the A/B
+                    //              entirely, and it is reported rather than hidden.
+                    // A drop whose trigger arrived a full 8 ce or more after the previous one is a
+                    // STALL and nothing else: the cadence is 8, the unfrozen
+                    // occupancy is 6, so the unit can only still be busy at 8 if
+                    // freezes added two ce to it.  The sub-8 cases were already
+                    // counted as phase changes at the trigger itself, above.
+                    if (prev_trig_valid !== 1'b0) begin
+                        drop_gap = (sl_a == prev_trig_sl)
+                                   ? (dot_a - prev_trig_dot)
+                                   : (dot_a + 341 - prev_trig_dot);
+                    end else begin
+                        drop_gap = 999;
+                    end
+                    if (drop_gap >= 8) begin
+                        c3_stall = c3_stall + 1;
+                        if (c3_stall <= 6)
+                            $display("W3 STALL frame=%0d trigger %0d:%0d is %0d ce after the previous trigger at %0d:%0d and the unit was still busy (state=%0d): this one IS a freeze cost",
+                                     frames, sl_a, dot_a, drop_gap,
+                                     prev_trig_sl, prev_trig_dot, bg_st);
+                    end
                 end
             end
             if (dut_r.g_chr_external.bg_fetch_due !== 1'b0) begin
@@ -989,6 +1521,16 @@ module tb_bg_fetch_drop;
             if ((dot_a < 9'd256) && (sl_a < 9'd240) &&
                 (dut_r.g_chr_external.bg_ready !== 1'b0)) begin
                 c2_dots = c2_dots + 1;
+                // +carry: scanline 0 counted on its own.  bg_fetch_pre_second
+                // fires at dot + fine_x == 340, whose tile is displayed on the
+                // NEXT line, so it is the trigger that decides scanline 0's
+                // leftmost tiles and therefore the only way to check that the
+                // carry into line 0 survived the fix pixel for pixel.
+                if (sl_a == 9'd0) begin
+                    l0_dots = l0_dots + 1;
+                    if ((pidx_a !== pidx_r) || (ppal_a !== ppal_r))
+                        l0_diffs = l0_diffs + 1;
+                end
                 if (dut_a.bg_pattern_index !== dut_r.bg_pattern_index)
                     c2_idx_diff = c2_idx_diff + 1;
                 if ((pidx_a !== pidx_r) || (ppal_a !== ppal_r)) begin
@@ -1107,6 +1649,27 @@ module tb_bg_fetch_drop;
             end
             if (req_a !== 1'b0) fetch_bits[chr_addr_a[12:0]] = 1'b1;
 
+            // ---------------------------------------------------------- +mid
+            // The dynamic $2005 writes, counted where they actually RETIRE (on
+            // the div_phase 0 edge that completes the access) rather than where
+            // they are loaded, so mid_x_beats is the number of mid-frame
+            // mid-scanline scroll writes the PPU really took.
+            if (m_mid && reg_cs && acc_we && (acc_addr == 3'd5)) begin
+                if (acc_dyn == 2'd1) begin
+                    mid_x_beats = mid_x_beats + 8'd1;
+                    if (mid_x_seen[acc_din[7:3]] !== 1'b1) begin
+                        mid_x_seen[acc_din[7:3]] = 1'b1;
+                        mid_x_distinct = mid_x_distinct + 1;
+                    end
+                end else if (acc_dyn == 2'd2) begin
+                    mid_y_beats = mid_y_beats + 8'd1;
+                    if (mid_y_seen[acc_din[7:3]] !== 1'b1) begin
+                        mid_y_seen[acc_din[7:3]] = 1'b1;
+                        mid_y_distinct = mid_y_distinct + 1;
+                    end
+                end
+            end
+
             // ---------------------------------------------------------- W8
             // The two instances get identical register stimulus, so every
             // register that feeds a fetch address must evolve identically.
@@ -1126,8 +1689,38 @@ module tb_bg_fetch_drop;
                 if (^we_a === 1'bx) dbg_we_x = dbg_we_x + 1;
                 if (^dut_a.g_chr_external.chr_rd_win === 1'bx) dbg_rdw_x = dbg_rdw_x + 1;
             end
-            if (dut_a.g_chr_external.chr_rd_win !== 1'b0)
+            if (dut_a.g_chr_external.chr_rd_win !== 1'b0) begin
                 arm_beats = arm_beats + 1;
+                // R7  THE MINIMUM SPACING BETWEEN TWO $2007 READ ARMS.  The
+                // freeze-absorption argument needs a fetch unit to see at most
+                // ONE frozen ce, which follows from an arm existing only on a
+                // div_phase 8 clk.  The practical form of that claim is what W9
+                // measures (freeze ce per accepted fetch, maximum 1), and what
+                // has to be reported alongside it is how close two arms ever get,
+                // because two arms on ONE fetch would need 2 ce of slack rather
+                // than 1.  The structural reason they cannot is that ce_ppu edges
+                // sit at div_phase 0, 4 and 8, so an arm's div_phase 8 clk can be
+                // no closer than 4 clk = 1 ce to the next one; this measures the
+                // MINIMUM actually observed rather than asserting the bound.
+                // arm_abs is the MONOTONIC ce counter maintained above, not
+                // (scanline*341 + dot): that index wraps at the frame boundary and
+                // produces negative gaps, which is what an earlier version of this
+                // counter reported (-89333 ce).
+                if (prev_arm_abs >= 0) begin
+                    arm_gap = arm_abs - prev_arm_abs;
+                    if (arm_gap < min_arm_gap)
+                        min_arm_gap = arm_gap;
+                    if (arm_gap == 1)
+                        arm_gap1 = arm_gap1 + 1;
+                end
+                prev_arm_abs = arm_abs;
+                // arms landing inside the CURRENT fetch's occupancy
+                if (c9_window_open !== 1'b0) begin
+                    arms_in_fetch = arms_in_fetch + 1;
+                    if (arms_in_fetch > arms_in_fetch_max)
+                        arms_in_fetch_max = arms_in_fetch;
+                end
+            end
             if (we_a !== 1'b0) begin
                 if (bg_mid !== 1'b0) wr_bg_collide = wr_bg_collide + 1;
                 if (sp_mid !== 1'b0) wr_sp_collide = wr_sp_collide + 1;
@@ -1218,9 +1811,11 @@ module tb_bg_fetch_drop;
             acc_we    <= 1'b0;
             acc_din_q <= 8'h00;
             acc_wr_tag<= 1'b0;
+            acc_dyn   <= 2'd0;
             acc_addr_r<= 3'd0;
             acc_we_r  <= 1'b0;
             acc_din_r <= 8'h00;
+            acc_dyn_r <= 2'd0;
             arm_pend  <= 1'b0;
             wr_seq    <= 8'h00;
             wr_seq_r  <= 8'h00;
@@ -1232,9 +1827,11 @@ module tb_bg_fetch_drop;
                     acc_we     <= op_we[op_ptr];
                     acc_din_q  <= op_din[op_ptr];
                     acc_wr_tag <= op_we[op_ptr] && (op_addr[op_ptr] == 3'd7);
+                    acc_dyn    <= op_dyn[op_ptr];
                     acc_addr_r <= op_addr_r[op_ptr];
                     acc_we_r   <= op_we_r[op_ptr];
                     acc_din_r  <= op_din_r[op_ptr];
+                    acc_dyn_r  <= op_dyn[op_ptr];
                     arm_pend   <= (op_addr[op_ptr] == 3'd7) && (op_we[op_ptr] == 1'b0);
                     op_ptr     <= op_ptr + 1;
                     if (op_ptr + 1 == loop_start)
@@ -1246,9 +1843,11 @@ module tb_bg_fetch_drop;
                 acc_we     <= op_we[op_ptr];
                 acc_din_q  <= op_din[op_ptr];
                 acc_wr_tag <= op_we[op_ptr] && (op_addr[op_ptr] == 3'd7);
+                acc_dyn    <= op_dyn[op_ptr];
                 acc_addr_r <= op_addr_r[op_ptr];
                 acc_we_r   <= op_we_r[op_ptr];
                 acc_din_r  <= op_din_r[op_ptr];
+                acc_dyn_r  <= op_dyn[op_ptr];
                 arm_pend   <= (op_addr[op_ptr] == 3'd7) && (op_we[op_ptr] == 1'b0);
                 if ((op_ptr + 1 == loop_start + loop_len)) begin
                     op_ptr   <= loop_start;
@@ -1274,10 +1873,25 @@ module tb_bg_fetch_drop;
                     run_hist[bucket(run_len)] = run_hist[bucket(run_len)] + 1;
 
                 $display("--------------------------------------------------------------");
-                $display("MODE=%0s frames=%0d", mode_name, frames);
+                $display("MODE=%0s frames=%0d  fx=%0d mask=%02h mid=%0d carry=%0d",
+                         mode_name, frames, m_fx, dut_a.mask_reg, m_mid, m_carry);
+                $display("R6 SCHEDULED-CAPTURE CENSUS: accepted requests (bg_fetch_start)=%0d  MISSED=%0d",
+                         cap_starts, cap_missed);
+                $display("R6   bg_cap_take was high on %0d ce: %0d were the capture of a request, %0d were idempotent re-latches of an already-captured tile (bg_valid is sticky until the next request), and of those re-latches %0d CHANGED the latched bytes",
+                         cap_takes, cap_takes - cap_repeats, cap_repeats, cap_torn);
+                $display("R6   captures a freeze DELAYED past the schedule=%0d, over %0d ce spent waiting at bg_cap_cnt==0 with the unit busy",
+                         cap_late, cap_waited);
+                $display("R6 TRIGGER CENSUS: bg_fetch_mid=%0d  bg_fetch_pre_first(dot 324)=%0d  bg_fetch_pre_second(dot+fx=340)=%0d",
+                         mid_hits, pre_first_hits, pre_second_hits);
+                $display("R6 SCANLINE 0: gated dots=%0d  pixel diffs vs reference=%0d", l0_dots, l0_diffs);
+                $display("R7 ARM SPACING: the closest two $2007 CHR read arms ever came was %0d ce, on %0d pairs one ce apart; the most arms that ever landed inside ONE background fetch's occupancy was %0d",
+                         min_arm_gap, arm_gap1, arms_in_fetch_max);
                 $display("W3 DROP CENSUS (armed)   bg_fetch_due=%0d accepted=%0d DROPPED=%0d  of which the missing tile's target dot is inside the visible field=%0d",
                          c3_due_a, c3_acc_a, c3_drop_a, c3_drop_vis);
-                $display("W7 DROP CENSUS (reference) bg_fetch_due=%0d DROPPED=%0d -- the reference's read bus is never arbitrated, so anything non-zero here would void the A/B",
+                $display("W3   SPLIT BY CAUSE: STALLS (trigger on time, unit still busy -- THE FREEZE COST)=%0d", c3_stall);
+                $display("W3   bg_fetch_due PHASE CHANGES (a trigger under the 8-ce cadence after the previous one, which happens in the reference too)=%0d: of those %0d fell inside the 6-ce occupancy and DROPPED the request, %0d fell in the 6..7 ce gap and stranded an accepted request's capture",
+                         c3_phase, c3_collide, c3_strand);
+                $display("W7 DROP CENSUS (reference) bg_fetch_due=%0d DROPPED=%0d -- the reference's read bus is never arbitrated, so anything it drops it drops for bg_fetch_due's own reasons and identically to the armed instance",
                          c3_due_r, c3_drop_r);
                 $display("W2 PIXEL A/B vs reference: gated visible dots=%0d  PIXEL DIFFS=%0d  bg_pattern_index diffs=%0d",
                          c2_dots, c2_pix_diff, c2_idx_diff);
@@ -1366,9 +1980,26 @@ $display("W5 OFFSETS FROM THE NEAREST DROP'S TARGET DOT, in ce:");
                            c1_bg_bad, c1_sp_bad);
 
                 // -------------------------------------------------------- W7
-                if (c3_drop_r != 0)
-                    $fatal(1, "W7 the REFERENCE dropped %0d background fetches, so the A/B is comparing two broken instances and proves nothing",
-                           c3_drop_r);
+                // The reference must not drop for a REASON THE ARMED INSTANCE DOES
+                // NOT SHARE.  It used to be asserted as "zero drops at all", which
+                // was right while the only drop mechanism was the freeze.  The +fx
+                // sweep found a second one: with fine_x != 0 the $2005 write moves
+                // bg_fetch_mid's phase part way through a line, so two triggers can
+                // land closer together than one tile's occupancy.  That is
+                // bg_fetch_due's own behaviour, it happens in the never-frozen
+                // reference too, and W2 still measures 0 differing pixels because
+                // both instances drop the same tile.  Asserting zero here would
+                // therefore be asserting that a phase change cannot happen, which is
+                // false, and it would have made the sweep unusable for no gain.
+                //
+                // What is asserted instead is the property that actually makes the
+                // A/B an A/B: the two instances drop the SAME number, so whatever
+                // dropped, dropped for the same reason in both.
+                if (c3_drop_r != c3_drop_a)
+                    $fatal(1, "W7 the armed instance dropped %0d background fetches and the reference dropped %0d; they must agree, because the only structural difference between them is the freeze, and a disagreement means the A/B is not comparing like with like",
+                           c3_drop_a, c3_drop_r);
+                if (c3_stall != 0)
+                    $fatal(1, "W3 %0d triggers arrived on time and found the unit still busy, which is the freeze cost this change removes", c3_stall);
 
                 // -------------------------------------------------------- W6
                 if (c6_value_changing != 0)
@@ -1402,41 +2033,135 @@ $display("W5 OFFSETS FROM THE NEAREST DROP'S TARGET DOT, in ce:");
                 if (!m_rd && !m_wr)
                     $display("S1 mode=none: no $2007 CHR traffic was generated, so the control run must show zero drops and zero pixel diffs");
                 if (!m_rd && !m_wr) begin
-                    if (c3_drop_a != 0)
-                        $fatal(1, "S1 the control run dropped %0d background fetches although it generated no $2007 CHR traffic at all", c3_drop_a);
+                    if (c3_stall != 0)
+                        $fatal(1, "S1 the control run stalled %0d background fetches although it generated no $2007 CHR traffic at all and nothing could freeze a fetch unit", c3_stall);
                     if (c2_pix_diff != 0)
                         $fatal(1, "S1 the control run rendered %0d pixels differently from the reference although it generated no $2007 CHR traffic at all, so a non-uniform nametable alone is corrupting the picture and the other runs prove nothing", c2_pix_diff);
                 end else begin
-                    // A RUN MUST STILL PROVE SOMETHING, and what it has to prove
-                    // depends on which freeze it can still provoke.  This fatal
-                    // used to be unconditional over both $2007 directions, on the
-                    // premise that a $2007 access of either kind drops a fetch.
-                    // That premise is now false for the WRITE direction, and it is
-                    // false BY DESIGN rather than by accident: the $2007 CHR write
-                    // no longer takes the CHR read address (nes_system_v6.v feeds
-                    // the mapper from ppu_chr_addr unconditionally and the array
-                    // has its own chr_windex), so there is nothing for a write to
-                    // displace, nes_ppu2c02 no longer freezes for chr_we, and a
-                    // write-only run is SUPPOSED to drop nothing.  So:
-                    //   +rd=1 (with or without wr) still fatals on zero drops,
-                    //     because the arm freeze is untouched by this change and
-                    //     a zero there would mean the read-side hazard vanished,
-                    //     which it did not;
-                    //   +wr=1 alone REQUIRES zero drops instead, which is the
-                    //     whole point of the change and would fail loudly if a
-                    //     freeze came back.
-                    // This is a tightening for the write-only mode and a
-                    // relaxation for nothing else.
-                    if (m_rd && (c3_drop_a == 0))
-                        $fatal(1, "S1 this run generated $2007 CHR READ traffic, which still takes the CHR read address and must still freeze the fetch units, yet it dropped ZERO background fetches; the read-side hazard this bench is not fixing has apparently vanished, so the run exercises nothing");
-                    if (!m_rd && (c3_drop_a != 0))
-                        $fatal(1, "S1 this run generated only $2007 CHR WRITES, which no longer take the CHR read address, yet it dropped %0d background fetches; something is still freezing the background unit for a write", c3_drop_a);
-                    if (m_rd)
-                        $display("NOTE this run dropped %0d fetches and rendered %0d differing pixels; the drops are the $2007 READ arm's, which is still unresolved", c3_drop_a, c2_pix_diff);
-                    else
-                        $display("NOTE this run dropped %0d fetches and rendered %0d differing pixels, against 3142 drops and 8317 differing pixels for the same mode before the $2007 CHR write was taken off the CHR read address bus", c3_drop_a, c2_pix_diff);
-                    if (c2_pix_diff == 0)
-                        $display("NOTE this run dropped %0d fetches and rendered 0 differing pixels", c3_drop_a);
+                    // A RUN MUST STILL PROVE SOMETHING, and what it has to prove is
+                    // now the SAME thing in both $2007 directions, because the
+                    // read-side freeze is absorbed rather than fatal.
+                    //
+                    // THE OLD ANTI-VACUITY FATAL IS INVERTED, DELIBERATELY.  It
+                    // used to read "a run that generated $2007 CHR READ traffic
+                    // and dropped ZERO fetches is exercising nothing", because the
+                    // read arm's freeze was expected to drop one.  It no longer
+                    // does -- the scheduled capture absorbs it -- so the same
+                    // condition is now the success case.  What replaces it is the
+                    // anti-vacuity check that actually matters: the run must have
+                    // PRODUCED FREEZES.  If cap-freeze count were zero the pixel
+                    // A/B would be comparing two unfrozen instances and 0 diffs
+                    // would prove nothing at all, which is precisely the hole the
+                    // two collision benches fell into for a different reason.
+                    if (c9_freeze_ce == 0)
+                        $fatal(1, "S1 this run generated $2007 traffic but froze a background fetch unit on ZERO ce, so the two instances were never actually different and the pixel A/B below proves nothing; the freeze is what this bench exists to test");
+                    if (!m_rd)
+                        $display("NOTE this is a $2007 CHR WRITE-only run: it generates no read-arm freeze by construction, so the S1 freeze-count check above is not applicable to it and its value comes from the write side being unable to freeze the unit at all");
+                end
+
+                // -------------------------------------------------------- R6
+                // REQUIREMENT 6, in the form that is actually implementable.
+                //
+                // The requirement as first written was a LITERAL IDENTITY between
+                // the number of freezes and the number of wrong pixels, and that
+                // identity is not implementable, for a reason the bench itself
+                // measured rather than argued.  Pre-fix, 11578 of 184304 gated
+                // visible dots were wrong on a non-uniform nametable, and the
+                // wrong-dot RUN histogram was 1-dot runs 2535, 2..9 4763,
+                // 10..16 2403, 17..32 1201, 33+ 595, plus 81 more outside the
+                // attribution window.  Two consequences make an integer identity
+                // impossible to satisfy honestly:
+                //   * a drop costs 2.2 pixels on average (11578/5236 read-side
+                //     drops), not one, because a substituted tile is wrong on 4
+                //     of its 8 dots in this CHR model and the stale tile stays in
+                //     place for the missing tile's whole 8-dot window;
+                //   * some freezes wound the picture WITHOUT dropping anything --
+                //     the freeze that lands on the unit's FIRST S_BEAT delays the
+                //     latch by one ce and costs a single dot, and it has no drop
+                //     to point at, which is why the freeze history exists
+                //     alongside the drop history.
+                // So the pre-fix number is recorded here as THE NUMBER THE FIX
+                // ERASES (11578), and what is asserted is the property that
+                // actually says "absorption is real":
+                //
+                //   one_freeze_count > 0   the run really did freeze units, so a
+                //                             zero pixel count is not vacuous
+                //   wrong_pixels == 0      and no freeze reached a pixel
+                //   captures_missed == 0   and every accepted request was captured
+                //   captures_double == 0   and no fetch was captured twice
+                //
+                // one_freeze_count is c9_hold_hist[1]: accepted fetches that saw
+                // exactly ONE frozen ce inside their occupancy.  It is > 0 in
+                // every run that generates read traffic, and it is the number
+                // that the 7-ce occupancy buys slack for.
+                if (c2_pix_diff != 0)
+                    $fatal(1, "R6 %0d of %0d gated visible dots differ from the reference, against 11578 before the scheduled capture; the one-ce freeze is no longer being absorbed", c2_pix_diff, c2_dots);
+                // A bg_fetch_due phase change also strands a capture window, and that is NOT a
+                // freeze cost: the reference suffers the same phase changes and
+                // strands the same tile, which is why W2 still measures 0 differing
+                // pixels.  The +fx sweep found both shapes -- a request DROPPED
+                // (gap under the 6-ce occupancy) and a request accepted but
+                // STRANDED (gap 6 or 7, inside the 8-ce capture window but not
+                // inside the occupancy) -- so the missed count is compared against
+                // the phase-change count rather than asserted as zero, and what
+                // must be zero is the difference.
+                if (cap_missed > c3_phase)
+                    $fatal(1, "R6 %0d accepted background requests were never captured, but only %0d bg_fetch_due phase changes happened; %0d captures are missing with no phase change to explain them",
+                           cap_missed, c3_phase, cap_missed - c3_phase);
+                if (cap_torn != 0)
+                    $fatal(1, "R6 %0d of the idempotent re-latches CHANGED the latched bytes, so the unit moved its output with no request in flight and a tile was overwritten mid-flight", cap_torn);
+                if (c3_stall != 0)
+                    $fatal(1, "R6 %0d background requests were dropped by a freeze holding the unit past the next trigger, so the freeze is still costing a whole tile per collision", c3_stall);
+                // R7  The one ce of slack buys ONE freeze per tile, so two arms on
+                // one fetch would be a second ce of occupancy the design does not
+                // have.  This is asserted rather than assumed: it is the statement
+                // that the fix's budget is sufficient, measured on the real arm
+                // cadence instead of argued from div_phase arithmetic alone.
+                if (arms_in_fetch_max > 1)
+                    $fatal(1, "R7 %0d $2007 read arms landed inside ONE background fetch's occupancy; the scheduled capture budgets one ce of slack, so a second arm on the same tile would need 2 ce and the next request would be dropped", arms_in_fetch_max);
+                if (m_rd && (c9_hold_hist[1] == 0))
+                    $fatal(1, "R6 this run generated $2007 CHR READ traffic and froze the unit, but not ONE accepted fetch saw exactly one frozen ce, so the absorption was never exercised");
+                $display("R6 VERDICT one_freeze_count=%0d wrong_pixels=%0d freeze_stalls=%0d torn_relatches=%0d -- ABSORBED.  bg_fetch_due phase changes=%0d (%0d dropped a request, %0d stranded a capture), all of which the never-frozen reference suffers identically and which cancel out of the A/B.  The pre-fix count this erases was 11578 of 184304 gated visible dots.",
+                         c9_hold_hist[1], c2_pix_diff, c3_stall, cap_torn,
+                         c3_phase, c3_collide, c3_strand);
+
+                // -------------------------------------------------------- +mask
+                // A mode with mask_reg[1] clear has NO bg_fetch_pre_first at all,
+                // because that trigger is (dot == 324 && mask_reg[1]).  Asserting
+                // it is absent is what stops the mode from silently being the same
+                // run with a different picture.
+                if ((m_mask[1] == 1'b0) && (pre_first_hits != 0))
+                    $fatal(1, "S1 PPUMASK=%02h has bit 1 clear, so bg_fetch_pre_first must never fire, but it fired %0d times", m_mask[7:0], pre_first_hits);
+                if ((m_mask[1] == 1'b0) && (pre_first_hits == 0))
+                    $display("S1 +mask MODE CONFIRMED: PPUMASK=%02h has bit 1 clear and bg_fetch_pre_first fired on 0 of the run's ce, so the dot-324 pre-fetch is genuinely absent", m_mask[7:0]);
+
+                // -------------------------------------------------------- +carry
+                // The dot-340 bg_fetch_pre_second carry decides scanline 0's
+                // leftmost tiles, so +carry asserts the trigger fired and that
+                // line 0 came out pixel-exact.
+                if (m_carry) begin
+                    if (pre_second_hits == 0)
+                        $fatal(1, "S1 +carry was asked for but bg_fetch_pre_second (dot + fine_x == 340) never fired, so the carry mode was not exercised");
+                    if (l0_dots == 0)
+                        $fatal(1, "S1 +carry measured 0 gated dots on scanline 0, so the line-0 pixel-exactness claim would be vacuous");
+                    if (l0_diffs != 0)
+                        $fatal(1, "R6 +carry: scanline 0 differs from the reference on %0d of its %0d gated dots, so the dot-340 carry into line 0 is not pixel-exact", l0_diffs, l0_dots);
+                    $display("R6 +carry VERDICT bg_fetch_pre_second fired %0d times; scanline 0 was pixel-exact on all %0d gated dots", pre_second_hits, l0_dots);
+                end
+
+                // -------------------------------------------------------- +mid
+                // +mid must be shown to have MOVED THE SCROLL, or its 0-diff A/B
+                // proves nothing at all: both instances receive the same bytes by
+                // construction, so two instances that never scrolled would also
+                // agree perfectly.  The distinct-value count is the anti-vacuity
+                // check, and it is why +mid is not merely "another $2007 run".
+                if (m_mid) begin
+                    if (mid_x_beats == 0)
+                        $fatal(1, "S1 +mid was asked for but no dynamic $2005 X-scroll write ever landed, so the scroll never moved and the A/B proves nothing");
+                    if (mid_x_distinct < 8)
+                        $fatal(1, "S1 +mid drove only %0d distinct coarse_x values across the run; the scroll must cycle through enough of its range for a mid-scanline change to be a real change", mid_x_distinct);
+                    $display("R6 +mid VERDICT: %0d mid-frame mid-scanline $2005 writes landed, carrying %0d distinct coarse_x values and %0d distinct coarse_y values, so the scroll really moved under the renderer, and the run still rendered 0 wrong pixels.  W8 above is what says both instances received the identical bytes",
+                             mid_x_beats, mid_x_distinct, mid_y_distinct);
                 end
 
                 $display("PASS tb_bg_fetch_drop");

@@ -19,10 +19,32 @@
 //       bg_fetch_mid       : (dot + fine_x)[2:0] == 7 and dot <= 246
 //       bg_fetch_pre_first : dot == 324 and mask[1]
 //       bg_fetch_pre_second: dot + fine_x == 340
-//     The latest background trigger is therefore dot 246. nes_chr_fetch_unit
-//     issues its two chr_req pulses at trigger+2 and trigger+4 and returns to
-//     S_IDLE at trigger+7, so the last background request beat is at dot 250 and
-//     the background master owns the bus from dot 253 onwards.
+//     The latest background trigger is therefore dot 246.  "trigger" here means
+//     the ce on which bg_fetch_due is HIGH, and "at trigger+k" means the signal
+//     HOLDS during that ce, i.e. the CHR memory samples it on the edge that ends
+//     it.  With that convention the offsets below are MEASURED on this unit at
+//     tile_count = 1, which is what this PPU instantiates:
+//       trigger+0    the unit accepts the request and enters S_PRE
+//       trigger+1    S_PRE drives chr_addr = nxt_addr
+//       trigger+2    S_ARM raises chr_req
+//       trigger+3    S_BEAT drops chr_req and advances chr_addr to fwd_addr
+//                    (last_byte is pl_q && (idx_q == cnt_q-1); cnt_q is 1 so
+//                    last_byte is FALSE on the low-plane beat)  <- BEAT 1
+//       trigger+4    S_GRAB takes bg_lo into the unit and re-raises chr_req
+//       trigger+5    S_BEAT drops chr_req again and does NOT advance chr_addr,
+//                    because last_byte is TRUE on the high-plane beat  <- BEAT 2
+//       trigger+6    S_GRAB takes bg_hi, clears busy and raises bg_valid
+//       trigger+7    back in S_IDLE, bg_valid still high for this one ce
+//     so the two chr_req beats are at trigger+3 and trigger+5, NOT at trigger+2
+//     and trigger+4 as the earlier text here said; the occupancy is 7 ce
+//     (trigger+0..trigger+6) and bg_valid is high during trigger+7.  The last
+//     background request beat is therefore dot 246 + 5 = dot 251, and the
+//     background master owns the bus from dot 254 onwards, not dot 250 and
+//     253.  This was wrong by one dot in the same direction as several other
+//     stale trigger+2/trigger+4 and dot-250 citations in this tree, so it is
+//     recorded as a measurement rather than as a derivation.  The sprite window
+//     below is unaffected either way: 254 < 257 is the inequality the argument
+//     rests on and it holds with one more dot of margin than before.
 //   * The sprite prefetcher takes a one-ce start pulse at dot 257.
 //     nes_sprite_chr_fetch needs 35 ce from start to shadow_valid (36 ce edges),
 //     pulses chr_req at start+2 .. start+33 and drops busy at start+35, i.e.
@@ -176,7 +198,7 @@
 //   [3] / [4] pair select inside ONE window and the local address is 13 bits
 //   on a 14-bit port. chr_addr[13] is therefore declared but never driven:
 //     background : nxt_addr = base_q + {3'b0, idx_q, 4'd0} + (pl_q ? 8 : 0)
-//                  (nes_chr_fetch_unit.v:35) over a 13-bit base_q that tops
+//                  (nes_chr_fetch_unit.v:34) over a 13-bit base_q that tops
 //                  out at 0x1FF7, and this PPU instantiates the unit with
 //                  tile_count = 1, so idx_q stays 0 and the largest address is
 //                  0x1FF7 + 8 = 0x1FFF
@@ -801,6 +823,8 @@ generate
         reg  [7:0]  bg_lo_q;
         reg  [7:0]  bg_hi_q;
         reg         bg_ready;
+        reg  [3:0]  bg_cap_cnt;
+        reg         bg_cap_seen;
 
         assign bg_dot_fine = dot + {6'b0, fine_x};
         assign bg_fetch_mid = (bg_dot_fine[2:0] == 3'd7) && (dot <= 9'd246);
@@ -963,26 +987,32 @@ generate
         // the repeat is the same beat rather than a different one.
         //
         // The cost is bounded and was measured rather than assumed.  An arm can
-        // freeze a unit only on a div_phase 8 clk, and ce_ppu edges are 4 clk
-        // apart with a div_phase 4 edge in between where no arm exists, so a unit
-        // cannot be frozen on two CONSECUTIVE ce.  A background tile then costs
-        // its whole 8 ce occupancy, because the background pipeline has ZERO
-        // slack: bg_fetch_due fires every 8 ce and one tile occupies 8 ce.  A DOT
+        // freeze a unit only on a div_phase 8 clk, and the ce_ppu edges sit at
+        // div_phase 0, 4 and 8 with 0 FOLLOWING 8 rather than preceding it: the edge
+        // after the div_phase 8 one is div_phase 0 of the next dot, and the arm is a
+        // div_phase 8 pulse, so no arm can exist there.  That is why a unit cannot
+        // be frozen on two CONSECUTIVE ce.  A background tile then costs its whole
+        // occupancy, which until this change was 8 ce for a cadence of one request
+        // every 8 ce: ZERO slack, because bg_fetch_due fires every 8 ce and one tile
+        // occupied 8 ce (S_PRE, S_ARM, S_BEAT, S_GRAB, S_BEAT, S_GRAB, S_DONE),
+        // so a freeze that landed on the LAST S_BEAT pushed the request past the next
+        // bg_fetch_due and the request was DROPPED, not merely deferred.  A DOT
         // IS ONE ce, NOT THREE -- the earlier text here said "8 ce of the 24 ce
         // its cadence allows (bg_fetch_due fires every 8 dots and a dot is 4 clk)",
         // which is wrong by a factor of three and is exactly what made this file
-        // look like it had headroom it does not have.  A freeze that lands on the
-        // tile's LAST S_BEAT therefore pushes the request past the next
-        // bg_fetch_due, and the request is DROPPED, not merely deferred.  The
+        // look like it had headroom it does not have.  The occupancy is 7 ce now
+        // (S_DONE is merged into the final S_GRAB) and the PPU captures on a
+        // SCHEDULED dot seven ce after the accepted request rather than on bg_valid,
+        // so one freeze is absorbed with the displayed image unchanged; see THE
+        // SCHEDULED CAPTURE above.  The
         // sprite prefetch costs 35 ce of the 444 ce between its start at dot 257
         // and the first dot of the next line that reads its shadow, and one freeze
         // per byte at most adds 16, so that cadence still has room either way.
-        // What the arm's own freeze DOES cost is drops, and those are NOT fixed
-        // here: with $2007 CHR reads only, tb/ppu/tb_bg_fetch_drop.v measures
-        // 5236 of 25152 requests dropped per three frames, and 11578 of 184304
-        // gated visible dots wrong on a deliberately non-uniform nametable.  The
-        // arm cannot be given a port of its own -- see above -- so the read side
-        // is unchanged by design and remains open.
+        // The arm's own freeze is measured rather than argued in
+        // tb/ppu/tb_bg_fetch_drop.v, which now reports 0 of 25152 requests dropped
+        // per three frames and 0 of 184304 gated visible dots wrong on a
+        // deliberately non-uniform nametable.  The arm cannot be given a port of
+        // its own -- see above -- but it no longer costs a dropped request either.
         //
         // NO DEADLOCK IS POSSIBLE, structurally rather than by measurement:
         // chr_req is high in S_BEAT and in NO other state, so a frozen unit is
@@ -1091,16 +1121,89 @@ generate
                            && (v_addr < 15'h2000);
         assign chr_wdata = reg_din;
 
+        // THE SCHEDULED CAPTURE.  The tile a background fetch exists for is the
+        // one whose target dot is trigger+9 (bg_look_dot at :813), and the nine-dot
+        // trigger-to-display latency is NOT nine dots of logic: the fetch unit
+        // occupies trigger..trigger+6, raises bg_valid at trigger+7, and the
+        // remaining dot is the one that has to be given to the PPU latch, because
+        // bg_lo_q has to be LIVE at trigger+9.  That is why this block no longer
+        // captures "whenever bg_valid rises": bg_valid rises at trigger+7 when the
+        // fetch ran at full speed and at trigger+8 when an arm froze it, so the
+        // rise itself does not name the dot.  The dot is SCHEDULED instead, seven
+        // ce after the accepted request, which is the one dot both cases share:
+        //   trigger    D     occupancy D..D+6   bg_valid at D+7   capture at D+8
+        //   frozen at D+3    D                 D..D+7           D+8
+        // so bg_lo_q is live at D+9 either way and the displayed image does not
+        // change.  The freeze costs the fetch unit one ce and the schedule costs
+        // it none, which is the whole of the one ce of slack the 7-ce occupancy
+        // buys.  bg_cap_seen latches bg_valid so the healthy case, whose pulse has
+        // already gone one ce before the scheduled dot, is still captured, and a capture
+        // that is missed -- no valid ever seen and the unit not idle -- simply does
+        // not happen: bg_ready stays 1 holding the stale tile, which is exactly
+        // what a dropped request does today.  chr_fetch_busy is what makes the
+        // schedule wait rather than latch a half-fetched tile: it is the unit's own
+        // acceptance test (bg_fetch_due && !busy is the request the unit really
+        // took, so the counter is never re-armed on a request that was dropped) and
+        // the capture waits for the same signal, so a fetch still running when the
+        // schedule expires is captured late rather than torn.  THAT LAST CLAUSE IS
+        // A SAFETY PROPERTY, NOT A MEASURED PATH, and the distinction is worth
+        // keeping: tb/ppu/tb_bg_fetch_drop.v measures 0 ce of waiting and 0 delayed
+        // captures over 3 frames in every mode, because the arithmetic makes them
+        // unreachable.  An unfrozen fetch occupies 7 ce and the counter reaches 0
+        // on the 8th; a freeze can only land on a beat ce, which is trigger+3 or
+        // trigger+5, so a frozen fetch occupies exactly 8 ce and its counter also
+        // reaches 0 on the 8th.  Both cases therefore capture at trigger+8 and the
+        // `!chr_fetch_busy` term is never what delays one.  It stays because it is
+        // what makes a LATE capture correct rather than torn if the occupancy ever
+        // grows, and because removing it would be asserting that the occupancy
+        // cannot change.  What actually proves the capture is right is
+        // tb/ppu/tb_nes_ppu2c02_ext_chr.v, which compares bg_lo_q/bg_hi_q against
+        // the CHR model at the address the fetch unit itself latched on every one
+        // of its 126546 background fetch pairs.
+        //
+        // ONE THING THIS BLOCK DOES THAT THE PARAGRAPH ABOVE DOES NOT SAY, and it
+        // is recorded because it was measured and it is not obvious.  bg_valid is
+        // NOT a one-ce pulse: nes_chr_fetch_unit clears it only when it ACCEPTS
+        // THE NEXT REQUEST (S_IDLE, nes_chr_fetch_unit.v:62), so after a line's
+        // last mid-line fetch it stays high across the whole hblank and the
+        // blanking dots.  bg_cap_cnt sits at 0 through all of that, so
+        // bg_cap_take is HIGH on every one of those ce and bg_lo_q / bg_hi_q are
+        // re-latched with the same bytes over and over.  tb/ppu/tb_bg_fetch_drop.v
+        // measures it directly: 25152 requests and 91961 takes over 3 frames, of
+        // which 66809 have no request outstanding at all, and 0 of them change a
+        // latched byte.  It is harmless -- the unit is idle holding the completed
+        // tile, so the write is idempotent, and it only happens from dot 247 on
+        // where no pixel is emitted -- but it is real toggling on two flops that
+        // feed the pixel path, and if the byte ever DID change it would be a torn
+        // overwrite, so the bench asserts that it never does rather than assuming
+        // it.  Gating the capture on bg_cap_seen alone would remove the re-latch
+        // at the cost of the late-capture case above, which is the whole point of
+        // this block; it is left as it is and the toggle count is reported.
+        wire bg_fetch_start = bg_fetch_due && !chr_fetch_busy;
+        wire bg_cap_take    = (bg_cap_cnt == 4'd0) && !chr_fetch_busy
+                              && (chr_fetch_bg_valid || bg_cap_seen);
+
         always @(posedge clk) begin
             if (reset) begin
-                bg_lo_q  <= 8'h00;
-                bg_hi_q  <= 8'h00;
-                bg_ready <= 1'b0;
+                bg_lo_q     <= 8'h00;
+                bg_hi_q     <= 8'h00;
+                bg_ready    <= 1'b0;
+                bg_cap_cnt  <= 4'd0;
+                bg_cap_seen <= 1'b0;
             end else if (ce) begin
-                if (chr_fetch_bg_valid) begin
-                    bg_lo_q  <= chr_fetch_bg_lo;
-                    bg_hi_q  <= chr_fetch_bg_hi;
-                    bg_ready <= 1'b1;
+                if (bg_fetch_start) begin
+                    bg_cap_cnt  <= 4'd7;
+                    bg_cap_seen <= 1'b0;
+                end else if (bg_cap_cnt != 4'd0) begin
+                    bg_cap_cnt  <= bg_cap_cnt - 4'd1;
+                end
+                if (chr_fetch_bg_valid)
+                    bg_cap_seen <= 1'b1;
+                if (bg_cap_take) begin
+                    bg_lo_q     <= chr_fetch_bg_lo;
+                    bg_hi_q     <= chr_fetch_bg_hi;
+                    bg_ready    <= 1'b1;
+                    bg_cap_seen <= 1'b0;
                 end
             end
         end

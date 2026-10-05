@@ -70,7 +70,8 @@
 //   PREVIOUS pattern byte.  The arithmetic, so the choice of edge is auditable:
 //     clk is 21.477272727 MHz and div_phase runs 0..11, one increment per clk.
 //     ce_ppu = (div_phase[1:0] == 2'b00), so ce_ppu is high AT div_phase 0, 4
-//     and 8: one PPU dot is 4 clk and the enable is high 3 of every 4.  The ce
+//     and 8: one PPU dot is 4 clk and div_phase runs 0..11, so the enable is
+//     high 3 of every 12 clk.  The ce
 //     EDGES are therefore the posedges that END div_phase 0, 4 and 8.
 //     The arm: nes_system_v6 raises ppu_chr_rd_arm on the single clk whose
 //     pre-edge div_phase is 8, so during div_phase 8 chr_req is high and

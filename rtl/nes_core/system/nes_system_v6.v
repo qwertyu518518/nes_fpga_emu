@@ -406,23 +406,66 @@ assign ppu_chr_rd_arm = sel_ppu && !cpu_we && (ppu_addr == 3'd7) &&
 //         v_addr[14:13] == 0.  The term was therefore a constant 1 on every beat
 //         where ppu_we is high, and it must stay one.
 //
-//       ppu_chr_addr[13] IS **NOT** CONSTANT, and the first version of this
-//         comment claimed it was.  That claim was wrong and the testbench caught
-//         it: chr_addr = chr_rd_win ? v_addr[13:0] : (sp_bus_sel ?
-//         sp_chr_addr_raw : bg_chr_addr_raw) (nes_ppu2c02.v:1029-1030), and
-//         bg_chr_addr_raw comes from nes_chr_fetch_unit, whose fwd_addr is
-//         nxt_addr + 14'd8 (nes_chr_fetch_unit.v:36) with nxt_addr = base_q + 8.
-//         bg_tile_base tops out at 0x1FFF (nes_ppu2c02.v:831-832:
-//         {table,name,4'b0} + fine_y, i.e. 0x1FF8 + 7), so the HIGH plane byte of
-//         the last tile row of the $1000-$1FFF window is requested at
-//         0x1FFF + 8 = 0x2007 and bit 13 IS set on that address.  Measured on
-//         tb/system/tb_nes_system_v6.v's chr_ram_b board: with the raw read
-//         address, mapper_chr_ram_we was LOW on 11 of that board's $2007 CHR
-//         write beats, i.e. 11 legal CHR-RAM stores were being refused by a gate
-//         that was reading somebody else's address bit.  (That high-plane address
-//         is also why the module header says ppu_addr[13] has no address to
-//         carry: it is a dead bit in the READ path -- every mapper drops it -- but
-//         it is NOT dead in the chr_ram_we gate, and that gate is write-side.)
+//       ppu_chr_addr[13] IS STRUCTURALLY 0, and an EARLIER version of this
+//         comment claimed the opposite.  That claim was wrong, it was caught by
+//         a probe, and the corrected arithmetic is worth writing out because the
+//         wrong version was believed for a long time:
+//
+//         chr_addr = chr_rd_win ? v_addr[13:0] : (sp_bus_sel ?
+//         sp_chr_addr_raw : bg_chr_addr_raw) (nes_ppu2c02.v:1094-1095).  Only
+//         the fetch units' own address registers are in question, and they
+//         cannot produce bit 13:
+//
+//         BACKGROUND.  bg_chr_addr_raw is nes_chr_fetch_unit's chr_addr, which
+//         holds nxt_addr = base_q + {3'b0, idx_q, 4'd0} + (pl_q ? 8 : 0)
+//         (nes_chr_fetch_unit.v:34) on the first beat and fwd_addr = nxt_addr + 8
+//         (:35) on the second, advanced under `if (!last_byte)` at :82-84.  With
+//         tile_count = 1 there are exactly TWO beats, not one: last_byte is
+//         pl_q && (idx_q == cnt_q - 1) (:33), so it is FALSE on the low-plane
+//         beat and TRUE on the high-plane beat.  The guard therefore lets
+//         fwd_addr be presented for the high plane and refuses only the
+//         base+16 that no tile needs.  idx_q stays 0 for the whole fetch, so the
+//         address sequence is base_q then base_q + 8 and the largest address the
+//         unit can present is base_q + 8.
+//         base_q is bg_tile_base = {control_reg[4], bg_name_target, 4'b0000} +
+//         {10'b0, bg_fine_y_target} (nes_ppu2c02.v:841-842).  THAT IS 1 + 8 + 4
+//         = 13 bits with the tile number in bits [11:4] and the low FOUR bits
+//         hard zero, so the largest {table,name,4'b0} is 0x1FF0 -- NOT 0x1FF8 --
+//         because name is 8 bits and cannot fill bit 3.  fine_y is 3 bits, so
+//         bg_tile_base tops out at 0x1FF0 + 7 = 0x1FF7 and the largest address
+//         presented is 0x1FF7 + 8 = 0x1FFF.  Bit 13 cannot be set.  (The earlier
+//         text here wrote "0x1FF8 + 7", which is the same error one octal step
+//         out, and that single wrong constant is what produced 0x2007 and the
+//         whole claim that the read address reaches into bit 13.)
+//         SPRITE.  plane_byte = {1'b0, pat} + (p ? 8 : 0), masked 14'h3FFF
+//         (nes_sprite_chr_fetch.v:85-86), over a 13-bit pat_addr whose bit 3 is
+//         the hard 1'b0, so pat <= 0x1FF7 and the mask never fires.
+//
+//         MEASURED, not argued.  A probe drove this PPU for 4 frames with a
+//         nametable of $FF everywhere, PPUCTRL[4]=1 and Y scroll 0x27 (coarse 4,
+//         fine 7) so that bg_tile_base's maximum was actually reachable, and
+//         watched the real chr_addr port: 67070 background request beats, largest
+//         chr_addr 0x1FFF, largest bg_tile_base latched 0x1FF7, and bit 13 set
+//         on NONE of them.  tb/system/tb_nes_system_v6.v P0-3 measures the same
+//         thing at system level and reports local chr_addr[12] -- the real
+//         pattern-table select -- set on thousands of requests with bit 13 set
+//         on none, which is what makes the bound structural rather than a
+//         coverage gap.  The high-plane address that the earlier text called
+//         0x2007 is 0x1FFF.
+//
+//         CONSEQUENCE FOR chr_ram_we, and it is now a property rather than a
+//         rescue.  chr_ram_we's ppu_addr[13] term used to be fed somebody
+//         else's address bit, and the earlier comment reported that this
+//         refused 11 of tb_nes_system_v6's chr_ram_b $2007 write beats.  With
+//         the arithmetic above, ppu_addr[13] is 0 on a write beat for two
+//         INDEPENDENT reasons -- the write address's own bit 13 is structurally
+//         0, and so is the fetch address now -- so the substitution below is
+//         belt-and-braces rather than a fix.  It is kept because it costs one
+//         LUT on a signal nothing in the hardware consumes (see below), it
+//         makes the gate's meaning independent of that arithmetic staying true,
+//         and it keeps chr_ram_we bit-identical to its pre-mux behaviour.  What
+//         it is NOT is evidence that the read address reaches bit 13; that
+//         claim was measured false and is withdrawn.
 //
 //     So bit 13 is substituted, not the whole word.  The write address's bit 13
 //     is put back on a write beat, which makes chr_ram_we bit-identical to what
@@ -471,12 +514,15 @@ assign ppu_chr_rd_arm = sel_ppu && !cpu_we && (ppu_addr == 3'd7) &&
 // chr_ram_enable_r && ppu_we && !ppu_addr[13], a WRITE-side gate, and before
 // this change ppu_addr[13] on a write beat was ppu_chr_waddr[13] -- which is
 // structurally 0, because chr_we is qualified on v_addr < $2000.  The read
-// address is NOT structurally 0 there: the high plane byte of the last tile row
-// of the $1000-$1FFF window is requested at 0x2007 (see the full derivation at
-// this wire).  Putting the write address's bit 13 back on a write beat makes
-// chr_ram_we bit-identical to what it was, costs one LUT on a signal nothing in
-// the hardware consumes, and leaves bits [12:0] -- every bit the mapper bank
-// decodes -- mux-free.
+// address is ALSO structurally 0 there, which an earlier version of this comment
+// denied: bg_tile_base tops out at 0x1FF7, not 0x1FFF, because
+// {control_reg[4], name, 4'b0} has its low FOUR bits hard zero and name is only
+// 8 bits, so the fetch unit's largest presentable address is 0x1FFF rather than
+// 0x2007.  The full derivation and the probe that measured it are at this wire.
+// Putting the write address's bit 13 back on a write beat therefore costs one
+// LUT on a signal nothing in the hardware consumes, leaves bits [12:0] -- every
+// bit the mapper bank decodes -- mux-free, and keeps chr_ram_we independent of
+// that arithmetic rather than resting on it.
 wire [13:0] mapper_ppu_addr = {ppu_chr_we ? 1'b0 : ppu_chr_addr[13],
                                ppu_chr_addr[12:0]};
 wire mapper_ppu_we = ppu_chr_we;
