@@ -265,7 +265,20 @@ module nes_zynq_top #(
     // from opposite ends of the hierarchy and both must be overridden to build
     // a real cartridge.
     parameter         PRG_INIT_FILE       = "rtl/nes_core/cart/prg_placeholder.hex",
-    parameter         CHR_INIT_FILE       = "rtl/nes_core/cart/chr_placeholder.hex"
+    parameter         CHR_INIT_FILE       = "rtl/nes_core/cart/chr_placeholder.hex",
+    // DIAGNOSTIC KNOB, NOT A FIX.  Which GT9147 register the driver reads the two
+    // 16 bit point coordinates out of.  The default 16'h8150 is touch point 1, which
+    // is what this design has always read and must keep reading, so every existing
+    // instance and the committed gate are unchanged.  Overriding it is how the NEXT
+    // diagnostic is obtained without editing anything: 16'h8146/0x8147 is the X
+    // coordinate resolution and 16'h8148/0x8149 the Y coordinate resolution, so
+    // pointing this at 16'h8146 makes touch_x report the controller's own X
+    // resolution and touch_y its low half of the Y resolution.  The controller
+    // generates and stores its own resolution and axis orientation at power up
+    // (GT9147 datasheet p.3, "the module detects the parameters and generates its
+    // configuration automatically") and publishes it only through those read only
+    // registers, so this is the only way to ask it what frame it is reporting in.
+    parameter  [15:0] CT_COORD_REG        = 16'h8150
 ) (
     input  wire        sys_clk,
     input  wire        sys_rst_n,
@@ -502,7 +515,12 @@ module nes_zynq_top #(
     wire       touch_sda_oe;
     wire       touch_sda_i;
 
-    nes_touch_input u_touch (
+    nes_touch_input #(
+        // DIAGNOSTIC: defaults to the driver's own 16'h8150, i.e. this build reads
+        // exactly the register it always read.  Only the parameter was plumbed; the
+        // module's behaviour, byte order and decode are untouched.
+        .CT_COORD_REG (CT_COORD_REG)
+    ) u_touch (
         .clk        (sys_clk),
         .reset      (rst_sys),
         .ct_int     (touch_int),
@@ -788,6 +806,202 @@ module nes_zynq_top #(
         .frame_pulse   (vid_frame_pulse)
     );
 
+    // ======================================================================
+    // ===== DIAGNOSTIC BEGIN: raw touch coordinate marker ================
+    // THIS IS A MEASUREMENT, NOT A FIX.  The d-pad from a screen touch is wrong
+    // in all four directions on a board that is otherwise correct, and the region
+    // map is geometrically right, so the fault is that the COORDINATES ARRIVING
+    // FROM THE CONTROLLER ARE NOT WHAT THE CODE ASSUMES.  The GT9147 auto detects
+    // its own module parameters and auto generates its configuration at power up
+    // (GT9147 datasheet p.3) and publishes the result only through read only
+    // registers nobody here reads: 0x8146/0x8147 X resolution, 0x8148/0x8149 Y
+    // resolution, 0x8048/0x804A X/Y output max and 0x804D bit 3 X2Y, the swap
+    // flag.  Nothing in the design can know what any of those are, so nothing in
+    // the design may guess.  This block draws where the controller actually says
+    // the finger is, and colours the case where that is impossible.
+    //
+    // NOTHING here is corrected, swapped, scaled or clamped into range.  The
+    // region map, the coordinate arithmetic and the byte order are all left exactly
+    // as they were, because those are the things the measurement is meant to inform.
+    //
+    // WHERE IT LIVES, AND WHY NOT IN THE WRITES OR THE FRAMEBUFFER
+    //   On the READ side, as a mux on vid_rgb565.  vid_rgb565, vid_pixel_x and
+    //   vid_pixel_y are all registered from the same de_next inside
+    //   nes_video_800x480, so they describe the dot being emitted THIS cycle and a
+    //   combinational mux lands on the right dot with no latency added and no skew.
+    //   Nothing is written into frame_mem: that would need the WR port, whose in_x
+    //   and in_y are 8 bit NES coordinates, so a marker written there would be
+    //   scaled to 256x240 and mean nothing on an 800x480 panel.  Writing it as
+    //   well would fight the core for the write port and put the marker one core
+    //   clock behind the raster.
+    //
+    // THE SHAPE: a 3 pixel hollow 21x21 ring, a 3 pixel wide crosshair through the
+    // hole with its exact centre, and two 17 pixel tick arms out to 27 pixels each
+    // side.  Hollow, so what the game was drawing is still visible inside it, and
+    // it reaches across a fifth of the panel so it cannot be lost in the graphics.
+    // Two rings of opposite tone, because one colour cannot be guaranteed to differ
+    // from arbitrary NES output: the outer ring is the diagnostic colour and the
+    // crosshair is the opposite tone, so whichever the local background resembles,
+    // the other one is what the eye sees.
+    //
+    // THE TWO COLOURS, which is the whole cheap high value observation:
+    //   bright green ring  = the reported x is 0..799 and the reported y is 0..479,
+    //                         so the frame is the one the region map assumes
+    //   bright magenta     = at least one of them is outside 0..799 x 0..479, which
+    //                         is direct evidence the frame is NOT 800x480 whatever
+    //                         the marker happens to land on
+    // That ONE bit separates a transposed frame from a wrong panel: a transposed
+    // 800x480 stays entirely inside 0..799 x 0..479 and stays green, a different
+    // panel such as the 480x272 ATK-4342 in the same module family reports a frame
+    // this code has never heard of and goes magenta.
+    //
+    // THE HOLD, and why there is one.  touch_valid is a LEVEL that the driver drops
+    // at the next poll, about 20 ms after the report it belongs to, because the
+    // poll's own write to 0x814E consumes the controller's data ready flag.  A
+    // marker drawn straight from it would be a 20 ms flash and unreadable by hand,
+    // so a report latches the position and starts a 2 s countdown that the next
+    // report restarts.  After 2 s with no report the marker clears itself and the
+    // screen is normal again, so the next corner is unambiguous.
+    //
+    // REMOVING IT: set DIAG_MARKER to 0 and the whole block folds away, or delete
+    // everything between the two DIAGNOSTIC markers.  Nothing outside this block
+    // depends on it.
+    // ======================================================================
+    localparam integer DIAG_MARKER       = 1;
+    // 2 s at 25 MHz.  ms, not cycles, so the number is readable.
+    localparam integer DIAG_MARK_HOLD_MS = 2000;
+    localparam integer DIAG_LCD_HZ       = 25_000_000;
+    localparam integer DIAG_MARK_HOLD    = (DIAG_LCD_HZ / 1000) * DIAG_MARK_HOLD_MS;
+
+    // 800x480 is the panel the region map and the scaler are both built for, so
+    // "out of range" means "not inside the frame the design assumes", not "not a
+    // legal touch".
+    localparam [15:0] DIAG_X_MAX  = 16'd799;
+    localparam [15:0] DIAG_Y_MAX  = 16'd479;
+    localparam [15:0] DIAG_RING_R = 16'd10;   // outer half width of the ring
+    localparam [15:0] DIAG_HOLE_R = 16'd7;    // everything inside this is the game
+    localparam [15:0] DIAG_BAR_HW = 16'd1;    // crosshair half width
+    localparam [15:0] DIAG_TICK_0 = 16'd11;   // ticks start just outside the ring
+    localparam [15:0] DIAG_TICK_1 = 16'd27;
+
+    localparam [15:0] DIAG_RGB_OK_RING = 16'h07E0;  // saturated green
+    localparam [15:0] DIAG_RGB_OK_BAR  = 16'h0000;  // black, the opposite tone
+    localparam [15:0] DIAG_RGB_OOR_RING = 16'hF81F; // saturated magenta
+    localparam [15:0] DIAG_RGB_OOR_BAR  = 16'hFFFF; // white, the opposite tone
+
+    // ---- the CDC: sys_clk (50 MHz) -> lcd_clk (25 MHz)
+    // touch_x, touch_y and touch_valid leave u_touch on the sys_clk domain and the
+    // overlay consumes them combinationally on the lcd_clk raster, so all three
+    // cross.  Two flops each with ASYNC_REG, exactly the idiom the button CDC above
+    // already uses, and the first flop is the only one permitted to go metastable.
+    // A single flop, or gating on touch_valid in the sys_clk domain, would put a
+    // metastable bit on the marker geometry.
+    (* ASYNC_REG = "TRUE" *) reg [15:0] diag_tx_meta_q;
+    (* ASYNC_REG = "TRUE" *) reg [15:0] diag_tx_sync_q;
+    (* ASYNC_REG = "TRUE" *) reg [15:0] diag_ty_meta_q;
+    (* ASYNC_REG = "TRUE" *) reg [15:0] diag_ty_sync_q;
+    (* ASYNC_REG = "TRUE" *) reg        diag_tv_meta_q;
+    (* ASYNC_REG = "TRUE" *) reg        diag_tv_sync_q;
+
+    always @(posedge mmcm_lcd_clk or negedge sys_rst_n) begin
+        if (!sys_rst_n) begin
+            diag_tx_meta_q <= 16'h0000;
+            diag_tx_sync_q <= 16'h0000;
+            diag_ty_meta_q <= 16'h0000;
+            diag_ty_sync_q <= 16'h0000;
+            diag_tv_meta_q <= 1'b0;
+            diag_tv_sync_q <= 1'b0;
+        end else begin
+            diag_tx_meta_q <= touch_x;
+            diag_tx_sync_q <= diag_tx_meta_q;
+            diag_ty_meta_q <= touch_y;
+            diag_ty_sync_q <= diag_ty_meta_q;
+            diag_tv_meta_q <= touch_valid;
+            diag_tv_sync_q <= diag_tv_meta_q;
+        end
+    end
+
+    // ---- the latched report and its out of range verdict
+    reg  [31:0] diag_hold_q;
+    reg  [15:0] diag_x_q;
+    reg  [15:0] diag_y_q;
+    reg         diag_oor_q;
+
+    wire diag_report = diag_tv_sync_q;
+    // The verdict is taken on the RAW numbers, before any clamp below, because the
+    // whole point is to record that the raw number was impossible.
+    wire diag_raw_oor = (diag_tx_sync_q > DIAG_X_MAX) || (diag_ty_sync_q > DIAG_Y_MAX);
+
+    always @(posedge mmcm_lcd_clk or negedge sys_rst_n) begin
+        if (!sys_rst_n) begin
+            diag_hold_q <= 32'd0;
+            diag_x_q    <= 16'h0000;
+            diag_y_q    <= 16'h0000;
+            diag_oor_q  <= 1'b0;
+        end else begin
+            if (diag_report) begin
+                diag_hold_q <= DIAG_MARK_HOLD[31:0];
+                diag_x_q    <= diag_tx_sync_q;
+                diag_y_q    <= diag_ty_sync_q;
+                diag_oor_q  <= diag_raw_oor;
+            end else if (diag_hold_q != 32'd0) begin
+                diag_hold_q <= diag_hold_q - 32'd1;
+            end
+        end
+    end
+
+    wire diag_en     = (DIAG_MARKER != 0);
+    wire diag_active = diag_en & (diag_hold_q != 32'd0);
+
+    // ---- geometry, purely combinational, on the pixel being emitted
+    // The centre is clamped only far enough to keep the 27 pixel tick arms on the
+    // panel.  A raw value past the edge therefore appears pinned just inside that
+    // edge, which is itself the signal; nothing is corrected.
+    wire [15:0] diag_cx = (diag_x_q > (DIAG_X_MAX - DIAG_TICK_1)) ?
+                           (DIAG_X_MAX - DIAG_TICK_1) : diag_x_q;
+    wire [15:0] diag_cy = (diag_y_q > (DIAG_Y_MAX - DIAG_TICK_1)) ?
+                           (DIAG_Y_MAX - DIAG_TICK_1) : diag_y_q;
+
+    // 12 bit signed, and 12 is enough: vid_pixel_x/y are 0..1023 and the clamped
+    // centre is 0..789 / 0..469, so the difference never leaves -1023..1023.
+    wire signed [11:0] diag_dx = $signed({1'b0, vid_pixel_x}) - $signed({1'b0, diag_cx[10:0]});
+    wire signed [11:0] diag_dy = $signed({1'b0, vid_pixel_y}) - $signed({1'b0, diag_cy[10:0]});
+    wire        [11:0] diag_ax = (diag_dx < 0) ? -diag_dx : diag_dx;
+    wire        [11:0] diag_ay = (diag_dy < 0) ? -diag_dy : diag_dy;
+
+    wire diag_in_box   = (diag_ax <= {8'd0, DIAG_RING_R}) && (diag_ay <= {8'd0, DIAG_RING_R});
+    wire diag_in_hole  = (diag_ax <= {8'd0, DIAG_HOLE_R}) && (diag_ay <= {8'd0, DIAG_HOLE_R});
+    wire diag_hit_ring = diag_in_box & ~diag_in_hole;
+
+    wire diag_hit_bar  = ((diag_ax <= {8'd0, DIAG_BAR_HW}) && (diag_ay <= {8'd0, DIAG_HOLE_R})) ||
+                         ((diag_ay <= {8'd0, DIAG_BAR_HW}) && (diag_ax <= {8'd0, DIAG_HOLE_R}));
+
+    wire diag_tick_x   = ((diag_ax >= {8'd0, DIAG_TICK_0}) && (diag_ax <= {8'd0, DIAG_TICK_1})) &&
+                         (diag_ay <= {8'd0, DIAG_BAR_HW});
+    wire diag_tick_y   = ((diag_ay >= {8'd0, DIAG_TICK_0}) && (diag_ay <= {8'd0, DIAG_TICK_1})) &&
+                         (diag_ax <= {8'd0, DIAG_BAR_HW});
+    wire diag_hit_tick = diag_tick_x | diag_tick_y;
+
+    wire [15:0] diag_ring_rgb = diag_oor_q ? DIAG_RGB_OOR_RING : DIAG_RGB_OK_RING;
+    wire [15:0] diag_bar_rgb  = diag_oor_q ? DIAG_RGB_OOR_BAR  : DIAG_RGB_OK_BAR;
+
+    // Not gated with vid_de: lcd_rgb is tri-stated whenever vid_de is low, so the
+    // blanked value never reaches a pin, and vid_pixel_x/y read 0 during blanking.
+    //
+    // Gated with diag_active, and that gate is not optional.  diag_x_q, diag_y_q and
+    // diag_oor_q hold their last values after the countdown reaches zero, so an
+    // ungated mux leaves the marker on the panel permanently at whatever position
+    // was last reported, and diag_hold_q is 0 at reset with the latched centre at
+    // 0,0, so an ungated mux also paints a crosshair cluster into the top left
+    // corner of the active area from power up, before any report has happened.
+    wire diag_hit_bar_tick = diag_hit_bar | diag_hit_tick;
+
+    wire [15:0] out_rgb565 = diag_active & diag_hit_ring     ? diag_ring_rgb :
+                             diag_active & diag_hit_bar_tick ? diag_bar_rgb  :
+                             vid_rgb565;
+    // ===== DIAGNOSTIC END ================================================
+    // ======================================================================
+
     // ------------------------------------------------------ RGB565 -> RGB888
     // rgb565 passes through nes_video_800x480 untouched: [15:11] red,
     // [10:5] green, [4:0] blue.  Each channel is widened to eight bits by
@@ -795,9 +1009,10 @@ module nes_zynq_top #(
     // 0xFFFF -> 0xFFFFFF and every channel is monotonic in its input.
     // The replicated bits are the field's own MSBs: red [15:13], green [10:9],
     // blue [4:2].  Replication is exact at both ends and never overshoots.
-    wire [7:0] lcd_r8 = {vid_rgb565[15:11], vid_rgb565[15:13]};
-    wire [7:0] lcd_g8 = {vid_rgb565[10:5],  vid_rgb565[10:9]};
-    wire [7:0] lcd_b8 = {vid_rgb565[4:0],   vid_rgb565[4:2]};
+    // out_rgb565 is vid_rgb565 unless the diagnostic marker above is on this dot.
+    wire [7:0] lcd_r8 = {out_rgb565[15:11], out_rgb565[15:13]};
+    wire [7:0] lcd_g8 = {out_rgb565[10:5],  out_rgb565[10:9]};
+    wire [7:0] lcd_b8 = {out_rgb565[4:0],   out_rgb565[4:2]};
 
     // The bus is bidirectional: the vendor reads the panel ID back over these
     // pins, so it is released whenever the panel is not being driven.

@@ -120,6 +120,9 @@ module tb_nes_zynq_top;
     integer touch_err_base;
     integer z_seen;
     integer de_seen;
+    integer diag_guard;
+    integer diag_pixels;
+    integer diag_base_rgb;
 
     reg locked_r;
     reg [7:0]  pal_drv;
@@ -991,6 +994,55 @@ module tb_nes_zynq_top;
         if (bus_pp_sda != 0) err("TOUCH_SDA_PUSH_PULL", bus_pp_sda, 0);
         $display("BUS  touch bus contention over the whole run: scl=%0d sda=%0d push_pull_sda=%0d",
                  bus_xcl, bus_xsda, bus_pp_sda);
+
+        // ------------------------------------------- diagnostic marker, in range
+        // The raw coordinate overlay in nes_zynq_top is a temporary measurement and
+        // not a fix, and it is the entire thing the user is asked to look at, so it
+        // has to be proven to draw at all and to draw in the in-range colour for a
+        // report that IS in range.  Nothing else in this bench can see it: the
+        // expansion checks all run before any report has happened, and that is
+        // exactly how the ungated mux that left a crosshair sitting in the top left
+        // corner of the active area from power up was caught, by EXPAND_EXHAUSTIVE
+        // and not by anything that was looking for the marker.
+        // It runs HERE, at the end, and not next to the report: the overlay holds
+        // the marker for 2 s after the last report while the driver drops
+        // touch_valid after about 20 ms, so the marker is still on screen at the end
+        // of the run even though the report itself is long gone.  Checking it any
+        // earlier would have to wait up to a whole frame for the raster to reach the
+        // marker, and that wait is longer than the report lasts, which is what made
+        // the key checks below it see an expired report.
+        // Observed only through the public lcd_rgb pin and never through a signal
+        // inside the block, so deleting the block cannot break this bench, and
+        // guarded on DIAG_MARKER so setting it to 0 is a complete removal instead of
+        // a removal that then fails the gate.
+        if (dut.DIAG_MARKER != 0) begin
+            // One panel frame is 554400 lcd clocks, so 600000 covers the worst case
+            // where the last report landed just after the raster passed this line.
+            diag_guard = 0;
+            diag_pixels = 0;
+            while (diag_pixels == 0 && diag_guard < 600000) begin
+                @(posedge lcd_clk);
+                diag_guard = diag_guard + 1;
+                if (lcd_de === 1'b1) begin
+                    diag_base_rgb = exp_888(dut.vid_rgb565);
+                    if (lcd_rgb !== diag_base_rgb[23:0]) begin
+                        diag_pixels = diag_pixels + 1;
+                        if (lcd_rgb !== 24'h00FF00 && lcd_rgb !== 24'h000000)
+                            err("DIAG_MARKER_WRONG_COLOUR_IN_RANGE", lcd_rgb, 24'h00FF00);
+                        // The overlay corrects nothing, so the only dot it may
+                        // override is inside the shape around the reported centre,
+                        // which is 27 pixels of tick arm either side of (100, 120).
+                        if ((dut.vid_pixel_x < 11'd73) || (dut.vid_pixel_x > 11'd127) ||
+                            (dut.vid_pixel_y < 11'd93)  || (dut.vid_pixel_y > 11'd147))
+                            err("DIAG_MARKER_OFF_CENTRE", dut.vid_pixel_x, dut.vid_pixel_y);
+                    end
+                end
+            end
+            if (diag_pixels == 0)
+                err("DIAG_MARKER_NEVER_DREW", diag_guard, 0);
+            $display("DIAG marker drew %0d lcd_clk after the report, in range, centred on the reported (100, 120)",
+                     diag_guard);
+        end
 
         if (errors != 0) begin
             $display("FAIL nes_zynq_top with %0d violations", errors);
