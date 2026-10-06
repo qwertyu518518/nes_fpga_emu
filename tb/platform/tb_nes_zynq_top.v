@@ -120,9 +120,6 @@ module tb_nes_zynq_top;
     integer touch_err_base;
     integer z_seen;
     integer de_seen;
-    integer diag_guard;
-    integer diag_pixels;
-    integer diag_base_rgb;
 
     reg locked_r;
     reg [7:0]  pal_drv;
@@ -175,9 +172,14 @@ module tb_nes_zynq_top;
     // The panel is the only other device on touch_scl / touch_sda and it is open
     // drain like the master: it pulls a line low and otherwise releases it.  It
     // ACKs every byte addressed to 7'h14 and answers the two register reads the
-    // controller makes, 16'h814E for the status and 16'h8150 for the four
-    // coordinate bytes.  The register pointer survives a repeated START, which is
-    // how the controller issues write-two-bytes-then-repeated-START-read.
+    // controller makes for a report, 16'h814E for the status and 16'h8150 for the
+    // four coordinate bytes.  It also answers the three read-only registers the
+    // driver calibrates itself from, 16'h8048/16'h8049 X Output Max, 16'h804A/16'h804B
+    // Y Output Max and 16'h804D Module_Switch1, because a controller that returns
+    // 8'h00 to those is one the driver has to reject, and this bench is where the
+    // calibration is seen end to end through the top level's wiring.  The register
+    // pointer survives a repeated START, which is how the controller issues
+    // write-two-bytes-then-repeated-START-read.
     //
     // The decode is deliberately the same shape as the module bench's: sample on
     // the SCL rising edge, decide and present ACK or data on the SCL falling
@@ -188,6 +190,9 @@ module tb_nes_zynq_top;
     localparam [6:0]  SL_ADDR  = 7'h14;
     localparam [15:0] SL_STREG = 16'h814E;
     localparam [15:0] SL_COREG = 16'h8150;
+    localparam [15:0] SL_XMAX  = 16'h8048;
+    localparam [15:0] SL_YMAX  = 16'h804A;
+    localparam [15:0] SL_SWMOD = 16'h804D;
 
     localparam [1:0] SL_RX      = 2'd0;
     localparam [1:0] SL_ACK     = 2'd1;
@@ -216,12 +221,19 @@ module tb_nes_zynq_top;
     reg  [7:0]  sl_status  = 8'h00;
     reg  [15:0] sl_x       = 16'd100;
     reg  [15:0] sl_y       = 16'd120;
+    // What this panel says about itself.  A 4.3" 800x480 module reports its output
+    // maxima as 799 and 479 and its Module_Switch1 with Stretch_rank set and X2Y
+    // (bit 3) clear, i.e. 8'h30.  The driver must turn those into 199 / 600 / 239.
+    reg  [15:0] sl_xmax    = 16'd799;
+    reg  [15:0] sl_ymax    = 16'd479;
+    reg  [7:0]  sl_switch  = 8'h30;
 
     integer sl_start_cnt  = 0;
     integer sl_stop_cnt   = 0;
     integer sl_addr_hits  = 0;
     integer sl_flag_clr   = 0;
     integer sl_coord_rds  = 0;
+    integer sl_cal_rds    = 0;
     integer scl_probe_bad = 0;
     integer bus_xcl       = 0;
     integer bus_xsda      = 0;
@@ -262,6 +274,22 @@ module tb_nes_zynq_top;
                     default: sl_tx = sl_y[15:8];
                 endcase
                 if (sl_rd_idx == 0) sl_coord_rds = sl_coord_rds + 1;
+            end else if (sl_rd_base == SL_XMAX) begin
+                // X Output Max, low byte then high byte, in one transaction.
+                case (sl_rd_idx)
+                    0: sl_tx = sl_xmax[7:0];
+                    default: sl_tx = sl_xmax[15:8];
+                endcase
+                if (sl_rd_idx == 0) sl_cal_rds = sl_cal_rds + 1;
+            end else if (sl_rd_base == SL_YMAX) begin
+                case (sl_rd_idx)
+                    0: sl_tx = sl_ymax[7:0];
+                    default: sl_tx = sl_ymax[15:8];
+                endcase
+                if (sl_rd_idx == 0) sl_cal_rds = sl_cal_rds + 1;
+            end else if (sl_rd_base == SL_SWMOD) begin
+                sl_tx = sl_switch;
+                if (sl_rd_idx == 0) sl_cal_rds = sl_cal_rds + 1;
             end else begin
                 sl_tx = 8'h00;
             end
@@ -835,6 +863,29 @@ module tb_nes_zynq_top;
         if (dut.touch_rst_n !== 1'b1) err("TOUCH_RST_N_NOT_RELEASED", dut.touch_rst_n, 1);
 
         // One poll cycle is a status read, a coordinate read and a flag clear.
+        // The wait is taken AFTER the calibration, because the driver reads three
+        // configuration registers between init_done and its first poll, and counting
+        // STOPs from init_done would be satisfied by those three and the poll itself
+        // would never be waited for.  Waiting for the calibration first is what
+        // makes the three STOPs below mean a poll cycle.
+        touch_guard = 0;
+        while (sl_cal_rds < 3 && touch_guard < 8000000) begin
+            @(posedge sys_clk);
+            touch_guard = touch_guard + 1;
+        end
+        if (sl_cal_rds < 3) err("TOUCH_CALIBRATION_NEVER_RAN", sl_cal_rds, 3);
+        // The last calibration byte is still in flight when sl_cal_rds reaches 3,
+        // so its STOP has not been counted yet.  Sample the bases only after it has
+        // been, or the window below starts one transaction early and its counts no
+        // longer describe one poll cycle.
+        touch_base   = sl_stop_cnt;
+        touch_guard  = 0;
+        while (sl_stop_cnt < touch_base + 1 && touch_guard < 400000) begin
+            @(posedge sys_clk);
+            touch_guard = touch_guard + 1;
+        end
+        if (sl_stop_cnt < touch_base + 1)
+            err("TOUCH_CALIBRATION_NO_STOP", sl_stop_cnt, touch_base + 1);
         touch_base   = sl_stop_cnt;
         touch_err_base = sl_addr_hits;
         touch_guard  = 0;
@@ -843,7 +894,10 @@ module tb_nes_zynq_top;
             touch_guard = touch_guard + 1;
         end
         if (sl_stop_cnt < touch_base + 3) err("TOUCH_POLL_NEVER_COMPLETED", sl_stop_cnt, touch_base + 3);
-        if (sl_addr_hits < touch_err_base + 4) err("TOUCH_PANEL_NOT_ADDRESSED", sl_addr_hits, touch_err_base + 4);
+        // Exactly one poll cycle, and one poll cycle is three transactions and
+        // therefore three device address hits: the status read, the coordinate read
+        // and the flag clear write.
+        if (sl_addr_hits < touch_err_base + 3) err("TOUCH_PANEL_NOT_ADDRESSED", sl_addr_hits, touch_err_base + 3);
         if (sl_flag_clr < 1) err("TOUCH_FLAG_NEVER_CLEARED", sl_flag_clr, 1);
         // An ACKing panel that answers must never raise the error flag; that flag
         // clearing poll_ok_q is what pins touch_valid low forever on the board.
@@ -855,9 +909,43 @@ module tb_nes_zynq_top;
         $display("TOUCH %0d START, %0d STOP, %0d address matches, %0d flag clears, error=%0b",
                  sl_start_cnt, sl_stop_cnt, sl_addr_hits, sl_flag_clr, dut.u_touch.touch_error);
 
+        // -------------------------------- the calibration, through the top
+        // nes_touch_input calibrates itself once after the post-reset wait, before
+        // its first poll, by reading X Output Max, Y Output Max and
+        // Module_Switch1 out of the panel.  The values are published on the top's
+        // internal wires -- no new port, no new pin, the port count is still 45 --
+        // and this is where they are checked, because a wire that was never
+        // connected and a wire connected to the wrong place look identical from
+        // inside the driver.
+        if (sl_cal_rds !== 3)
+            err("TOUCH_CALIBRATION_READS", sl_cal_rds, 3);
+        if (dut.touch_x_max !== 16'd799)
+            err("TOUCH_CAL_X_MAX", dut.touch_x_max, 16'd799);
+        if (dut.touch_y_max !== 16'd479)
+            err("TOUCH_CAL_Y_MAX", dut.touch_y_max, 16'd479);
+        if (dut.touch_x2y !== 1'b0)
+            err("TOUCH_CAL_X2Y", dut.touch_x2y, 1'b0);
+        if (dut.touch_calib_ok !== 1'b1)
+            err("TOUCH_CAL_NOT_OK", dut.touch_calib_ok, 1'b1);
+        // 799>>2 = 199, 799-199 = 600, 479>>1 = 239.  Note 600 and 240 are the
+        // hardcoded numbers too, so the pair that proves the calibration ran is
+        // 199 and 239, not 600.
+        if (dut.touch_x_left_edge !== 16'd199)
+            err("TOUCH_CAL_X_LEFT", dut.touch_x_left_edge, 16'd199);
+        if (dut.touch_x_right_edge !== 16'd600)
+            err("TOUCH_CAL_X_RIGHT", dut.touch_x_right_edge, 16'd600);
+        if (dut.touch_y_mid_edge !== 16'd239)
+            err("TOUCH_CAL_Y_MID", dut.touch_y_mid_edge, 16'd239);
+        $display("TOUCH calibrated from the panel: x_max=%0d y_max=%0d x2y=%0b ok=%0b, cuts %0d/%0d/%0d",
+                 dut.touch_x_max, dut.touch_y_max, dut.touch_x2y, dut.touch_calib_ok,
+                 dut.touch_x_left_edge, dut.touch_x_right_edge, dut.touch_y_mid_edge);
+
         // A reported touch has to come back as coordinates and as the dpad half
-        // of the button byte.  (100, 120) is left of the x_left cut at 200, so
-        // dpad is 4'b0010.
+        // of the button byte.  (100, 120) is left of the calibrated x_left cut at
+        // 199, so dpad is 4'b0010.  The calibration did not move this verdict: the
+        // report was inside the left third before it and it is inside the left
+        // third now, and that is the point of testing a coordinate that is not on
+        // a boundary.
         //
         // The report has to be staged while the bus is idle.  A real GT9147
         // clears its own data-ready flag when the master writes 0x00 to 16'h814E,
@@ -994,56 +1082,6 @@ module tb_nes_zynq_top;
         if (bus_pp_sda != 0) err("TOUCH_SDA_PUSH_PULL", bus_pp_sda, 0);
         $display("BUS  touch bus contention over the whole run: scl=%0d sda=%0d push_pull_sda=%0d",
                  bus_xcl, bus_xsda, bus_pp_sda);
-
-        // ------------------------------------------- diagnostic marker, in range
-        // The raw coordinate overlay in nes_zynq_top is a temporary measurement and
-        // not a fix, and it is the entire thing the user is asked to look at, so it
-        // has to be proven to draw at all and to draw in the in-range colour for a
-        // report that IS in range.  Nothing else in this bench can see it: the
-        // expansion checks all run before any report has happened, and that is
-        // exactly how the ungated mux that left a crosshair sitting in the top left
-        // corner of the active area from power up was caught, by EXPAND_EXHAUSTIVE
-        // and not by anything that was looking for the marker.
-        // It runs HERE, at the end, and not next to the report: the overlay holds
-        // the marker for 2 s after the last report while the driver drops
-        // touch_valid after about 20 ms, so the marker is still on screen at the end
-        // of the run even though the report itself is long gone.  Checking it any
-        // earlier would have to wait up to a whole frame for the raster to reach the
-        // marker, and that wait is longer than the report lasts, which is what made
-        // the key checks below it see an expired report.
-        // Observed only through the public lcd_rgb pin and never through a signal
-        // inside the block, so deleting the block cannot break this bench, and
-        // guarded on DIAG_MARKER so setting it to 0 is a complete removal instead of
-        // a removal that then fails the gate.
-        if (dut.DIAG_MARKER != 0) begin
-            // One panel frame is 554400 lcd clocks, so 600000 covers the worst case
-            // where the last report landed just after the raster passed this line.
-            diag_guard = 0;
-            diag_pixels = 0;
-            while (diag_pixels == 0 && diag_guard < 600000) begin
-                @(posedge lcd_clk);
-                diag_guard = diag_guard + 1;
-                if (lcd_de === 1'b1) begin
-                    diag_base_rgb = exp_888(dut.vid_rgb565);
-                    if (lcd_rgb !== diag_base_rgb[23:0]) begin
-                        diag_pixels = diag_pixels + 1;
-                        if (lcd_rgb !== 24'h00FF00 && lcd_rgb !== 24'h000000)
-                            err("DIAG_MARKER_WRONG_COLOUR_IN_RANGE", lcd_rgb, 24'h00FF00);
-                        // The overlay corrects nothing, so the only dot it may
-                        // override is inside the shape around the reported centre,
-                        // which is 27 pixels of tick arm either side of (100, 120).
-                        if ((dut.vid_pixel_x < 11'd73) || (dut.vid_pixel_x > 11'd127) ||
-                            (dut.vid_pixel_y < 11'd93)  || (dut.vid_pixel_y > 11'd147))
-                            err("DIAG_MARKER_OFF_CENTRE", dut.vid_pixel_x, dut.vid_pixel_y);
-                    end
-                end
-            end
-            if (diag_pixels == 0)
-                err("DIAG_MARKER_NEVER_DREW", diag_guard, 0);
-            $display("DIAG marker drew %0d lcd_clk after the report, in range, centred on the reported (100, 120)",
-                     diag_guard);
-        end
-
         if (errors != 0) begin
             $display("FAIL nes_zynq_top with %0d violations", errors);
             $fatal(1, "nes_zynq_top tb failed");
