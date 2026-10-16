@@ -329,7 +329,7 @@ NTSC 域和 VGA 域是真正的异步域。下面的清单给出每个跨域信�
 - [ ] 存在"任意 12 拍窗口内恰好 1 个 `ce_cpu`、3 个 `ce_ppu`"的断言。
 - [ ] 存在连续多帧的 `ce_cpu` 计数断言，且体现 29,780 / 29,781 / 29,781 的 3 帧循环。
 - [ ] 存在 PPU 单独综合的 **TimeQuest** 报告，含最差 slack 与未约束端点（R-03 的门槛里时序那一半）。
-      **（2026-09-30 登记）面积那一半已满足**：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt` 给出 63,127 / 10,320 LE、19,260 寄存器、0 / 46 M9K，结论是**装不下**，且没有任何 `altsyncram` 进网表。**时序那一半仍未满足**：那次跑没有 SDC，出的是 `Critical Warning (332012): Synopsys Design Constraints File file not found` 与 `Info (332130): Timing requirements not specified`，**因此本节第 2 节那张时钟表至今没有一条被 TimeQuest 核对过**。全部数字与其限定词见 [`docs/00-overview/risk-register.md`](../docs/00-overview/risk-register.md) 第 10 节与 [`quartus/README.md`](../../quartus/README.md) 第 0.3 节。
+      **（2026-09-30 登记）面积那一半已满足**：`D:\quartusProject\ppu_synth2\final_ext.fit.rpt` 给出 63,127 / 10,320 LE、19,260 寄存器、0 / 46 M9K，结论是**装不下**，且没有任何 `altsyncram` 进网表。**时序那一半仍未满足**：那次跑没有 SDC，出的是 `Critical Warning (332012): Synopsys Design Constraints File file not found` 与 `Info (332130): Timing requirements not specified`，**因此本节第 2 节那张时钟表至今没有一条被 TimeQuest 核对过**。全部数字与其限定词见 [`docs/00-overview/risk-register.md`](../00-overview/risk-register.md) 第 10 节与 [`quartus/README.md`](../../quartus/README.md) 第 0.3 节。
 - [ ] altpll IP 已生成，IP 文件里的 VCO 频率、每路分频、占空比、相移已被抄进文档。
 - [ ] SDC 已声明 50 MHz 输入与全部 PLL 派生时钟，异步时钟分组已显式声明。
 - [ ] `ce_cpu` / `ce_ppu` 的多周期路径约束已存在，且每条 `false_path` 都有书面理由。

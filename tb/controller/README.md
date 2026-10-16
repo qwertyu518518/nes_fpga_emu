@@ -96,4 +96,4 @@ PASS nes_controller
 
 剩下 1 处（把 `read1` 里的 `!latch_strobe` 去掉）是**等价变异**而不是覆盖空洞：`always` 块里是 `else if (latch_now) ... else ...` 的结构，读分支只可能在 `latch_strobe=0` 的 `else` 里被求值，所以那一项在当前结构下本来就是冗余的。
 
-`tools/sim_all.ps1` 没有 controller 目标，ModelSim 也没有对应的 `run_controller_tb.do`；这两个脚本不在本任务的写入范围内，没有改。
+`tools/sim_all.ps1` 的 controller 组现已登记 `controller-tb`（顶层 `tb_nes_controller`）；ModelSim 侧本目录下仍没有对应的 `.do` 脚本。

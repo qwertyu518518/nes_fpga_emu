@@ -125,7 +125,7 @@ PASS nes_video_scaler
 | 调色板第 1 项 `00F1` 改成 `00F2` | `rgb565 at output (2,0) source (1,0) got 00f2 expected 00f1` |
 | 读地址去掉垂直复制（`scan_y[7:1]`） | `rgb565 at output (0,2) source (0,1) got 310c expected 6080` |
 
-`tools/sim_all.ps1` 没有 video 目标，ModelSim 也没有对应的 `run_video_tb.do`；这两个脚本不在本任务的写入范围内，没有改。
+`tools/sim_all.ps1` 的 video 组现已登记 `video-core` / `video-tb`、`line-buffer-core` / `line-buffer-tb`、`vga-timing-core` / `vga-timing-tb`、`video800-tb`、`video800-dc-tb`；ModelSim 侧本目录下仍没有对应的 `.do` 脚本。
 
 ---
 
@@ -271,7 +271,7 @@ tb\video\tb_nes_line_buffer_vga.v:702: $finish called at 251047000 (1ps)
 | 重复遍不预装 `line_mem[{rd_bank,0}]` | `inst 0 rgb565 at line 0 read_x 0 got 0000 expected 310c` |
 | `rd_bank` 读完不翻转 | `inst 0 rgb565 at line 1 read_x 0 got 310c expected 5b20` |
 
-`tools/sim_all.ps1` 只有 scaler 的 `video-core` / `video-tb` 两个目标，没有行缓冲的目标；ModelSim 也没有对应的 `.do` 文件。这两个脚本不在本任务的写入范围内，没有改。
+`tools/sim_all.ps1` 的 video 组现已登记 `video-core` / `video-tb`、`line-buffer-core` / `line-buffer-tb`、`vga-timing-core` / `vga-timing-tb`、`video800-tb`、`video800-dc-tb`（其中 `line-buffer-core` / `line-buffer-tb` 就是本行缓冲的目标）；ModelSim 侧本目录下仍没有对应的 `.do` 脚本。
 
 ---
 
@@ -421,4 +421,4 @@ tb\video\tb_nes_vga_timing.v:761: $finish called at 35986621000 (1ps)
 
 其中"行末清零优先于 strobe"和"`line_next` 去掉行末清零"这两条，是**先由变异发现测试有洞、再补测试**的：最初第 6、7 条只检查了"`line_read_sync` 有没有回声"，而下一行自己也会发 strobe，所以两种优先级都能通过。现在第 6 条抑制了下一行自己的 strobe 并断言 512 个像素全黑，第 7 条同样抑制并断言整行有数据，两种优先级才被区分开。
 
-`tools/sim_all.ps1` 没有 VGA 时序的目标，ModelSim 也没有对应的 `run_video_tb.do`；这两个脚本不在本任务的写入范围内，没有改。
+`tools/sim_all.ps1` 的 video 组现已登记 `video-core` / `video-tb`、`line-buffer-core` / `line-buffer-tb`、`vga-timing-core` / `vga-timing-tb`、`video800-tb`、`video800-dc-tb`（其中 `vga-timing-core` / `vga-timing-tb` 就是本时序发生器的目标）；ModelSim 侧本目录下仍没有对应的 `.do` 脚本。

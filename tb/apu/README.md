@@ -255,7 +255,7 @@ PASS nes_apu2a03 v1
 
 `run_apu_tb.do` 提供 ModelSim/Questa 的同一条编译和运行命令。**当前仓库没有 ModelSim、Quartus 或 EP4CE10 上板证据，该脚本未被本版本验证；上面所有 PASS 只来自 Icarus Verilog 纯 RTL 仿真。**
 
-`tools/sim_all.ps1` / `tools/sim_cpu.ps1` 不包含 APU，v1 没有改这两个脚本（不在本任务写入范围内）。
+`tools/sim_all.ps1` 的 apu 组现已登记 `apu-core`（elaboration）与 `apu-tb`。
 
 ## 相对 v0 的 testbench 修正
 

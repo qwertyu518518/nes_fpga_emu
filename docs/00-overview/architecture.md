@@ -12,7 +12,7 @@
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 厂商无关 NES core                                              │
-│ nes_system_top（规划）                                         │
+│ nes_system_v0 … v6（七代系统顶层）                              │
 │ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ │
 │ │ CPU        │ │ CPU bus    │ │ PPU/APU    │ │ mapper/DMA │ │
 │ │ 6502/2A03 │ │ owner/ready│ │ dot/tick   │ │ bank/IRQ   │ │
@@ -23,9 +23,9 @@
                                │ 稳定的地址/数据/ready/事件端口
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ EP4CE10 platform                                               │
-│ 50 MHz/PLL/reset · BRAM/FIFO · SDRAM · VGA · TF · WM8978     │
-│ GPIO、CDC、SDC、IO standard 和板卡引脚                          │
+│ 平台层（两套）                                                  │
+│ EP4CE10：50 MHz/PLL/reset · BRAM/FIFO · VGA 行缓冲 · 按键       │
+│ Zynq-7020：MMCM 21.4772/25 MHz · 800x480 LCD · I2S/WM8960 · 触摸│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -33,13 +33,23 @@
 
 ## 2. 当前仓库状态
 
-当前已经存在的 RTL 只有：
+本节只陈述**已经存在**的东西；逐模块的接口合同、时序账与证据见 [`../modules/`](../modules/)，文档总入口见 [`../README.md`](../README.md)。以下清单会随代码演进：**以实际文件树与 [`../modules/`](../modules/) 为准**，仓库根 `README.md` 的“当前阶段”是一份更细的摘要，可能略滞后。
 
-```text
-rtl/nes_core/cpu/nes_cpu6502.v
-```
+厂商无关 core（`rtl/nes_core/`）已经实现：
 
-与它配套的自包含 testbench 位于 `tb/cpu/`。CPU 模块不实例化工作 RAM、bus decoder、PPU、APU、mapper、DMA 或 EP4CE10 IP；这些边界目前以接口和规划记录下来，尚未被描述为已实现。
+- CPU `nes_cpu6502` 与 CPU 总线 `nes_cpu_bus`（地址译码、等待态、owner/hold、通用 DMA 端口）；
+- PPU `nes_ppu2c02`（含 sprite `nes_ppu_sprite`、OAM DMA `nes_oam_dma`、可选外部 CHR 取数 `nes_chr_fetch_unit` 与精灵预取 `nes_sprite_chr_fetch`）与 APU 五通道 `nes_apu2a03`；
+- controller `nes_controller`、iNES/NES2.0 头解析 `ines_header_parser`、BRAM 卡带 `nes_cart_rom`、mapper（NROM/UxROM/CNROM/MMC1/MMC3）；
+- 视频 `nes_video_scaler`、`nes_line_buffer_vga`、`nes_vga_timing`、`nes_video_800x480`；
+- 外设 `nes_cdc_fifo`、`nes_i2s_shifter`、`nes_audio_i2s`、`wm8960_i2c`、`sd_spi_cmd`、`nes_touch_input`；
+- 七代 System 顶层 `nes_system_v0` … `nes_system_v6`。
+
+平台层（`rtl/platform/`）目前有两套：
+
+- `ep4ce10/`：`nes_ep4ce10_top` 接 VGA 行缓冲链路、按键与音频采样端口；`nes_ep4ce10_pll_stub` 是占位 PLL（不是真实 PLL，不参与综合）、`nes_ep4ce10_qsf_if` 是引脚封装层。
+- `zynq/`：`nes_zynq_clk`（MMCM 生成 21.477272727 MHz 核时钟与 25 MHz LCD 时钟）+ `nes_zynq_top`（三时钟域、复位网，以及触摸/音频/卡带/视频接线）。
+
+这些 RTL 的每个模块都以自包含 testbench（`tb/`）和 `tools/sim_all.ps1` 里的回归目标为**可复现证据**。综合/时序/上板证据**按器件区分**：EP4CE10 上没有任何时序数字，Zynq-7020 侧的测量记录见 [`risk-register.md`](risk-register.md) 与 [`vivado-runbook.md`](vivado-runbook.md)。CPU 模块本身不实例化工作 RAM、bus decoder、PPU、APU、mapper、DMA 或任何平台 IP；这些连接由 System 顶层与平台顶层完成。
 
 ## 3. 厂商无关 core 的责任
 

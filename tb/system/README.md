@@ -523,7 +523,7 @@ $v1 = @('rtl\nes_core\system\nes_system_v1.v','rtl\nes_core\ppu\nes_ppu2c02.v','
 & 'C:\iverilog\bin\vvp.exe' (Join-Path $tmp 'tb_nes_system_audio.vvp')
 ```
 
-第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v1` 本身不依赖 testbench 特性。注意源文件列表必须包含 `nes_ppu_sprite.v` 与全部五个 APU 通道/查找表文件：`nes_system_v1` 间接例化了它们，`iverilog` 不会自动去 `rtl/` 下找。**上面“运行”一节里 v0 那两条命令目前漏了 `rtl\nes_core\ppu\nes_ppu_sprite.v`**，直接照抄会报 `Unknown module type: nes_ppu_sprite`；这是本文档既有的笔误，本次没有改动 v0 章节，追加 `nes_ppu_sprite.v` 即可。`tools/sim_all.ps1` 目前只登记 v0 的 system 目标，也没有这一项，本次没有改动它，所以上面三条命令是直接调用。
+第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v1` 本身不依赖 testbench 特性。注意源文件列表必须包含 `nes_ppu_sprite.v` 与全部五个 APU 通道/查找表文件：`nes_system_v1` 间接例化了它们，`iverilog` 不会自动去 `rtl/` 下找。**上面“运行”一节里 v0 那两条命令目前漏了 `rtl\nes_core\ppu\nes_ppu_sprite.v`**，直接照抄会报 `Unknown module type: nes_ppu_sprite`；这是本文档既有的笔误，本次没有改动 v0 章节，追加 `nes_ppu_sprite.v` 即可。`tools/sim_all.ps1` 的 system 组现已登记 `system-v0`、`system-v0-nmi` 与 `system-v1-audio`；上面三条命令是等价的直接调用。
 
 完整期望输出：
 
@@ -804,7 +804,7 @@ $v2 = @(
 & 'C:\iverilog\bin\vvp.exe' (Join-Path $tmp 'tb_nes_system_v2.vvp')
 ```
 
-第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v2` 本身不依赖 testbench 特性。源文件列表必须显式包含 `nes_cpu_bus.v`、`nes_ppu_sprite.v` 与全部五个 APU 通道/查找表文件，`iverilog` 不会自动去找。`tools/sim_all.ps1` 目前没有登记 v2 的 system 目标，本次没有改动它，上面三条命令是直接调用。
+第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v2` 本身不依赖 testbench 特性。源文件列表必须显式包含 `nes_cpu_bus.v`、`nes_ppu_sprite.v` 与全部五个 APU 通道/查找表文件，`iverilog` 不会自动去找。`tools/sim_all.ps1` 现已登记 v2 的 system 目标 `system-v2`（顶层 `tb_nes_system_v2`），上面三条命令是等价的直接调用。
 
 实测输出（Icarus Verilog 12.0，Windows，10 ns 时钟）：
 
@@ -1010,7 +1010,7 @@ $v3 = @(
 & 'C:\iverilog\bin\vvp.exe' (Join-Path $tmp 'tb_nes_system_v3.vvp')
 ```
 
-第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v3` 本身不依赖 testbench 特性。源文件列表必须显式包含 `nes_cpu_bus.v`、`nes_ppu_sprite.v`、`nes_oam_dma.v` 与全部五个 APU 通道/查找表文件，`iverilog` 不会自动去找。`tools/sim_all.ps1` 目前没有登记 v3 的 system 目标，本次没有改动它（本次只改了 RTL、`tb/system` 的 testbench 与文档），上面三条命令是直接调用。
+第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v3` 本身不依赖 testbench 特性。源文件列表必须显式包含 `nes_cpu_bus.v`、`nes_ppu_sprite.v`、`nes_oam_dma.v` 与全部五个 APU 通道/查找表文件，`iverilog` 不会自动去找。`tools/sim_all.ps1` 现已登记 v3 的 system 目标 `system-v3`（顶层 `tb_nes_system_v3`），上面三条命令是等价的直接调用。
 
 实测输出（Icarus Verilog 12.0，Windows，10 ns 时钟）：
 
@@ -1210,7 +1210,7 @@ $v4 = @(
 & 'C:\iverilog\bin\vvp.exe' (Join-Path $tmp 'tb_nes_system_v4.vvp')
 ```
 
-第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v4` 本身不依赖 testbench 特性。源文件列表必须显式包含 `nes_controller.v`、`nes_cpu_bus.v`、`nes_ppu_sprite.v`、`nes_oam_dma.v` 与全部五个 APU 通道/查找表文件，`iverilog` 不会自动去找。`tools/sim_all.ps1` 没有登记 v4 的 system 目标，本次没有改动它（本次只改了 RTL、`tb/system` 的 testbench 与文档），上面三条命令是直接调用。没有对应的 ModelSim `.do` 脚本。
+第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v4` 本身不依赖 testbench 特性。源文件列表必须显式包含 `nes_controller.v`、`nes_cpu_bus.v`、`nes_ppu_sprite.v`、`nes_oam_dma.v` 与全部五个 APU 通道/查找表文件，`iverilog` 不会自动去找。`tools/sim_all.ps1` 现已登记 v4 的 system 目标 `system-v4`（顶层 `tb_nes_system_v4`），上面三条命令是等价的直接调用。没有对应的 ModelSim `.do` 脚本。
 
 `nes_system_v4.v` 与 `nes_controller.v` 本身**零 warning**（上面那条命令不带 `-Wall`，输出为空）。加 `-Wall` 时会出现 8 条 `@* is sensitive to all N words in array ...` 警告，全部来自 `nes_ppu_sprite.v` 与 `nes_ppu2c02.v` 里的存储数组，与 v3 用同一条命令得到的 8 条**逐条相同**，不是 v4 引入的。
 
@@ -1375,7 +1375,7 @@ $v5 = @(
 & 'C:\iverilog\bin\vvp.exe' (Join-Path $tmp 'tb_nes_system_v5.vvp')
 ```
 
-第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v5` 不依赖 testbench 特性。源文件列表必须显式包含六个 mapper 文件与全部 APU 通道/查找表文件。`tools/sim_all.ps1` 没有登记 v5 的 system 目标（本次没有改动它）。没有对应的 ModelSim `.do` 脚本。
+第一条是纯顶层 elaboration（`-g2001`，只编译 RTL），确认 `nes_system_v5` 不依赖 testbench 特性。源文件列表必须显式包含六个 mapper 文件与全部 APU 通道/查找表文件。`tools/sim_all.ps1` 现已登记 v5 的 system 目标 `system-v5`（顶层 `tb_nes_system_v5`）。没有对应的 ModelSim `.do` 脚本。
 
 **v4 回归**（本次同时跑，确认 v5 没有动到 v4 用的任何文件）：
 

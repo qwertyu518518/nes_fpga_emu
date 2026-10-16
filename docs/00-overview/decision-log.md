@@ -2,6 +2,8 @@
 
 本文件记录已经采用的项目决策。决策描述约束和理由，不等价于相应 RTL、测试或板级工作已经完成；当前实现状态以仓库文件和验证记录为准。
 
+**阅读提示：** D001–D010 是 v0 期的决策记录，各条“边界”段落里出现的实现状态是**当时**的快照（例如“PLL/enable 发生器尚未实现”“bus arbiter 尚待实现”）。项目此后已经演进：系统顶层到 `nes_system_v6`，并新增了 Zynq-7020 平台层，`nes_cpu_bus` 等也已实现。后续决策从 D011 起；最新状态以仓库根 `README.md`、[`architecture.md`](architecture.md) 第 2 节和 [`../modules/`](../modules/) 为准。
+
 ## D001：cNES 作为主参考源码
 
 **状态：** 已采用。
@@ -102,9 +104,59 @@
 
 **边界：** 参考仓库仍必须固定提交并可复查；它们是只读证据，不是本项目 RTL 的复制源。
 
+## D011：Zynq-7020 作为第二个平台目标
+
+**状态：** 已采用。
+
+**决策：** 在 EP4CE10 之外新增 Zynq-7020（Navigator V2）平台层 `rtl/platform/zynq/`，由 `nes_zynq_clk` 用 MMCM 从 50 MHz 生成精确的 21.477272727 MHz 核时钟与 25 MHz LCD 时钟，`nes_zynq_top` 负责三时钟域与复位网接线。
+
+**理由：** EP4CE10 的 PPU 综合面积装不下（见 [`risk-register.md`](risk-register.md) 第 10 节），需要更大器件先把整机跑通；Zynq 板自带 800×480 RGB LCD、GT9147 电容触摸与 WM8960 codec。
+
+**边界：** EP4CE10 仍是首板目标且尚未综合；两套平台并存、互不替代。Zynq 侧的综合/时序数字来自仓库外的 Vivado 工程，复现过程见 [`vivado-runbook.md`](vivado-runbook.md)。
+
+## D012：视频交付分两条路线
+
+**状态：** 已采用。
+
+**决策：** EP4CE10 走行缓冲（`nes_line_buffer_vga` + `nes_vga_timing`）；Zynq 的 800×480 面板走整帧缓冲（`nes_video_800x480`，真双口 BRAM 即唯一的跨时钟域）。整帧缩放的 `nes_video_scaler` 只作参考模型，不作为任一平台的可综合交付。
+
+**理由：** 25 MHz 不是 21.477272727 MHz 的整数倍，面板像素必须走真实 25 MHz 沿而不能用核内 clock enable；真双口 BRAM 天然跨界，省掉同步器/握手/背压。
+
+**边界：** 800×480 路径是单缓冲、无撕裂保护，刷新率由参数决定（默认约 45.1 Hz，不是 60 Hz）。
+
+## D013：卡带内容进 bitstream
+
+**状态：** 已采用。
+
+**决策：** 卡带 PRG/CHR 由 `nes_cart_rom`（BRAM + `$readmemh`）承载；主机侧用 `tools/nes2hex.ps1` 把 iNES 转成提交在仓库里的 hex 文件。
+
+**理由：** Zynq 上 TF 卡与 QSPI flash 在 PS 的 MIO 引脚、PL 够不到，**不在 bitstream 里的 ROM 就是 PL 看不见的 ROM**。
+
+**边界：** 没有运行时加载、没有 TF 读通路、没有热插拔；CHR 高 bank 对 CNROM/MMC1/MMC3 是接受的别名（见 [`../modules/cart-rom.md`](../modules/cart-rom.md)）。
+
+## D014：音频交付为有理抽取 + I2S 组装层 + WM8960
+
+**状态：** 已采用。
+
+**决策：** APU 的采样 strobe（≈1.789 MHz）经精确有理抽取 2016/55 与 4/4/2 三级滑动平均降速率，再进 `nes_audio_i2s`（CDC FIFO + `nes_i2s_shifter`）串行输出；codec 由其 I2C 主控 `wm8960_i2c` 配置。Zynq 板上的器件是 **WM8960**（EP4CE10 开拓者板上的才是 WM8978，两者寄存器图不同）。
+
+**理由：** 单个 FIFO 的单生产/单消费结构里任何采样率失配都会让水位走满或走空；只有有理、无累积误差的抽取才能让生产者与消费者精确匹配。
+
+**边界：** 不是完整抗混叠 FIR；没有上板音频验收。
+
+## D015：触摸作为手柄输入的来源
+
+**状态：** 已采用。
+
+**决策：** Zynq 板上用 GT9147 电容触摸（`nes_touch_input`）配合两个 PL 键与板载 TPAD 生成 `buttons[7:0]`；坐标帧与面板尺寸从控制器自己的寄存器（输出最大值、`X2Y`）一次性校准读出，而不是硬编码假设。
+
+**理由：** 板厂驱动的 GT 分支是直通、从未配置过坐标帧，现场“d-pad 四个方向全反”就是坐标帧与代码假设不一致的特征；控制器自己能报出它实际使用的帧。
+
+**边界：** EP4CE10 没有触摸通路；多点/手势/滑动未建模；见 [`../modules/touch-input.md`](../modules/touch-input.md)。
+
 ## 未决事项
 
-以下事项尚未决定或尚未实现，不应在状态报告中写成完成：
+以下事项是 v0 期登记的尚未决定或尚未实现项，不应在状态报告中写成完成。其中 bus arbiter 命名、NROM 来源与部分存储分配已经在后续实现中确定（见 D011–D015 与 [`../modules/`](../modules/)）；**仍未关闭的风险以 [`risk-register.md`](risk-register.md) 的最新内容为准**：
 
 - 目标 v1 的具体 NES 制式和 PPU 功能深度。
 - 首个 NROM test ROM 的来源、许可和 golden trace 格式。

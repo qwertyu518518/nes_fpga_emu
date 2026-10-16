@@ -105,7 +105,7 @@ pixel_index ┘         │                                    ▲
 | TF 卡 / SDRAM | 未实现 | 载带与存档需要，本顶层不含 |
 | WM8978 驱动 | 未实现 | 见第 5 节 |
 | 完整 8 位手柄 | 未实现 | 板载 4 键只够 P0；`09-input-and-pins.md` 第 5 节 |
-| `tools/sim_all.ps1` 集成 | 未加入 | 本仓库的仿真脚本目前没有 `platform` 分组，需要时自行添加 |
+| `tools/sim_all.ps1` 集成 | 已加入 | `platform` 组现已登记 `platform-core`（elaboration）、`platform-tb`、`qsf-if-core`（elaboration）；同组还有 Zynq 平台的 `zynq-clk-tb` / `zynq-top-tb`，见 [`../modules/zynq-platform.md`](../modules/zynq-platform.md) |
 
 ## 7. 验证
 

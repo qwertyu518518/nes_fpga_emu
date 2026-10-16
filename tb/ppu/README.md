@@ -411,7 +411,7 @@ PASS nes_oam_dma
 - **没有覆盖两个实例在 `OAMADDR_WRITE` 上的非法组合**（本 TB 固定一份 0 一份 1）。
 - **`parity_shadow` 是 TB 里对 `parity_q` 的独立复制**：如果 RTL 改了奇偶规则（例如改成偶数时多一拍），TB 的 `wait_align` 会和 RTL 一起错，测试可能仍然通过。只有 `dbg_align_left` 和 `cycle_count` 的交叉核对是真正独立的。
 - **没有做 8x/16x 规模的随机回归**：全部是定向事务。
-- ModelSim/Questa 的 `run_ppu_tb.do` **没有** OAM DMA 通道；`tools/sim_all.ps1` 也不包含 `tb_nes_oam_dma`，本任务没有改这两个脚本（不在写入范围内）。
+- ModelSim/Questa 的 `run_ppu_tb.do` **没有** OAM DMA 通道（仍只编译 `nes_ppu2c02.v` 与 `tb_nes_ppu2c02.v`）；`tools/sim_all.ps1` 现已登记 `ppu-oam-dma`（顶层 `tb_nes_oam_dma`）。
 
 ## CHR 取数单元 testbench
 
