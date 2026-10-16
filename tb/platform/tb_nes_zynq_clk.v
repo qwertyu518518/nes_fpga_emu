@@ -60,16 +60,26 @@ module tb_nes_zynq_clk;
     localparam real    CLKOUT0_DIVIDE_F = 47.25;
     localparam integer CLKOUT1_DIVIDE   = 55;
 
+    // Second MMCM, HDMI.  See the HDMI derivation in nes_zynq_clk.v.
+    localparam real    HDMI_MULT_F          = 13.5;
+    localparam integer HDMI_DIVCLK_DIVIDE   = 1;
+    localparam real    HDMI_CLKOUT0_DIVIDE_F = 25.0;
+    localparam integer HDMI_CLKOUT1_DIVIDE   = 5;
+
     // ---- independent numeric targets -----------------------------------
     localparam real NTSC_CORE_MHZ   = 945.0 / 44.0;   // 21.477272727272727
     localparam real LCD_MHZ         = 25.0;
     localparam real NTSC_DOT_MHZ    = NTSC_CORE_MHZ / 4.0;
+    localparam real HDMI_PCLK_MHZ   = 27.0;
+    localparam real HDMI_PCLK_X5_MHZ = 135.0;
     localparam real TOL_REL         = 1.0e-4;         // 100 ppm, see the header
     localparam real EXACT_REL       = 1.0e-12;        // divider arithmetic
 
     // ---- edge counting --------------------------------------------------
     localparam integer N_CORE = 4096;
     localparam integer N_LCD  = 4096;
+    localparam integer N_HDMI = 4096;
+    localparam integer N_HDMI5 = 4096;
     localparam integer N_RE   = 512;
 
     reg  clk_in;
@@ -77,6 +87,9 @@ module tb_nes_zynq_clk;
     wire core_clk;
     wire lcd_clk;
     wire locked;
+    wire hdmi_pclk;
+    wire hdmi_pclk_x5;
+    wire hdmi_locked;
 
     integer errors;
     integer checks;
@@ -87,12 +100,20 @@ module tb_nes_zynq_clk;
 
     integer core_edges;
     integer lcd_edges;
+    integer hdmi_edges;
+    integer hdmi5_edges;
     integer pre_lock_core_edges;
     integer pre_lock_lcd_edges;
+    integer pre_lock_hdmi_edges;
+    integer pre_lock_hdmi5_edges;
     real   core_t0;
     real   core_t1;
     real   lcd_t0;
     real   lcd_t1;
+    real   hdmi_t0;
+    real   hdmi_t1;
+    real   hdmi5_t0;
+    real   hdmi5_t1;
 
     integer lock_cycles_model;
     integer lock_cycle_seen;
@@ -101,14 +122,23 @@ module tb_nes_zynq_clk;
     integer i;
     real f_in_mhz;
     real f_vco_mhz;
+    real f_hdmi_vco_mhz;
     real f_core_ref_mhz;
     real f_lcd_ref_mhz;
+    real f_hdmi_p_ref_mhz;
+    real f_hdmi_x5_ref_mhz;
     real core_per_ns;
     real lcd_per_ns;
+    real hdmi_per_ns;
+    real hdmi5_per_ns;
     real core_mhz;
     real lcd_mhz;
+    real hdmi_mhz;
+    real hdmi5_mhz;
     real core_err;
     real lcd_err;
+    real hdmi_err;
+    real hdmi5_err;
     real re_core_per_ns;
     real re_core_mhz;
 
@@ -117,13 +147,20 @@ module tb_nes_zynq_clk;
         .CLKFBOUT_MULT_F  (MULT_F),
         .DIVCLK_DIVIDE    (DIVCLK_DIVIDE),
         .CLKOUT0_DIVIDE_F (CLKOUT0_DIVIDE_F),
-        .CLKOUT1_DIVIDE   (CLKOUT1_DIVIDE)
+        .CLKOUT1_DIVIDE   (CLKOUT1_DIVIDE),
+        .HDMI_CLKFBOUT_MULT_F  (HDMI_MULT_F),
+        .HDMI_DIVCLK_DIVIDE    (HDMI_DIVCLK_DIVIDE),
+        .HDMI_CLKOUT0_DIVIDE_F (HDMI_CLKOUT0_DIVIDE_F),
+        .HDMI_CLKOUT1_DIVIDE   (HDMI_CLKOUT1_DIVIDE)
     ) dut (
-        .clk_in  (clk_in),
-        .rst_in  (rst_in),
-        .lcd_clk (lcd_clk),
-        .core_clk(core_clk),
-        .locked  (locked)
+        .clk_in       (clk_in),
+        .rst_in       (rst_in),
+        .lcd_clk      (lcd_clk),
+        .core_clk     (core_clk),
+        .locked       (locked),
+        .hdmi_pclk    (hdmi_pclk),
+        .hdmi_pclk_x5 (hdmi_pclk_x5),
+        .hdmi_locked  (hdmi_locked)
     );
 
     // ---- 50 MHz board oscillator, package pin U18 ------------------------
@@ -137,12 +174,20 @@ module tb_nes_zynq_clk;
         measuring_re         = 0;
         core_edges           = 0;
         lcd_edges            = 0;
+        hdmi_edges           = 0;
+        hdmi5_edges          = 0;
         pre_lock_core_edges  = 0;
         pre_lock_lcd_edges   = 0;
+        pre_lock_hdmi_edges  = 0;
+        pre_lock_hdmi5_edges = 0;
         core_t0              = 0.0;
         core_t1              = 0.0;
         lcd_t0               = 0.0;
         lcd_t1               = 0.0;
+        hdmi_t0              = 0.0;
+        hdmi_t1              = 0.0;
+        hdmi5_t0             = 0.0;
+        hdmi5_t1             = 0.0;
     end
 
     always @(posedge core_clk) begin
@@ -169,6 +214,29 @@ module tb_nes_zynq_clk;
             if (lcd_edges == 0) lcd_t0 = $realtime;
             if (lcd_edges < N_LCD) lcd_t1 = $realtime;
             lcd_edges = lcd_edges + 1;
+        end
+    end
+
+    // The second MMCM's two outputs, measured by the same method.
+    always @(posedge hdmi_pclk) begin
+        if (!hdmi_locked) begin
+            pre_lock_hdmi_edges = pre_lock_hdmi_edges + 1;
+        end
+        else if (phase == 0) begin
+            if (hdmi_edges == 0) hdmi_t0 = $realtime;
+            if (hdmi_edges < N_HDMI) hdmi_t1 = $realtime;
+            hdmi_edges = hdmi_edges + 1;
+        end
+    end
+
+    always @(posedge hdmi_pclk_x5) begin
+        if (!hdmi_locked) begin
+            pre_lock_hdmi5_edges = pre_lock_hdmi5_edges + 1;
+        end
+        else if (phase == 0) begin
+            if (hdmi5_edges == 0) hdmi5_t0 = $realtime;
+            if (hdmi5_edges < N_HDMI5) hdmi5_t1 = $realtime;
+            hdmi5_edges = hdmi5_edges + 1;
         end
     end
 
@@ -218,6 +286,9 @@ module tb_nes_zynq_clk;
         expect_true(locked  === 1'b0, "locked low while rst_in high");
         expect_true(core_clk === 1'b0, "core_clk held at 0 while rst_in high");
         expect_true(lcd_clk === 1'b0, "lcd_clk held at 0 while rst_in high");
+        expect_true(hdmi_locked  === 1'b0, "hdmi_locked low while rst_in high");
+        expect_true(hdmi_pclk    === 1'b0, "hdmi_pclk held at 0 while rst_in high");
+        expect_true(hdmi_pclk_x5 === 1'b0, "hdmi_pclk_x5 held at 0 while rst_in high");
 
         // ------------------------------------------------------------------
         // 2. locked asserts only after the modelled settling time
@@ -247,27 +318,44 @@ module tb_nes_zynq_clk;
         // ------------------------------------------------------------------
         expect_true(pre_lock_core_edges == 0, "core_clk produced an edge before locked");
         expect_true(pre_lock_lcd_edges == 0, "lcd_clk produced an edge before locked");
+        expect_true(pre_lock_hdmi_edges == 0, "hdmi_pclk produced an edge before hdmi_locked");
+        expect_true(pre_lock_hdmi5_edges == 0, "hdmi_pclk_x5 produced an edge before hdmi_locked");
 
         // ------------------------------------------------------------------
         // 4/5. measure both frequencies by edge counting
         // ------------------------------------------------------------------
         wait (core_edges >= N_CORE);
         wait (lcd_edges  >= N_LCD);
+        wait (hdmi_edges >= N_HDMI);
+        wait (hdmi5_edges >= N_HDMI5);
 
         core_per_ns = (core_t1 - core_t0) / (N_CORE - 1);
         lcd_per_ns  = (lcd_t1 - lcd_t0) / (N_LCD - 1);
+        hdmi_per_ns = (hdmi_t1 - hdmi_t0) / (N_HDMI - 1);
+        hdmi5_per_ns = (hdmi5_t1 - hdmi5_t0) / (N_HDMI5 - 1);
         core_mhz    = 1000.0 / core_per_ns;
         lcd_mhz     = 1000.0 / lcd_per_ns;
+        hdmi_mhz    = 1000.0 / hdmi_per_ns;
+        hdmi5_mhz   = 1000.0 / hdmi5_per_ns;
         core_err    = (core_mhz - NTSC_CORE_MHZ) / NTSC_CORE_MHZ;
         lcd_err     = (lcd_mhz - LCD_MHZ) / LCD_MHZ;
+        hdmi_err    = (hdmi_mhz - HDMI_PCLK_MHZ) / HDMI_PCLK_MHZ;
+        hdmi5_err   = (hdmi5_mhz - HDMI_PCLK_X5_MHZ) / HDMI_PCLK_X5_MHZ;
 
         $display("INFO core_clk %0d rising edges over %.3f us, measured %.9f MHz, period %.9f ns, rel err %.3e",
                  N_CORE, (core_t1 - core_t0) / 1000.0, core_mhz, core_per_ns, core_err);
         $display("INFO lcd_clk  %0d rising edges over %.3f us, measured %.9f MHz, period %.9f ns, rel err %.3e",
                  N_LCD, (lcd_t1 - lcd_t0) / 1000.0, lcd_mhz, lcd_per_ns, lcd_err);
 
+        $display("INFO hdmi_pclk %0d rising edges over %.3f us, measured %.9f MHz, period %.9f ns, rel err %.3e",
+                 N_HDMI, (hdmi_t1 - hdmi_t0) / 1000.0, hdmi_mhz, hdmi_per_ns, hdmi_err);
+        $display("INFO hdmi_pclk_x5 %0d rising edges over %.3f us, measured %.9f MHz, period %.9f ns, rel err %.3e",
+                 N_HDMI5, (hdmi5_t1 - hdmi5_t0) / 1000.0, hdmi5_mhz, hdmi5_per_ns, hdmi5_err);
+
         expect_close(core_mhz, NTSC_CORE_MHZ, TOL_REL, "core_clk frequency");
         expect_close(lcd_mhz, LCD_MHZ, TOL_REL, "lcd_clk frequency");
+        expect_close(hdmi_mhz, HDMI_PCLK_MHZ, TOL_REL, "hdmi_pclk frequency");
+        expect_close(hdmi5_mhz, HDMI_PCLK_X5_MHZ, TOL_REL, "hdmi_pclk_x5 frequency");
 
         // ------------------------------------------------------------------
         // 6. the divider arithmetic recomputed from the DUT's own parameters
@@ -285,6 +373,28 @@ module tb_nes_zynq_clk;
         // ------------------------------------------------------------------
         // 7. the arithmetic itself
         // ------------------------------------------------------------------
+        // ---- second MMCM, HDMI: 675 MHz VCO, exact 27 MHz and 135 MHz outputs.
+        f_hdmi_vco_mhz    = f_in_mhz * dut.HDMI_CLKFBOUT_MULT_F / dut.HDMI_DIVCLK_DIVIDE;
+        f_hdmi_p_ref_mhz  = f_hdmi_vco_mhz / dut.HDMI_CLKOUT0_DIVIDE_F;
+        f_hdmi_x5_ref_mhz = f_hdmi_vco_mhz / dut.HDMI_CLKOUT1_DIVIDE;
+        expect_true(f_hdmi_vco_mhz >= 600.0 && f_hdmi_vco_mhz <= 1200.0,
+                    "HDMI VCO outside the 7-series 600..1200 MHz range");
+        i = dut.HDMI_CLKOUT0_DIVIDE_F / 0.125;
+        expect_close(dut.HDMI_CLKOUT0_DIVIDE_F, i * 0.125, EXACT_REL,
+                     "HDMI_CLKOUT0_DIVIDE_F is an exact multiple of 0.125");
+        i = dut.HDMI_CLKFBOUT_MULT_F / 0.125;
+        expect_close(dut.HDMI_CLKFBOUT_MULT_F, i * 0.125, EXACT_REL,
+                     "HDMI_CLKFBOUT_MULT_F is an exact multiple of 0.125");
+        i = dut.HDMI_CLKOUT1_DIVIDE - (dut.HDMI_CLKOUT1_DIVIDE / 1) * 1;
+        expect_true(i == 0, "HDMI_CLKOUT1_DIVIDE is not an integer");
+        expect_true(dut.HDMI_CLKOUT1_DIVIDE >= 1 && dut.HDMI_CLKOUT1_DIVIDE <= 128,
+                    "HDMI_CLKOUT1_DIVIDE outside the primitive range 1 to 128");
+        expect_close(f_hdmi_p_ref_mhz, HDMI_PCLK_MHZ, EXACT_REL,
+                     "divider arithmetic hits 27 MHz exactly");
+        expect_close(f_hdmi_x5_ref_mhz, HDMI_PCLK_X5_MHZ, EXACT_REL,
+                     "divider arithmetic hits 135 MHz exactly");
+        expect_close(f_hdmi_p_ref_mhz, f_hdmi_x5_ref_mhz / 5.0, EXACT_REL,
+                     "hdmi_pclk_x5 is exactly five times hdmi_pclk");
         expect_true(f_vco_mhz >= 600.0 && f_vco_mhz <= 1200.0,
                     "VCO outside the 7-series 600..1200 MHz range");
 
@@ -324,6 +434,9 @@ module tb_nes_zynq_clk;
         expect_true(locked   === 1'b0, "locked low again after the second rst_in pulse");
         expect_true(core_clk === 1'b0, "core_clk stopped after the second rst_in pulse");
         expect_true(lcd_clk === 1'b0, "lcd_clk stopped after the second rst_in pulse");
+        expect_true(hdmi_locked  === 1'b0, "hdmi_locked low again after the second rst_in pulse");
+        expect_true(hdmi_pclk    === 1'b0, "hdmi_pclk stopped after the second rst_in pulse");
+        expect_true(hdmi_pclk_x5 === 1'b0, "hdmi_pclk_x5 stopped after the second rst_in pulse");
 
         rst_in    = 1'b0;
         phase     = 1;
@@ -382,6 +495,15 @@ endmodule
 //
 // LOCKED asserts LOCK_CYCLES input cycles after RST is released and both
 // outputs are held at 0 until then.
+//
+// TWO INSTANCES, ONE MODEL.  nes_zynq_clk.v instantiates this model TWICE: once
+// with the core MMCM's parameters (CLKOUT0 = lcd_clk, CLKOUT1 = core_clk) and
+// once with the HDMI MMCM's (CLKOUT0 = hdmi_pclk, CLKOUT1 = hdmi_pclk_x5).  The
+// second MMCM's output periods are therefore derived from its OWN parameters
+// here exactly as the primitive does, so the bench's 27 MHz and 135 MHz
+// assertions are not vacuous.  No new model was needed for the second MMCM; the
+// model was already parameterised, and the extension is the second instance plus
+// the hdmi_* measurements in tb_nes_zynq_clk.v.
 // ============================================================================
 module mmcm_e2_base_sim #(
     parameter CLKFBOUT_MULT_F  = 5.0,

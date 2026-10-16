@@ -56,6 +56,43 @@
 //   then run 0.0036 percent slow and the frame period would be visibly long.
 //   The 1181.25 MHz VCO hits the frequency exactly instead.
 //
+// HDMI clock, and the second MMCM
+//   The HDMI output runs 720x480p60 (CEA-861 480p), whose pixel clock is
+//   exactly 27.000 MHz and whose serial (5x) clock is exactly 135.000 MHz.  The
+//   core MMCM above cannot produce either: it is pinned to a 1181.25 MHz VCO,
+//   27 MHz would need CLKOUT_DIVIDE = 1181.25/27 = 43.75, and CLKOUT1 is a
+//   fixed integer divide of that VCO that cannot land on 27 or 135 from a
+//   multiply that also has to hit 945/44 MHz.  So a second MMCME2_BASE is used;
+//   the device has four and one is already taken.
+//
+//   Re-derive it the same way.  With CLK_IN_PERIOD = 20 ns and:
+//
+//       f_vco = f_in * CLKFBOUT_MULT_F / DIVCLK_DIVIDE
+//
+//   the pair that makes BOTH outputs exact at 27 MHz and 135 MHz is a 675 MHz
+//   VCO:
+//
+//       f_vco = 50 * 13.5 / 1 = 675.000 MHz        (600..1200, legal)
+//       CLKOUT0_DIVIDE_F = 675 / 27  = 25.0        -> 27.000 MHz exactly
+//       CLKOUT1_DIVIDE   = 675 / 135 = 5           -> 135.000 MHz exactly
+//
+//   NOTE ON THE DERIVATION THAT WAS HANDED TO THIS MODULE.  It read "VCO =
+//   50 MHz x 27 / 2 = 675 MHz" together with "CLKFBOUT_MULT_F = 27/2 = 13.5,
+//   DIVCLK_DIVIDE = 2", which is internally inconsistent: with MULT_F = 13.5
+//   and DIVCLK_DIVIDE = 2 the VCO is 50*13.5/2 = 337.5 MHz, not 675, and with
+//   DIVCLK_DIVIDE = 2 reaching 675 needs MULT_F = 27.0, not 13.5.  Both
+//   (MULT_F = 13.5, DIVIDE = 1) and (MULT_F = 27.0, DIVIDE = 2) land on a
+//   675 MHz VCO and give identical 27/135 outputs; this module uses the former
+//   because it leaves DIVCLK_DIVIDE at 1, matching the core MMCM, and because
+//   13.5 is the value that pairs with DIVCLK_DIVIDE = 1 in the stated
+//   "MULT_F = 27/2" line.  CLKFBOUT_MULT_F = 13.5 is inside the primitive's
+//   2.0..64.0 range and an exact 0.125 step (108 * 0.125); CLKOUT0_DIVIDE_F =
+//   25.0 is an exact 0.125 step; CLKOUT1_DIVIDE = 5 is an integer in 1..128.
+//   Nothing in the chain is rounded, so both outputs are exact.
+//
+//   "27e6 / (858 * 525) = 59.94 Hz" is the frame rate this pixel clock then
+//   produces; it is a consequence of the mode, not a clock parameter.
+//
 // LCD clock
 //   The vendor panel is 1056x525 with an 800x480 active area in DE mode.  The
 //   vendor demo drives it with a divide by two of the 50 MHz input, which is
@@ -110,7 +147,13 @@ module nes_zynq_clk #(
     // CLKOUT0 carries the LCD clock and is the only fractional divide.
     parameter CLKOUT0_DIVIDE_F  = 47.25,
     // CLKOUT1 carries the NES core clock on an integer divide.
-    parameter CLKOUT1_DIVIDE    = 55
+    parameter CLKOUT1_DIVIDE    = 55,
+    // Second MMCM, HDMI.  See the HDMI derivation in the header.  These four
+    // parameters are independent of the core MMCM above and do not touch it.
+    parameter real    HDMI_CLKFBOUT_MULT_F  = 13.5,
+    parameter integer HDMI_DIVCLK_DIVIDE    = 1,
+    parameter real    HDMI_CLKOUT0_DIVIDE_F = 25.0,
+    parameter integer HDMI_CLKOUT1_DIVIDE   = 5
 ) (
     // 50 MHz board oscillator, package pin U18.
     input  wire clk_in,
@@ -123,11 +166,20 @@ module nes_zynq_clk #(
     output wire core_clk,
     // MMCM LOCKED, straight from the primitive.  The platform top must keep
     // the NES core in reset while this is low.
-    output wire locked
+    output wire locked,
+    // 27.000 MHz HDMI pixel clock, second MMCM CLKOUT0.
+    output wire hdmi_pclk,
+    // 135.000 MHz HDMI 5x serial clock, second MMCM CLKOUT1.
+    output wire hdmi_pclk_x5,
+    // LOCKED of the second MMCM.  The platform top must keep the HDMI domain
+    // in reset while this is low.
+    output wire hdmi_locked
 );
 
     wire clkfb_out;
     wire clkfb_in;
+    wire hdmi_clkfb_out;
+    wire hdmi_clkfb_in;
 
 // Every port of MMCME2_BASE is connected.  The primitive declares 18 ports and
 // Vivado treats an omitted one as an error, even when it is an unused output,
@@ -164,6 +216,45 @@ module nes_zynq_clk #(
 `NES_ZYNQ_MMCM_FB u_fb (
     .I(clkfb_out),
     .O(clkfb_in)
+);
+
+// Second MMCME2_BASE for the HDMI pixel clock and its 5x serial clock.  It
+// shares the 50 MHz input and gets its own feedback buffer.  Its parameters are
+// deliberately independent of the core MMCM's, and the core MMCM above is not
+// touched by it: the core clock and the 25 MHz LCD/audio clock stay bit
+// identical to the ones this module produced before the HDMI output existed.
+`NES_ZYNQ_MMCM_CELL #(
+    .CLKFBOUT_MULT_F    (HDMI_CLKFBOUT_MULT_F),
+    .CLKOUT0_DIVIDE_F   (HDMI_CLKOUT0_DIVIDE_F),
+    .CLKOUT1_DIVIDE     (HDMI_CLKOUT1_DIVIDE),
+    .DIVCLK_DIVIDE      (HDMI_DIVCLK_DIVIDE),
+    .CLKIN1_PERIOD      (CLK_IN_PERIOD),
+    .BANDWIDTH          ("OPTIMIZED"),
+    .STARTUP_WAIT       ("FALSE")
+) u_mmcm_hdmi (
+    .CLKIN1   (clk_in),
+    .PWRDWN   (1'b0),
+    .RST      (rst_in),
+    .LOCKED   (hdmi_locked),
+    .CLKFBOUT (hdmi_clkfb_out),
+    .CLKFBOUTB(),
+    .CLKFBIN  (hdmi_clkfb_in),
+    .CLKOUT0  (hdmi_pclk),
+    .CLKOUT0B (),
+    .CLKOUT1  (hdmi_pclk_x5),
+    .CLKOUT1B (),
+    .CLKOUT2  (),
+    .CLKOUT2B (),
+    .CLKOUT3  (),
+    .CLKOUT3B (),
+    .CLKOUT4  (),
+    .CLKOUT5  (),
+    .CLKOUT6  ()
+);
+
+`NES_ZYNQ_MMCM_FB u_fb_hdmi (
+    .I(hdmi_clkfb_out),
+    .O(hdmi_clkfb_in)
 );
 
 endmodule

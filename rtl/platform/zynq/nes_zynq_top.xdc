@@ -769,3 +769,77 @@ set_max_delay -datapath_only 20.000 \
 #   clock lands at +1.606 ns, which is 0.751 ns more margin than the design had
 #   before any of this existed.
 # =============================================================================
+
+# =============================================================================
+# HDMI/DVI: TMDS outputs, CEA-861 720x480p60
+#
+# Pins, from the vendor board file NAVIGATOR_ZYNQ_IO.xdc (GBK encoded), which
+# constrains ONLY the P side of each pair; the N side is the inferred package
+# pair of each P pin, which is why the top declares tmds_data_n / tmds_clk_n but
+# nothing here names them:
+#     board XDC  tmds_data_p[0] G19   tmds_data_p[1] K19
+#                tmds_data_p[2] J20   tmds_clk_p    J18
+# tmds_clk_p is on J18, a clock-capable SRCC pin.
+#
+# NOT DECLARED HERE, ON PURPOSE: tmds_scl and tmds_sda.  The vendor board file
+# puts them on R19/P20, which are the SAME two pins this design gives to the
+# capacitive touch controller (see the CONFLICT block above).  DDC/EDID is out
+# of scope, so those pins stay bound to touch_scl / touch_sda and the conflict
+# cannot arise.  tmds_hpd on L19 is free and is NOT added either: the top has no
+# use for a hot-plug-detect input, and adding an unused input port would only
+# create a dangling pin with no function.
+# =============================================================================
+set_property -dict {PACKAGE_PIN G19 IOSTANDARD TMDS_33} [get_ports {tmds_data_p[0]}]
+set_property -dict {PACKAGE_PIN K19 IOSTANDARD TMDS_33} [get_ports {tmds_data_p[1]}]
+set_property -dict {PACKAGE_PIN J20 IOSTANDARD TMDS_33} [get_ports {tmds_data_p[2]}]
+set_property -dict {PACKAGE_PIN J18 IOSTANDARD TMDS_33} [get_ports tmds_clk_p]
+
+
+# =============================================================================
+# HDMI CLOCKS: hdmi_pclk 27.000 MHz and hdmi_pclk_x5 135.000 MHz
+#
+# Both are outputs of the SECOND MMCME2_BASE (u_clk/u_mmcm_hdmi) in
+# rtl/platform/zynq/nes_zynq_clk.v, from a 675 MHz VCO (50 MHz * 13.5 / 1):
+#     hdmi_pclk    = 675 / 25 = 27.000 MHz   (CLKOUT0, CLKOUT0_DIVIDE_F = 25.0)
+#     hdmi_pclk_x5 = 675 / 5  = 135.000 MHz  (CLKOUT1, CLKOUT1_DIVIDE   = 5)
+#
+# NO create_clock IS WRITTEN FOR EITHER, AND THAT IS A MEASURED DECISION, NOT AN
+# OMISSION.  Neither is a top-level port: both are internal MMCM outputs, exactly
+# like the NES core clock on the first MMCM (see the core-clock block above).
+# Vivado derives generated clocks for every MMCME2_BASE output from CLKIN1_PERIOD
+# and the divider parameters during synthesis, so both clocks exist in the timing
+# analysis with no help from this file, and both are exact because the divider
+# arithmetic above is exact.
+#
+# Writing a create_clock on the MMCM output was tried and is WORSE, not merely
+# redundant: in Vivado 2018.3 on xc7z020-clg400-2 it converts CLKOUT0 from a
+# generated clock into a PRIMARY clock and SEVERS the MMCM's own internal
+# CLKOUT0->CLKOUT1 derivation, so a following
+#     create_generated_clock -source [get_pins u_clk/u_mmcm_hdmi/CLKOUT0] ...
+# produces
+#     CRITICAL WARNING: [Timing 38-249] Generated clock hdmi_pclk_x5 has no
+#     logical path from master clock hdmi_pclk.
+# and the 5x serial clock is then related to nothing.  The probe that produced
+# that warning is D:\vivadoProject\hdmi_xdc_probe\ (report_clocks in
+# rep_clocks.txt, which shows hdmi_pclk as a primary P clock).  So the correct
+# treatment is to write no clock constraint here, which is the same treatment the
+# core clock already gets.
+#
+# The OSERDESE2 CLK/CLKDIV pair (135 MHz / 27 MHz) both come from this one MMCM,
+# so their phase relationship is known to the timing engine with no constraint.
+
+# OUTPUT TIMING ON THE TMDS PAIRS IS NOT CONSTRAINED, AND THAT IS AN HONEST GAP.
+# This design has ZERO set_output_delay commands anywhere; check_timing already
+# lists every port with no output delay (lcd_rgb, lcd_de, the touch pins, the
+# aud_* pins) and adding the TMDS pairs does not change that.  TMDS at 135 MHz is
+# far more timing-sensitive than the 25 MHz LCD bus that was already
+# unconstrained, so the serialisers ship with NO output delay requirement at all.
+# The consequence, stated plainly: place and route bounds the OSERDESE2 output
+# path only by the internal register-to-pin rule and NOT by any DVI/HDMI sink
+# setup-and-hold window, so a bitstream that routes and meets the reported WNS is
+# NOT evidence that the eye at the connector is valid.  Whether the picture is
+# trustworthy rests on the serialiser primitive and the two clocks being correct,
+# not on a closed output constraint.  Closing it needs the sink's TMDS
+# setup/hold across the cable and the OBUFDS/OSERDESE2 output delay, measured or
+# datasheet-sourced, and that is a separate piece of work.
+# =============================================================================

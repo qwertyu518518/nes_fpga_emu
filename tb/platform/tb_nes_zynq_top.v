@@ -82,6 +82,14 @@ module tb_nes_zynq_top;
     tri  touch_sda;
     wire touch_rst_n;
     reg  touch_int;
+    // HDMI/DVI outputs.  Declared so the top's tmds ports are connected and the
+    // serialisers are observed; tmds_clk_p is counted below to prove the second
+    // MMCM's 135 MHz clock is actually reaching the output stage.
+    wire [2:0] tmds_data_p;
+    wire [2:0] tmds_data_n;
+    wire       tmds_clk_p;
+    wire       tmds_clk_n;
+    integer    tmds_clk_edges;
 
     integer errors;
     integer k;
@@ -152,7 +160,11 @@ module tb_nes_zynq_top;
         .touch_scl   (touch_scl),
         .touch_sda   (touch_sda),
         .touch_rst_n (touch_rst_n),
-        .touch_int   (touch_int)
+        .touch_int   (touch_int),
+        .tmds_data_p (tmds_data_p),
+        .tmds_data_n (tmds_data_n),
+        .tmds_clk_p  (tmds_clk_p),
+        .tmds_clk_n  (tmds_clk_n)
     );
 
     task err;
@@ -573,6 +585,12 @@ module tb_nes_zynq_top;
 
     always #10 sys_clk = ~sys_clk;
 
+    // The TMDS clock pair is serialised from the second MMCM's 135 MHz clock.
+    // A non-zero count at the end of the run proves that clock reaches the
+    // output stage and is not gated off.
+    initial tmds_clk_edges = 0;
+    always @(posedge tmds_clk_p) tmds_clk_edges = tmds_clk_edges + 1;
+
     initial begin
         sys_clk  = 1'b0;
         sys_rst_n = 1'b0;
@@ -618,6 +636,8 @@ module tb_nes_zynq_top;
         // Nothing may come out of reset before that.
         #1000000;
         if (dut.mmcm_locked !== 1'b1) err("MMCM_NEVER_LOCKED", dut.mmcm_locked, 0);
+        // The second MMCM must lock too, or the HDMI domain never starts.
+        if (dut.mmcm_hdmi_locked !== 1'b1) err("HDMI_MMCM_NEVER_LOCKED", dut.mmcm_hdmi_locked, 0);
         // 200 CLKIN1 = 4000 ns, plus the bench's own one-cycle sampling flop.
         if (locked_at_ns - t_rst_rel_ns < 4000 || locked_at_ns - t_rst_rel_ns > 4500)
             err("LOCKED_TIME", locked_at_ns - t_rst_rel_ns, 4000);
@@ -1082,12 +1102,14 @@ module tb_nes_zynq_top;
         if (bus_pp_sda != 0) err("TOUCH_SDA_PUSH_PULL", bus_pp_sda, 0);
         $display("BUS  touch bus contention over the whole run: scl=%0d sda=%0d push_pull_sda=%0d",
                  bus_xcl, bus_xsda, bus_pp_sda);
+        if (tmds_clk_edges == 0) err("TMDS_CLK_NEVER_TOGGLED", tmds_clk_edges, 0);
         if (errors != 0) begin
             $display("FAIL nes_zynq_top with %0d violations", errors);
             $fatal(1, "nes_zynq_top tb failed");
         end
 
-        $display("PASS nes_zynq_top three clock domains, reset gated on locked, 64-entry palette, RGB888 expansion, open drain touch bus");
+        $display("HDMI tmds_clk_p toggled %0d times, second MMCM locked", tmds_clk_edges);
+        $display("PASS nes_zynq_top four clock domains, reset gated on locked, 64-entry palette, RGB888 expansion, open drain touch bus, HDMI tmds live");
         $finish;
     end
 

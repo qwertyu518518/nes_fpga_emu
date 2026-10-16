@@ -13,7 +13,7 @@ param(
         'controller-tb',
         'cart-ines-tb', 'cart-rom-tb', 'cart-boot-rom-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
-        'video800-tb', 'video800-dc-tb',
+        'video800-tb', 'video800-dc-tb', 'video-hdmi-core', 'video-hdmi-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
         'platform-core', 'platform-tb', 'qsf-if-core',
         'zynq-clk-tb', 'zynq-top-tb',
@@ -112,6 +112,7 @@ $lineBufferVgaRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_line_buffer_vga.
 $vgaTimingRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_vga_timing.v'
 $video800Rtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_video_800x480.v'
 $video800DcRtl = Join-Path $repoRoot 'tb\video\tb_nes_video_800x480_dc.v'
+$videoHdmiRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_video_hdmi.v'
 
 $systemV0Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v0.v'
 $systemV1Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v1.v'
@@ -164,6 +165,7 @@ $lineBufferVgaSources = @($lineBufferVgaRtl)
 $vgaTimingSources = @($vgaTimingRtl)
 $video800Sources = @($video800Rtl)
 $video800DcSources = @($video800Rtl, $video800DcRtl)
+$videoHdmiSources = @($videoHdmiRtl)
 $systemV0Sources = @($systemV0Rtl) + $ppuSources + $cpuSources
 $systemV1Sources = @($systemV1Rtl) + $ppuSources + $apuSources + $cpuSources
 $systemV2Sources = @($systemV2Rtl) + $ppuSources + $apuSources + $busSources + $cpuSources
@@ -192,7 +194,12 @@ $audioI2sSources = @($cdcFifoRtl, $i2sShifterRtl, $audioI2sRtl)
 $touchInputSources = @($touchInputRtl)
 # The CHR fetch units are already in $systemV6Sources via $ppuSources; listing
 # them again here makes iverilog reject the whole target as a duplicate module.
+# nes_zynq_top now instantiates nes_video_hdmi and nes_hdmi_tx, and the latter
+# elaborates the serialiser, so the HDMI RTL and the behavioural OSERDESE2 /
+# OBUFDS models are compile dependencies of this target too.
 $zynqTopSources = @($zynqTopRtl, $zynqClkRtl, $touchInputRtl, $video800Rtl,
+                    $videoHdmiRtl, $hdmiEncoderRtl, $hdmiSerializerRtl,
+                    $hdmiTxRtl, $hdmiPrimSimRtl,
                     $zynqClkTbRtl) + $systemV6Sources + $audioI2sSources +
                    @($wm8960I2cRtl)
 $zynqTopTbSources = $zynqTopSources + @($zynqTopTbRtl)
@@ -582,6 +589,28 @@ $allTargets = @(
         Label       = '800x480 LCD dual-clock video output tb'
         Top         = 'tb_nes_video_800x480_dc'
         Sources     = $video800DcSources
+        Standard    = '2012'
+        Run         = $true
+    },
+    # 720x480p60 HDMI scaler.  Same dual-clock SDP-RAM crossing contract as the
+    # LCD scaler, but the horizontal law is the 256->720 = 45/16 rational
+    # accumulator rather than the 25-dot group emitter, so it is a separate
+    # module and gets its own bench.
+    [pscustomobject]@{
+        Id          = 'video-hdmi-core'
+        Group       = 'video'
+        Label       = '720x480p60 HDMI video scaler (elaboration)'
+        Top         = 'nes_video_hdmi'
+        Sources     = $videoHdmiSources
+        Standard    = '2001'
+        Run         = $false
+    },
+    [pscustomobject]@{
+        Id          = 'video-hdmi-tb'
+        Group       = 'video'
+        Label       = '720x480p60 HDMI video scaler tb'
+        Top         = 'tb_nes_video_hdmi'
+        Sources     = $videoHdmiSources + (Join-Path $repoRoot 'tb\video\tb_nes_video_hdmi.v')
         Standard    = '2012'
         Run         = $true
     },

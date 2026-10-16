@@ -7,10 +7,11 @@
 // the job here is to connect them and to own exactly the two things no submodule
 // can own: the clock tree and the reset network.
 //
-// CLOCK DOMAINS, three, and nothing crosses between core_clk and lcd_clk except
-// the pixels and the audio sample stream.  25 MHz is not an integer multiple of
-// 21.477 MHz, so the panel output stage cannot be clocked from the core with a
-// clock enable: pixel data must leave on real 25 MHz edges.
+// CLOCK DOMAINS, four now, and nothing crosses between core_clk, lcd_clk and
+// hdmi_pclk except the pixels and the audio sample stream.  25 MHz and 27 MHz
+// are both unrelated to 21.477 MHz, so neither output stage can be clocked from
+// the core with a clock enable: pixel data must leave on real edges of each
+// display's own pixel clock.
 //
 //   sys_clk   50 MHz, board pin U18
 //       nes_touch_input                     clk = sys_clk, reset = rst_sys
@@ -22,13 +23,31 @@
 //       nes_cart_rom, CHR half only         clk = core_clk, reset = rst_core
 //       audio decimation filter             clk = core_clk, reset = rst_audio_wr
 //       palette LUT (combinational)         pixel_pal[5:0] -> RGB565
-//       nes_video_800x480 write port        wr_clk = core_clk, reset = rst_core
+//       nes_video_800x480  write port       wr_clk = core_clk, reset = rst_core
+//       nes_video_hdmi     write port       wr_clk = core_clk, reset = rst_core
 //   lcd_clk   25 MHz, MMCM CLKOUT0
 //       nes_video_800x480 read port         rd_clk = lcd_clk, reset = rst_lcd
 //       nes_audio_i2s read side and bclk    rd_clk = mclk = lcd_clk
 //       RGB565 -> RGB888 expansion          combinational
 //       lcd_de / lcd_hs / lcd_vs / lcd_rgb  panel pins
 //       aud_mclk                            = mmcm_lcd_clk, see AUDIO LANE
+//   hdmi_pclk 27.000 MHz, SECOND MMCM CLKOUT0
+//       nes_video_hdmi read port            rd_clk = hdmi_pclk, reset = rst_hdmi
+//       nes_hdmi_tx encoders                pclk = hdmi_pclk
+//       RGB565 -> RGB888 expansion          combinational
+//       the serialisers run on mmcm_hdmi_pclk_x5 = 135.000 MHz, MMCM CLKOUT1
+//       the four T.M.D.S. pairs leave here
+//
+// The HDMI MMCM is a second MMCME2_BASE inside nes_zynq_clk.v, because the core
+// MMCM's 1181.25 MHz VCO cannot reach 27.000 or 135.000 MHz on an exact divide.
+// See that module's header for the second MMCM's derivation.
+//
+// The cross-domain boundaries, the same set as before plus nothing new that
+// contains flip-flops: touch buttons (sys_clk -> core_clk, bounded), frame_mem
+// inside each scaler (core_clk write, one read clock, no flip-flop arcs), and
+// the audio sample FIFO (core_clk <-> lcd_clk, bounded).  The HDMI frame_mem is
+// a second instance of the same simple-dual-port primitive and therefore adds
+// no new flip-flop crossing either.
 //
 // The cross-domain boundaries, three of them now:
 //   1. touch buttons: sys_clk -> core_clk, a 2-flop synchroniser.  The core
@@ -327,7 +346,16 @@ module nes_zynq_top #(
     // board EEPROM and RTC, so only one master may drive it at a time.  Not
     // the same pins as touch_scl / touch_sda, which are R19 / P20.
     inout  wire        aud_iic_scl,
-    inout  wire        aud_iic_sda
+    inout  wire        aud_iic_sda,
+    // ------------------------------------------------------------- HDMI/DVI
+    // The three T.M.D.S. data pairs and the clock pair.  Only the P side is
+    // constrained in the XDC, matching the vendor board file; the N side is the
+    // inferred package pair of each P pin.  These leave on the 135 MHz serial
+    // clock derived from the second MMCM in nes_zynq_clk.v.
+    output wire [2:0]  tmds_data_p,
+    output wire [2:0]  tmds_data_n,
+    output wire        tmds_clk_p,
+    output wire        tmds_clk_n
 );
 
     // ------------------------------------------------------------------ 复位
@@ -407,6 +435,35 @@ module nes_zynq_top #(
     wire rst_core = rst_core_q[1] | ~locked_core_q1;
     wire rst_lcd  = rst_lcd_q[1]  | ~locked_lcd_q1;
 
+    // -------------------------------------------------------- HDMI 域复位
+    // The HDMI read side is a fourth clock domain.  It gets its own chain, in
+    // the same idiom as the other three: async assert on !sys_rst_n, sync
+    // release, ANDed with a two-flop synchroniser of the SECOND MMCM's locked.
+    // The HDMI MMCM's outputs are not valid before its own LOCKED, so the HDMI
+    // domain must not start on a still-slewing clock either.
+    (* MAX_FANOUT = 32 *) reg [1:0] rst_hdmi_q;
+    reg hdmi_locked_q0;
+    reg hdmi_locked_q1;
+
+    always @(posedge mmcm_hdmi_pclk or negedge sys_rst_n) begin
+        if (!sys_rst_n)
+            rst_hdmi_q <= 2'b11;
+        else
+            rst_hdmi_q <= {rst_hdmi_q[0], 1'b0};
+    end
+
+    always @(posedge mmcm_hdmi_pclk or negedge sys_rst_n) begin
+        if (!sys_rst_n) begin
+            hdmi_locked_q0 <= 1'b0;
+            hdmi_locked_q1 <= 1'b0;
+        end else begin
+            hdmi_locked_q0 <= mmcm_hdmi_locked;
+            hdmi_locked_q1 <= hdmi_locked_q0;
+        end
+    end
+
+    wire rst_hdmi = rst_hdmi_q[1] | ~hdmi_locked_q1;
+
     // ------------------------------------------------- 音频域复位限定 (cfg_done)
     // wm8960_i2c raises cfg_done on sys_clk when its power-on table is done.
     // Each audio clock domain gets its own two-flop synchroniser of it and
@@ -448,13 +505,19 @@ module nes_zynq_top #(
     wire mmcm_lcd_clk;
     wire mmcm_core_clk;
     wire mmcm_locked;
+    wire mmcm_hdmi_pclk;
+    wire mmcm_hdmi_pclk_x5;
+    wire mmcm_hdmi_locked;
 
     nes_zynq_clk u_clk (
-        .clk_in  (sys_clk),
-        .rst_in  (!sys_rst_n),
-        .lcd_clk (mmcm_lcd_clk),
-        .core_clk(mmcm_core_clk),
-        .locked  (mmcm_locked)
+        .clk_in      (sys_clk),
+        .rst_in      (!sys_rst_n),
+        .lcd_clk     (mmcm_lcd_clk),
+        .core_clk    (mmcm_core_clk),
+        .locked      (mmcm_locked),
+        .hdmi_pclk   (mmcm_hdmi_pclk),
+        .hdmi_pclk_x5(mmcm_hdmi_pclk_x5),
+        .hdmi_locked (mmcm_hdmi_locked)
     );
 
     // The MMCM output is the panel dot clock.  This is a data output, not a new
@@ -860,6 +923,65 @@ module nes_zynq_top #(
     assign lcd_de = vid_de;
     assign lcd_hs = vid_hsync;
     assign lcd_vs = vid_vsync;
+
+    // ============================================================== HDMI 通路
+    // 720x480p60.  The same core-domain pixel stream that feeds the LCD scaler
+    // feeds a second scaler whose read side is the 27 MHz HDMI pixel clock.
+    // Two frame_mem arrays exist on purpose: a block RAM read port is clocked
+    // by exactly one domain, so 25 MHz LCD readout and 27 MHz HDMI readout
+    // cannot share one instance.  Each carries the same SDP crossing contract
+    // documented in nes_video_hdmi.v; neither adds a synchroniser, because the
+    // RAM edge IS the crossing.
+    wire [15:0] hdmi_rgb565;
+    wire        hdmi_de;
+    wire        hdmi_hsync;
+    wire        hdmi_vsync;
+
+    nes_video_hdmi u_video_hdmi (
+        .wr_clk        (mmcm_core_clk),
+        .wr_reset      (rst_core),
+        .in_valid      (vid_we_q),
+        .in_x          (vid_in_x_q),
+        .in_y          (vid_in_y_q),
+        .in_rgb565     (vid_in_rgb_q),
+        .in_line_ready (),
+        .in_frame_ready(),
+        .rd_clk        (mmcm_hdmi_pclk),
+        .rd_reset      (rst_hdmi),
+        .ce            (1'b1),
+        .rgb565        (hdmi_rgb565),
+        .de            (hdmi_de),
+        .hsync         (hdmi_hsync),
+        .vsync         (hdmi_vsync),
+        .hcount        (),
+        .vcount        (),
+        .pixel_x       (),
+        .pixel_y       (),
+        .frame_pulse   ()
+    );
+
+    // RGB565 -> RGB888, same full-scale replication law as the LCD side.
+    wire [7:0] hdmi_r8 = {hdmi_rgb565[15:11], hdmi_rgb565[15:13]};
+    wire [7:0] hdmi_g8 = {hdmi_rgb565[10:5],  hdmi_rgb565[10:9]};
+    wire [7:0] hdmi_b8 = {hdmi_rgb565[4:0],   hdmi_rgb565[4:2]};
+    wire [23:0] hdmi_rgb888 = {hdmi_r8, hdmi_g8, hdmi_b8};
+
+    // reset_n is active LOW, so it is the inverse of the active-high rst_hdmi.
+    // rst_hdmi already carries the HDMI MMCM's locked, so the serialisers are
+    // not released onto a clock that has not locked.
+    nes_hdmi_tx u_hdmi_tx (
+        .pclk       (mmcm_hdmi_pclk),
+        .pclk_x5    (mmcm_hdmi_pclk_x5),
+        .reset_n    (~rst_hdmi),
+        .rgb888     (hdmi_rgb888),
+        .hsync      (hdmi_hsync),
+        .vsync      (hdmi_vsync),
+        .de         (hdmi_de),
+        .tmds_data_p(tmds_data_p),
+        .tmds_data_n(tmds_data_n),
+        .tmds_clk_p (tmds_clk_p),
+        .tmds_clk_n (tmds_clk_n)
+    );
 
     // ================================================================ 音频通路
     // audio_sample_valid 是 1789772.727 Hz 的单拍 strobe，不是音频采样率。
