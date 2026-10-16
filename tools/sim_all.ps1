@@ -22,7 +22,8 @@ param(
         'audio-lane-tb',
         'cdc-fifo-core', 'cdc-fifo-tb',
         'i2s-shifter-core', 'i2s-shifter-tb',
-        'audio-i2s-core', 'audio-i2s-tb'
+        'audio-i2s-core', 'audio-i2s-tb',
+        'hdmi-tmds-encoder-core', 'hdmi-tmds-encoder-tb', 'hdmi-serializer-core', 'hdmi-tx-core'
     )]
     [string]$Mode = 'all'
 )
@@ -135,6 +136,15 @@ $touchInputRtl = Join-Path $repoRoot 'rtl\nes_core\peripheral\nes_touch_input.v'
 $zynqTopRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_zynq_top.v'
 $zynqTopTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_zynq_top.v'
 $zynqClkTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_zynq_clk.v'
+$hdmiEncoderRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_hdmi_tmds_encoder.v'
+$hdmiSerializerRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_hdmi_tmds_serializer.v'
+$hdmiTxRtl = Join-Path $repoRoot 'rtl\platform\zynq\nes_hdmi_tx.v'
+# Behavioural OSERDESE2 and OBUFDS models.  Icarus has neither primitive, so
+# every target that elaborates the serialiser compiles this testbench-only file.
+# It is never added to a synthesis file set, so Vivado still binds the real
+# primitives.  See the header of the file.
+$hdmiPrimSimRtl = Join-Path $repoRoot 'tb\platform\nes_hdmi_tmds_prim_sim.v'
+$hdmiEncoderTbRtl = Join-Path $repoRoot 'tb\platform\tb_nes_hdmi_tmds_encoder.v'
 $cartBootRomTbRtl = Join-Path $repoRoot 'tb\cart\tb_nes_boot_rom.v'
 
 $cpuSources = @($cpuRtl)
@@ -187,6 +197,12 @@ $zynqTopSources = @($zynqTopRtl, $zynqClkRtl, $touchInputRtl, $video800Rtl,
                    @($wm8960I2cRtl)
 $zynqTopTbSources = $zynqTopSources + @($zynqTopTbRtl)
 $zynqClkSources = @($zynqClkRtl)
+# The HDMI transmit core is mode-independent and not wired into the top level,
+# so its targets are self-contained: the encoder pair plus two elaborations that
+# pull in the serialiser and the behavioural OSERDESE2/OBUFDS models.
+$hdmiEncoderSources = @($hdmiEncoderRtl)
+$hdmiSerializerSources = @($hdmiSerializerRtl, $hdmiPrimSimRtl)
+$hdmiTxSources = @($hdmiEncoderRtl, $hdmiSerializerRtl, $hdmiTxRtl, $hdmiPrimSimRtl)
 # The audio lane lives inside nes_zynq_top.v: the decimator, the I2S wiring, the
 # one bit I2S delay and the codec I2C master are all top-level wiring, so the
 # lane bench has to elaborate the whole top plus the two submodules the top now
@@ -811,6 +827,49 @@ $allTargets = @(
         Sources     = $audioLaneTbSources
         Standard    = '2012'
         Run         = $true
+    },
+    # HDMI/DVI transmit core.  Mode independent: it takes pclk, pclk_x5 and the
+    # parallel video stream from its caller and is not instantiated by
+    # nes_zynq_top.v yet, because the video mode (and therefore the two clock
+    # frequencies) is still an open decision.  The encoder pair proves the
+    # 8b/10b algorithm against the DVI specification; the two elaboration
+    # targets prove the serialiser and the wrapper build against the
+    # behavioural OSERDESE2/OBUFDS models in tb/platform/nes_hdmi_tmds_prim_sim.v.
+    [pscustomobject]@{
+        Id          = 'hdmi-tmds-encoder-core'
+        Group       = 'platform'
+        Label       = 'HDMI TMDS colour-lane encoder (elaboration)'
+        Top         = 'nes_hdmi_tmds_encoder'
+        Sources     = $hdmiEncoderSources
+        Standard    = '2001'
+        Run         = $false
+    },
+    [pscustomobject]@{
+        Id          = 'hdmi-tmds-encoder-tb'
+        Group       = 'platform'
+        Label       = 'HDMI TMDS encoder DVI-specification conformance tb'
+        Top         = 'tb_nes_hdmi_tmds_encoder'
+        Sources     = $hdmiEncoderSources + @($hdmiEncoderTbRtl)
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'hdmi-serializer-core'
+        Group       = 'platform'
+        Label       = 'HDMI TMDS 10:1 serialiser (elaboration, behavioural OSERDESE2)'
+        Top         = 'nes_hdmi_tmds_serializer'
+        Sources     = $hdmiSerializerSources
+        Standard    = '2001'
+        Run         = $false
+    },
+    [pscustomobject]@{
+        Id          = 'hdmi-tx-core'
+        Group       = 'platform'
+        Label       = 'HDMI/DVI transmit core (elaboration, not wired to top)'
+        Top         = 'nes_hdmi_tx'
+        Sources     = $hdmiTxSources
+        Standard    = '2001'
+        Run         = $false
     }
 )
 
