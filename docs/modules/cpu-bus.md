@@ -178,6 +178,10 @@ case 0x2002: return ppu_read_status();   // 读 + 副作用，一次函数调用
 
 **DMA 用的是同一张表。** 译码被抽成一个 `decode_owner(addr)` 函数，`cpu_addr` 和 `dma_addr` 各调一次；因此“DMA 读 `$17F0` 与 CPU 读 `$17F0` 折叠到同一个 `ram_addr` 偏移”这类一致性不需要单独维护，也不可能漂移。注意 `sel_*` 与 `owner` 输出仍然**只由 `cpu_addr` 决定**——它们是 CPU 侧的译码观测口，不代表 DMA 的译码结果；DMA 的译码结果只通过 `dma_din`/`dma_unimpl`/`cart_addr` 体现。这是刻意的分离：一个 `sel_*` 信号同时代表两套地址会让“它在看谁的地址”变成一个需要额外说明的问题。
 
+![图 1：CPU 与总线](../figures/cpu-bus.svg)
+
+**图 1** · `nes_cpu6502` 与 `nes_cpu_bus` 的关系：地址译码 `decode_owner(addr[15:13])`、`ready_c` 等待态路径、`owner`/`owner_ack`、`bus_hold` 与 DMA 端口。事实来源 [`rtl/nes_core/bus/nes_cpu_bus.v`](../../rtl/nes_core/bus/nes_cpu_bus.v)。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ## 4. 时序合同
 
 ### 4.1 完成拍数

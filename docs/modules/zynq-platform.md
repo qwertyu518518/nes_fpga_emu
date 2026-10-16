@@ -69,6 +69,10 @@ CPU 与 PPU 会慢 0.0036%，帧周期肉眼可见地变长。1181.25 MHz VCO �
 
 **LCD 目标本身是个未决设计选择**（`nes_zynq_top.xdc` 的 PENDING DECISION 块）：vendor 面板是 1056×525、800×480 有效区，vendor 用 50 MHz 二分频即 25 MHz、45.1 Hz 刷新。真 60 Hz 需要 `1056*525*60 = 33.264 MHz`，而 `1181.25/33.264 = 35.521...` 不是 0.125 的倍数，所以想换 60 Hz 必须**重跑上面的 m/k 推导**、同时改 `CLKOUT0_DIVIDE_F` 和 XDC 的 `create_clock` 周期，两处必须一起动。
 
+![图 1：Zynq 时钟树（MMCM）](../figures/zynq-clock-tree.svg)
+
+**图 1** · `nes_zynq_clk` 的 MMCM 时钟树：50 MHz 输入（单 VCO 1181.25 MHz）经整数分频出 `core_clk`、经唯一的分数分频出 `lcd_clk`，并给出 `locked` 与反馈 BUFG。事实来源 [`rtl/platform/zynq/nes_zynq_clk.v`](../../rtl/platform/zynq/nes_zynq_clk.v)。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ---
 
 ## 3. 三个时钟域
@@ -82,6 +86,10 @@ CPU 与 PPU 会慢 0.0036%，帧周期肉眼可见地变长。1181.25 MHz VCO �
 | `lcd_clk` | 25 MHz | MMCM **CLKOUT0** | `nes_video_800x480` 读口；`nes_audio_i2s` 读侧与 bclk（`rd_clk = mclk = lcd_clk`）；RGB565→RGB888（组合）；`lcd_de`/`lcd_hs`/`lcd_vs`/`lcd_rgb` 面板引脚；`aud_mclk`（就是 `mmcm_lcd_clk` 出片） |
 
 注意 `lcd_clk` 是**一个数据输出，不是一个新时钟域**：`assign lcd_clk = mmcm_lcd_clk;`，`lcd_de`/`lcd_rgb` 就寄存在同一个网上。
+
+![图 2：nes_zynq_top 系统层次与三个时钟域](../figures/zynq-system-hierarchy.svg)
+
+**图 2** · 平台顶层的模块层次：三个时钟域各挂什么、CHR 存储器在核外、音频 lane 的分段，以及三条跨域边界（按钮、`frame_mem`、音频 FIFO）。事实来源 [`rtl/platform/zynq/nes_zynq_top.v`](../../rtl/platform/zynq/nes_zynq_top.v) 的文件头 CLOCK DOMAINS / AUDIO LANE 两段。生成图，勿手改。
 
 ---
 

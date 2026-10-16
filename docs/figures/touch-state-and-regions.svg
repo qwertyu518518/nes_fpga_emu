@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="800" viewBox="0 0 1180 800" role="img" aria-label="nes_touch_input：复位→校准→轮询状态机与区域映射">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1180" height="800" fill="var(--bg)"/>
+<text x="590" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">触摸：I2C 状态机（复位 → 校准 → 轮询）与区域映射</text>
+<text x="590" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/nes_core/peripheral/nes_touch_input.v</text>
+<rect x="40" y="110" width="210" height="70" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="145" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">SQ_RST_LO  6'd0</text>
+<text x="52" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ct_rst_n = 0</text>
+<text x="52" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">CT_RST_LOW_CYCLES 后释放</text>
+<rect x="40" y="200" width="210" height="70" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="145" y="221" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">SQ_RST_HI  6'd1</text>
+<text x="52" y="241" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">CT_RST_WAIT_CYCLES</text>
+<text x="52" y="256" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">→ init_done, 进校准</text>
+<path d="M 145 180 L 145 198" fill="none" stroke="var(--red)" stroke-width="1.6" marker-end="url(#arw-red)"/>
+<rect x="300" y="90" width="380" height="220" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="490" y="111" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">一次性校准（6'd25..34）</text>
+<text x="312" y="131" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CAL_SEL  → 选寄存器指针</text>
+<text x="312" y="146" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  步 0: 16'h8048 X Output Max (2B)</text>
+<text x="312" y="161" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  步 1: 16'h804A Y Output Max (2B)</text>
+<text x="312" y="176" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  步 2: 16'h804D Module_Switch1 (1B)</text>
+<text x="312" y="191" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CAL_WR/REGH/REGL/RD/RX/STOP</text>
+<text x="312" y="206" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CAL_STEP → 下一字节 / 下一步</text>
+<text x="312" y="221" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CAL_ABORT → STOP → SQ_CAL_DONE</text>
+<text x="312" y="236" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CAL_DONE: 派生三个切点</text>
+<path d="M 250 235 L 298 200" fill="none" stroke="var(--purple)" stroke-width="1.6" marker-end="url(#arw-purple)"/>
+<rect x="300" y="340" width="380" height="200" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="490" y="361" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">轮询状态序列（SQ_ST / SQ_CO）</text>
+<text x="312" y="381" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_WAIT      → 等 POLL_CYCLES 或 ct_int</text>
+<text x="312" y="396" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_ST_WR..ST_RX  → 读 16'h814E 状态</text>
+<text x="312" y="411" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_EVAL: 状态[7]&amp;&amp;1≤点数≤5 ?</text>
+<text x="312" y="426" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CO_WR..CO_RX3 → 读点 1 四字节</text>
+<text x="312" y="441" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">   → x_lo,x_hi,y_lo,y_hi（原始）</text>
+<text x="312" y="456" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_CLR_*  → 写 0 清触摸标志</text>
+<text x="312" y="471" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SQ_ABORT  → 出错通道，poll_done=1</text>
+<path d="M 480 310 L 480 338" fill="none" stroke="var(--green)" stroke-width="1.6" marker-end="url(#arw-green)"/>
+<text x="510" y="566" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">轮询结束回到 SQ_WAIT（6'd2）</text>
+<rect x="710" y="90" width="430" height="130" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="925" y="111" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">轴交换（SQ_CO_RX3 最后字节）</text>
+<text x="722" y="131" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">x2y_q = Module_Switch1[3]（校准读出）</text>
+<text x="722" y="146" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">touch_x &lt;= x2y ? coord_y_raw : coord_x_raw</text>
+<text x="722" y="161" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">touch_y &lt;= x2y ? coord_x_raw : coord_y_raw</text>
+<text x="722" y="176" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">字节顺序不变：x_lo,x_hi,y_lo,y_hi</text>
+<rect x="710" y="250" width="430" height="300" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="925" y="271" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">区域映射（每报点 3 次比较，无算术）</text>
+<text x="722" y="291" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">x_left_edge  = x_out_max &gt;&gt; 2</text>
+<text x="722" y="306" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">x_right_edge = x_out_max - (x_out_max&gt;&gt;2)</text>
+<text x="722" y="321" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">y_mid_edge   = y_out_max &gt;&gt; 1</text>
+<text x="722" y="336" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">默认: 200 / 600 / 240（PANEL 800×480）</text>
+<text x="722" y="351" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace"></text>
+<text x="722" y="366" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">左  : touch_x &lt;  x_left_edge</text>
+<text x="722" y="381" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">右  : touch_x &gt;= x_right_edge</text>
+<text x="722" y="396" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">中  : 其余</text>
+<text x="722" y="411" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">上  : touch_y &lt;  y_mid_edge</text>
+<rect x="60" y="600" width="300" height="140" rx="4" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.4"/>
+<line x1="135" y1="600" x2="135" y2="740" stroke="var(--border)" stroke-width="1.2"/>
+<line x1="285" y1="600" x2="285" y2="740" stroke="var(--border)" stroke-width="1.2"/>
+<line x1="135" y1="670" x2="285" y2="670" stroke="var(--border)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text x="97" y="675" font-size="12.5" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Left</text>
+<text x="210" y="640" font-size="12.5" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Up</text>
+<text x="210" y="710" font-size="12.5" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Down</text>
+<text x="322" y="675" font-size="12.5" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Right</text>
+<text x="210" y="590" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">dpad = {Up, Down, Left, Right}</text>
+<text x="52" y="758" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">x=0</text>
+<text x="368" y="758" font-size="11" fill="var(--muted)" text-anchor="end" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">x=max</text>
+<rect x="400" y="600" width="310" height="140" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="555" y="621" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">按键与 TPAD</text>
+<text x="412" y="641" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">key0/key1 低有效，去抖</text>
+<text x="412" y="656" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">touch_key 高有效（独立引脚）</text>
+<text x="412" y="671" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">TPAD 按住 → 两键变 Start/Select</text>
+<text x="412" y="686" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">buttons = {dpad, start, sel, B, A}</text>
+<rect x="720" y="600" width="283" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="732" y="620" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<path d="M 766 615 L 788 615" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="792" y="620" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">状态推进</text>
+<rect x="841" y="608" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="867" y="620" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">轮询</text>
+<rect x="903" y="608" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="929" y="620" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">校准 / 映射</text>
+</svg>

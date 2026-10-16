@@ -15,6 +15,10 @@
 
 ---
 
+![图 1：CHR 仲裁](../figures/chr-arbitration.svg)
+
+**图 1** · 三个读主设备（背景取数、精灵取数、`$2007` 读臂）经组合优先 mux 共享一条 CHR 读总线，`chr_rdata` 是共享回读；`$2007` 写口有独立地址，故写不再冻结取数。事实来源 `rtl/nes_core/ppu/nes_ppu2c02.v`（`g_chr_external`）与 `rtl/nes_core/system/nes_system_v6.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ## 1. 已实现：接口骨架
 
 ### 1.1 `rtl/nes_core/ppu/nes_ppu2c02.v`

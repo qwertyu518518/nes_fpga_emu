@@ -111,6 +111,10 @@ GT9147 上电自检模组参数并把结果发布在只读寄存器里。复位�
 
 ---
 
+![图 1：触摸状态机与区域映射](../figures/touch-state-and-regions.svg)
+
+**图 1** · `nes_touch_input` 的复位 → 一次性校准 → 轮询状态序列，以及由控制器自报的最大值派生出的区域映射与轴交换。事实来源 `rtl/nes_core/peripheral/nes_touch_input.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ## 5. 区域映射
 
 `region` 是 `(x, y)` 的**全函数**，五区域互斥且覆盖整个平面：

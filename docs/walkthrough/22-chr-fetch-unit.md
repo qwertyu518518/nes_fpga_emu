@@ -31,6 +31,10 @@
 
 ---
 
+![图 1：nes_chr_fetch_unit 状态机](../figures/chr-fetch-fsm.svg)
+
+**图 1** · `nes_chr_fetch_unit` 的五态序列与 7 个 `ce` 的占用：两次 `chr_req` 拍分别在 `trigger+3` 与 `trigger+5`，`bg_valid` 在 `trigger+7` 拉起并保持到下一次接受。事实来源 `rtl/nes_core/ppu/nes_chr_fetch_unit.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ## 2. 全文（106 行）
 
 ```verilog

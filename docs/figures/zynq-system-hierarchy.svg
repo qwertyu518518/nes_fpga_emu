@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="940" viewBox="0 0 1180 940" role="img" aria-label="nes_zynq_top 系统层次与三个时钟域">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1180" height="940" fill="var(--bg)"/>
+<text x="590" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">系统层次：nes_zynq_top 到核心与平台外设</text>
+<text x="590" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/platform/zynq/nes_zynq_top.v · 三个时钟域与三条跨域边界</text>
+<rect x="28" y="68" width="1124" height="800" rx="10" fill="none" stroke="var(--border)" stroke-width="1.4"/>
+<text x="44" y="90" font-size="12.5" fill="var(--muted)" text-anchor="start" font-weight="700" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_zynq_top</text>
+<rect x="452" y="100" width="276" height="86" rx="6" fill="var(--panel)" stroke="var(--border)" stroke-width="1.6"/>
+<text x="590" y="121" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_zynq_clk</text>
+<text x="464" y="141" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">MMCME2_BASE  VCO 1181.25 MHz</text>
+<text x="464" y="156" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">CLKOUT1 ÷55 → core_clk</text>
+<text x="464" y="171" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">CLKOUT0 ÷47.25 → lcd_clk</text>
+<text x="58" y="128" font-size="11.5" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">sys_clk 50 MHz</text>
+<text x="58" y="144" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">U18, 20.000 ns</text>
+<path d="M 150 132 L 450 132" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<rect x="50" y="210" width="330" height="26" rx="6" fill="var(--blue)" stroke="var(--blue)" stroke-width="1.6"/>
+<rect x="50" y="223" width="330" height="13" rx="0" fill="var(--blue)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="215" y="228" font-size="11" fill="var(--bg)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">sys_clk 域 · 50 MHz</text>
+<rect x="50" y="210" width="330" height="590" rx="8" fill="none" stroke="var(--blue)" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="410" y="210" width="330" height="26" rx="6" fill="var(--green)" stroke="var(--green)" stroke-width="1.6"/>
+<rect x="410" y="223" width="330" height="13" rx="0" fill="var(--green)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="575" y="228" font-size="11" fill="var(--bg)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">core_clk 域 · 21.477272727 MHz</text>
+<rect x="410" y="210" width="330" height="590" rx="8" fill="none" stroke="var(--green)" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="800" y="210" width="330" height="26" rx="6" fill="var(--orange)" stroke="var(--orange)" stroke-width="1.6"/>
+<rect x="800" y="223" width="330" height="13" rx="0" fill="var(--orange)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="965" y="228" font-size="11" fill="var(--bg)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">lcd_clk 域 · 25 MHz</text>
+<rect x="800" y="210" width="330" height="590" rx="8" fill="none" stroke="var(--orange)" stroke-width="1.2" stroke-dasharray="6 4"/>
+<rect x="66" y="250" width="298" height="66" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="215" y="271" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_touch_input</text>
+<text x="78" y="291" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">GT9147 I2C · 一次性校准 · 区域映射</text>
+<text x="78" y="306" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">→ buttons1[7:0]（2FF 同步）</text>
+<rect x="66" y="330" width="298" height="66" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="215" y="351" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">wm8960_i2c</text>
+<text x="78" y="371" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">15 项上电表 @ 100 kHz（约 4.6 ms）</text>
+<text x="78" y="386" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">→ cfg_done</text>
+<rect x="66" y="410" width="298" height="52" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="215" y="431" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">面板上电计数器</text>
+<text x="78" y="451" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">lcd_rst / lcd_bl（sys_clk 计数）</text>
+<rect x="66" y="476" width="298" height="82" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="215" y="497" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">复位网络同步</text>
+<text x="78" y="517" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">locked  → 每域 2FF</text>
+<text x="78" y="532" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cfg_done → 音频两域各 2FF</text>
+<text x="78" y="547" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">rst_sys / rst_core / rst_lcd</text>
+<rect x="426" y="250" width="298" height="178" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="575" y="271" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_system_v6</text>
+<text x="438" y="291" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">12 相 div_phase[3:0] → ce_ppu/ce_cpu</text>
+<text x="438" y="306" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_cpu6502 + nes_cpu_bus</text>
+<text x="438" y="321" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_ppu2c02 (EXTERNAL_CHR=1)</text>
+<text x="438" y="336" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_ppu_sprite + sprite_chr_fetch</text>
+<text x="438" y="351" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_apu2a03 (pulse×2 tri noise dmc)</text>
+<text x="438" y="366" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_controller ($4016/$4017 内部)</text>
+<text x="438" y="381" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_oam_dma + nes_mapper</text>
+<rect x="426" y="444" width="298" height="66" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="575" y="465" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_cart_rom (PRG)</text>
+<text x="438" y="485" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">PRG_ENABLE=1, CHR_ENABLE=0</text>
+<text x="438" y="500" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">在核内；$readmemh 初始化</text>
+<rect x="426" y="526" width="298" height="82" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="575" y="547" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">音频抽取滤波器</text>
+<text x="438" y="567" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">4/4/2 滑动平均串联 → /32</text>
+<text x="438" y="582" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">精确有理 63/55（2016 进 55 出）</text>
+<text x="438" y="597" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">1.789772727 MHz → 48828.125 Hz</text>
+<rect x="426" y="624" width="298" height="56" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="575" y="645" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">调色板 LUT（组合）</text>
+<text x="438" y="665" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">pal_to_rgb565(core_pixel_pal[5:0])</text>
+<rect x="426" y="696" width="298" height="56" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="575" y="717" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">视频写口</text>
+<text x="438" y="737" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">帧存写口 wr_clk = core_clk</text>
+<rect x="816" y="250" width="298" height="74" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="965" y="271" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_video_800x480 读口</text>
+<text x="828" y="291" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">hcount 0..1055 / vcount 0..524</text>
+<text x="828" y="306" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">DE 800×480，每 lcd_clk 一个像素</text>
+<rect x="816" y="340" width="298" height="86" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="965" y="361" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_audio_i2s 读侧</text>
+<text x="828" y="381" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">BCLK_DIV=16 → BCLK 1.5625 MHz</text>
+<text x="828" y="396" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">帧 32 BCLK → 48828.125 Hz</text>
+<text x="828" y="411" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">mclk = lcd_clk（同一网络）</text>
+<rect x="816" y="442" width="298" height="52" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="965" y="463" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">RGB565 → RGB888</text>
+<text x="828" y="483" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">lcd_rgb[23:0] 位复制扩展</text>
+<rect x="816" y="510" width="298" height="116" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="965" y="531" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">面板与音频引脚</text>
+<text x="828" y="551" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">lcd_clk / lcd_de / lcd_hs / lcd_vs</text>
+<text x="828" y="566" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">lcd_rgb[23:0]（三态双向）</text>
+<text x="828" y="581" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">aud_bclk / aud_dac_lrc / aud_dacdat</text>
+<text x="828" y="596" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">aud_mclk = mmcm_lcd_clk</text>
+<text x="828" y="611" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">aud_iic_scl / aud_iic_sda（开漏）</text>
+<line x1="394" y1="236" x2="394" y2="790" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 5"/>
+<line x1="784" y1="236" x2="784" y2="790" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 5"/>
+<path d="M 364 283 L 426 283" fill="none" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw-orange)"/>
+<text x="395" y="330" font-size="11" fill="var(--orange)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">2FF 同步</text>
+<path d="M 724 304 L 816 288" fill="none" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw-orange)"/>
+<text x="770" y="300" font-size="11" fill="var(--orange)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">frame_mem</text>
+<text x="770" y="315" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">写/读双口</text>
+<path d="M 724 567 L 816 383" fill="none" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw-orange)"/>
+<text x="770" y="476" font-size="11" fill="var(--orange)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">音频 FIFO</text>
+<text x="770" y="491" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">core→lcd</text>
+<rect x="44" y="880" width="412" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="56" y="900" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<rect x="90" y="888" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="116" y="900" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">core_clk 模块</text>
+<rect x="210" y="888" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="236" y="900" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">复位 / 配置</text>
+<path d="M 304 895 L 326 895" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="330" y="900" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">同域数据</text>
+<path d="M 379 895 L 401 895" fill="none" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arw-orange)"/>
+<text x="405" y="900" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">跨时钟域</text>
+</svg>

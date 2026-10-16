@@ -94,7 +94,7 @@ function Resolve-Targets {
         }
         $extensions = @('.md', '.txt', '.ps1', '.v', '.vh', '.sv', '.tcl', '.xdc',
                         '.qsf', '.qpf', '.sdc', '.json', '.yml', '.yaml', '.py', '.f',
-                        '.cfg', '.ini', '.gitignore', '.gitattributes')
+                        '.cfg', '.ini', '.svg', '.gitignore', '.gitattributes')
         $tracked | Where-Object {
             $name = $_
             ($extensions -contains [IO.Path]::GetExtension($name).ToLowerInvariant()) -or

@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="720" viewBox="0 0 1120 720" role="img" aria-label="nes_chr_fetch_unit 的状态序列与 7 周期占用">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1120" height="720" fill="var(--bg)"/>
+<text x="560" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">背景取数状态机：nes_chr_fetch_unit</text>
+<text x="560" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/nes_core/ppu/nes_chr_fetch_unit.v · 一个 tile = 2 字节（low/high 平面）</text>
+<rect x="100" y="110" width="235" height="116" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="217.5" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">S_IDLE  3'd0</text>
+<text x="112" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">req_start &amp;&amp; !busy →</text>
+<text x="112" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  锁存 base/count</text>
+<text x="112" y="181" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  busy=1, bg_valid=0</text>
+<rect x="560" y="110" width="235" height="116" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="677.5" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">S_PRE  3'd1</text>
+<text x="572" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">chr_addr &lt;= nxt_addr</text>
+<rect x="660" y="300" width="235" height="116" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="777.5" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">S_ARM  3'd2</text>
+<text x="672" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">chr_req &lt;= 1</text>
+<rect x="60" y="300" width="235" height="116" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="177.5" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">S_GRAB  3'd4</text>
+<text x="72" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cap_pl ? bg_hi&lt;=rdata</text>
+<text x="72" y="356" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">       : bg_lo&lt;=rdata</text>
+<text x="72" y="371" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">!fin → chr_req&lt;=1</text>
+<text x="72" y="386" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace"> fin → busy=0,bg_valid=1</text>
+<rect x="330" y="300" width="235" height="116" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="447.5" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">S_BEAT  3'd3</text>
+<text x="342" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">chr_req &lt;= 0</text>
+<text x="342" y="356" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cap_pl&lt;=pl_q, fin&lt;=last_byte</text>
+<text x="342" y="371" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">pl 翻转；pl 时 idx++</text>
+<text x="342" y="386" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">非末次: chr_addr&lt;=fwd_addr</text>
+<path d="M 335 160 L 558 160" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="447" y="150" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">接受请求</text>
+<path d="M 700 226 L 770 298" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="770" y="258" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">1 beat</text>
+<path d="M 700 358 L 582 358" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="640" y="348" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">ARM→BEAT</text>
+<path d="M 330 340 L 297 340" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="313" y="330" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">总是</text>
+<path d="M 295 380 L 328 380" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="313" y="400" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">!fin 重发</text>
+<path d="M 150 300 L 150 228" fill="none" stroke="var(--red)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arw-red)"/>
+<text x="160" y="268" font-size="11" fill="var(--red)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">fin_q → busy=0</text>
+<text x="60" y="458" font-size="12.5" fill="var(--text)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">占用 7 个 ce（trigger+0 .. +6），bg_valid 在 trigger+7</text>
+<rect x="60" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="119" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+0</text>
+<text x="119" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">IDLE</text>
+<rect x="188" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="247" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+1</text>
+<text x="247" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">PRE</text>
+<rect x="316" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="375" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+2</text>
+<text x="375" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">ARM</text>
+<rect x="444" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.4"/>
+<text x="503" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+3</text>
+<text x="503" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">BEAT1</text>
+<rect x="572" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="631" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+4</text>
+<text x="631" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">GRAB</text>
+<rect x="700" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.4"/>
+<text x="759" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+5</text>
+<text x="759" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">BEAT2</text>
+<rect x="828" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="887" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+6</text>
+<text x="887" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">GRAB</text>
+<rect x="956" y="470" width="118" height="54" rx="5" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="1015" y="492" font-size="11" fill="var(--text)" text-anchor="middle" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">+7</text>
+<text x="1015" y="508" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">IDLE</text>
+<text x="503" y="542" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">chr_req 拍</text>
+<text x="759" y="542" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">chr_req 拍</text>
+<text x="60" y="566" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">→ 第 2 次 chr_req 后回到 IDLE，bg_valid 保持到下一次接受</text>
+<text x="60" y="610" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nxt_addr = base_q + {3'b0, idx_q, 4'd0} + (pl_q ? 8 : 0)；fwd_addr = nxt_addr + 8</text>
+<text x="60" y="632" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">hblank 内 bg_valid 不被清（只在接受下一请求时清），因此 PPU 调度捕获在 trigger+8 取 bg_lo/hi。</text>
+</svg>

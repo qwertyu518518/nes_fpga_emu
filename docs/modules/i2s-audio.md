@@ -215,6 +215,10 @@ assign dropped = sh_dropped | wr_full_i;
 
 ---
 
+![图 1：APU 到 I2S 音频通路](../figures/apu-to-i2s.svg)
+
+**图 1** · 音频通路全链：APU 五通道混合 → 4/4/2 滑动平均 + 精确有理 `63/55` 抽取 → `nes_cdc_fifo` → `nes_i2s_shifter` → WM8960。事实来源 `nes_apu2a03.v` + `nes_zynq_top.v` + `nes_audio_i2s.v` + `nes_cdc_fifo.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ## 6. 证据入口
 
 `tools/sim_all.ps1` 里与本模块相关的目标（在 `-Targets` 白名单中）：

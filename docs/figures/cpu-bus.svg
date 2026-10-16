@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="850" viewBox="0 0 1140 850" role="img" aria-label="nes_cpu6502 与 nes_cpu_bus：地址译码、等待态、owner/hold、DMA 端口">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1140" height="850" fill="var(--bg)"/>
+<text x="570" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">CPU 与总线：地址译码 · 等待态 · owner/hold · DMA 端口</text>
+<text x="570" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/nes_core/bus/nes_cpu_bus.v (+ nes_cpu6502 的对外合同)</text>
+<rect x="40" y="90" width="230" height="190" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="155" y="111" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_cpu6502</text>
+<text x="52" y="131" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_req / cpu_we</text>
+<text x="52" y="146" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_addr[15:0]</text>
+<text x="52" y="161" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_dout[7:0]</text>
+<text x="52" y="176" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace"></text>
+<text x="52" y="191" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_din[7:0]   ← 读回</text>
+<text x="52" y="206" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_ready      → 完成本周期</text>
+<text x="52" y="221" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_stall = req &amp;&amp; !fire</text>
+<rect x="330" y="90" width="300" height="190" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="480" y="111" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_cpu_bus</text>
+<text x="342" y="131" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ready_c = !bus_hold &amp;&amp;</text>
+<text x="342" y="146" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  (active ? wait_cnt==0</text>
+<text x="342" y="161" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">         : wait_need&lt;=1)</text>
+<text x="342" y="176" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">  &amp;&amp; (!owner_ext || ack)</text>
+<text x="342" y="191" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_fire = cpu_req &amp;&amp; ready_c</text>
+<text x="342" y="206" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace"></text>
+<text x="342" y="221" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">owner[2:0] / sel_* / ram_we</text>
+<rect x="700" y="90" width="400" height="200" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="900" y="111" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">地址译码 decode_owner</text>
+<text x="712" y="131" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">000  → OWNER_RAM     $0000-$1FFF</text>
+<text x="712" y="146" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">001  → OWNER_PPU     $2000-$3FFF</text>
+<text x="712" y="161" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">010  → OWNER_APU_IO  $4000-$401F</text>
+<text x="712" y="176" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">       否则 OWNER_OPEN</text>
+<text x="712" y="191" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">011  → OWNER_CART_RAM $6000-$7FFF</text>
+<text x="712" y="206" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">1xx  → OWNER_CART_ROM $8000-$FFFF</text>
+<path d="M 270 150 L 328 150" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="299" y="138" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">req/we/addr</text>
+<path d="M 328 215 L 270 215" fill="none" stroke="var(--green)" stroke-width="1.6" marker-end="url(#arw-green)"/>
+<text x="299" y="235" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">din/ready</text>
+<path d="M 632 160 L 698 160" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="665" y="148" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">addr[15:13]</text>
+<path d="M 698 215 L 632 215" fill="none" stroke="var(--purple)" stroke-width="1.6" marker-end="url(#arw-purple)"/>
+<text x="665" y="235" font-size="11" fill="var(--purple)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">owner/sel</text>
+<path d="M 900 290 L 900 302" fill="none" stroke="var(--purple)" stroke-width="1.6"/>
+<line x1="135" y1="302" x2="1023" y2="302" stroke="var(--muted)" stroke-width="1.4"/>
+<rect x="40" y="314" width="190" height="76" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="135" y="335" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">RAM 片内</text>
+<text x="52" y="355" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">$0000-$1FFF</text>
+<path d="M 135 302 L 135 312" fill="none" stroke="var(--purple)" stroke-width="1.2" marker-end="url(#arw-purple)"/>
+<rect x="262" y="314" width="190" height="76" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="357" y="335" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">PPU</text>
+<text x="274" y="355" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">$2000-$3FFF · ppu_ack</text>
+<path d="M 357 302 L 357 312" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<rect x="484" y="314" width="190" height="76" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="579" y="335" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">APU / IO</text>
+<text x="496" y="355" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">$4000-$401F · apu_ack</text>
+<path d="M 579 302 L 579 312" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<rect x="706" y="314" width="190" height="76" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="801" y="335" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">CART RAM</text>
+<text x="718" y="355" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">$6000-$7FFF · cart_ack</text>
+<path d="M 801 302 L 801 312" fill="none" stroke="var(--purple)" stroke-width="1.2" marker-end="url(#arw-purple)"/>
+<rect x="928" y="314" width="190" height="76" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="1023" y="335" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">CART ROM</text>
+<text x="940" y="355" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">$8000-$FFFF · cart_ack</text>
+<path d="M 1023 302 L 1023 312" fill="none" stroke="var(--purple)" stroke-width="1.2" marker-end="url(#arw-purple)"/>
+<rect x="40" y="430" width="300" height="170" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="190" y="451" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">等待态路径</text>
+<text x="52" y="471" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">wait_need:</text>
+<text x="52" y="486" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace"> OPEN → 0    RAM → sync?1:0</text>
+<text x="52" y="501" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace"> 其它 → READ_WAIT_CYCLES</text>
+<text x="52" y="516" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">owner_ack = ppu/apu/cart_ack</text>
+<text x="52" y="531" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ram 读口 free-running（11 clk 窗口）</text>
+<path d="M 400 282 L 246 282 L 246 412 L 190 412 L 190 428" fill="none" stroke="var(--orange)" stroke-width="1.6" marker-end="url(#arw-orange)"/>
+<text x="250" y="272" font-size="11" fill="var(--orange)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">wait_need / owner_ack</text>
+<rect x="370" y="430" width="340" height="230" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="540" y="451" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">DMA 端口（DMA_PRESENT=1）</text>
+<text x="382" y="471" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_req_oam / dma_req_dmc（OAM 优先）</text>
+<text x="382" y="486" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_grant = present &amp;&amp; ce &amp;&amp; bus_hold</text>
+<text x="382" y="501" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">            &amp;&amp; (pick_oam || pick_dmc)</text>
+<text x="382" y="516" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_wait_need: DMC→3（grant+3）</text>
+<text x="382" y="531" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">    RAM→sync?1:0  其它→READ_WAIT</text>
+<text x="382" y="546" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_ack = grant &amp;&amp; ready</text>
+<text x="382" y="561" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_sel = dma_pick_dmc</text>
+<text x="382" y="576" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_unimpl = grant &amp;&amp; owner∈{PPU,APU}</text>
+<path d="M 500 282 L 470 282 L 470 428" fill="none" stroke="var(--red)" stroke-width="1.6" marker-end="url(#arw-red)"/>
+<text x="632" y="300" font-size="11" fill="var(--red)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">dma_req / dma_ack</text>
+<rect x="750" y="430" width="350" height="150" rx="6" fill="var(--panel)" stroke="var(--muted)" stroke-width="1.6"/>
+<text x="925" y="451" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">优先与探测</text>
+<text x="762" y="471" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_pick_oam = dma_req_oam</text>
+<text x="762" y="486" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dma_pick_dmc = !oam &amp;&amp; dmc</text>
+<text x="762" y="501" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dbg_active / dbg_wait_count</text>
+<text x="762" y="516" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dbg_open_bus / dbg_dma_owner</text>
+<path d="M 712 490 L 748 490" fill="none" stroke="var(--red)" stroke-width="1.6" marker-end="url(#arw-red)"/>
+<rect x="750" y="600" width="350" height="74" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="925" y="621" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">bus_hold（输入，外部仲裁）</text>
+<text x="762" y="641" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ready_c 被 !bus_hold 屏蔽</text>
+<text x="762" y="656" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">DMA 仅在 bus_hold 高时授权</text>
+<path d="M 750 636 L 712 636" fill="none" stroke="var(--red)" stroke-width="1.6" marker-end="url(#arw-red)"/>
+<rect x="44" y="800" width="322" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="56" y="820" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<path d="M 90 815 L 112 815" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="116" y="820" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">请求 / 授权</text>
+<rect x="184" y="808" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="210" y="820" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">目标从设备</text>
+<rect x="266" y="808" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="292" y="820" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">关闭 / 仲裁</text>
+</svg>
