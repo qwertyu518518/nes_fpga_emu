@@ -167,7 +167,7 @@ NES/FC 本身怎么工作：整机、iNES 格式、CPU 总线、6502、PPU、APU
 
 #### `hardware/`
 
-EP4CE10 开拓者板的板级事实与数字逻辑/时序基础：板卡、时钟复位 CDC、存储、VGA/LCD、TF/SD、SDRAM、音频、引脚、平台顶层。
+EP4CE10 开拓者板的板级事实与数字逻辑/时序基础：板卡、时钟复位 CDC、存储、VGA/LCD、TF/SD、SDRAM、音频、引脚、平台顶层，以及 Zynq PS/PL 的上板 bring-up 手册。
 
 | 文档 | 一句话 |
 |---|---|
@@ -185,6 +185,7 @@ EP4CE10 开拓者板的板级事实与数字逻辑/时序基础：板卡、时�
 | [`hardware/11-portability.md`](hardware/11-portability.md) | 11 可移植性：从板级例程到 NES 项目 |
 | [`hardware/12-ntsc-clock-and-pll.md`](hardware/12-ntsc-clock-and-pll.md) | 12 NTSC 与 VGA 时钟：从 50 MHz 到 NES 主时钟 |
 | [`hardware/13-platform-top.md`](hardware/13-platform-top.md) | 13 平台顶层：软件 main / framebuffer / SDL 事件循环与硬件接线的逐条对应 |
+| [`hardware/14-zynq-bringup-runbook.md`](hardware/14-zynq-bringup-runbook.md) | 14 Zynq 上板 bring-up 手册：四个产物的分阶段点亮顺序与症状归因 |
 
 #### `walkthrough/`
 
