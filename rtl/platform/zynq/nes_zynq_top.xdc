@@ -61,6 +61,14 @@
 #   * report_io on that build: Total User IO = 45, placed 45 of 45, unplaced 0,
 #     DRC 0 errors, 0 routing errors.  So every line in this file, touch_key
 #     included, is a real pin of the real package.
+#
+#     THAT MEASUREMENT IS v6-ERA AND THIS FILE HAS GROWN SINCE.  The figures above
+#     describe the file as it stood at zynq_bitstream_v6; the HDMI block below
+#     added four TMDS_33 P-side pins afterwards, and the Zynq PS bundle added
+#     eight more top-level ports on top of that.  A current build places 53 of 53.
+#     The "every line is a real pin" conclusion still holds and is re-checked by
+#     tools/pl/finish.tcl on every PL-only build, which asserts the port count
+#     rather than trusting this comment.  Do not read 45 as the current number.
 #   * touch_key read back by name AND by pin from that routed checkpoint:
 #     PACKAGE_PIN F16, IOSTANDARD LVCMOS33, DIRECTION IN; F16 carries exactly one
 #     port.  report_io agrees:
