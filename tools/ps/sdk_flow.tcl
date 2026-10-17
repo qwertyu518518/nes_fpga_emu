@@ -63,10 +63,14 @@ puts "SDK_APP done"
 puts "SDK_TREE_APP: [lsort [glob -nocomplain -tails -directory $ws/loader_app *]]"
 foreach f [glob -nocomplain $ws/loader_app/src/*] { puts "SDK_APP_SRC_FILE $f" }
 
-# Drop our own main.c in before the build so the template's main is replaced.
+# Drop our own sources in before the build so the template's main is replaced.
+# The app is now several files (the loader, the pure HID layer and the USB
+# glue); copy every one of them, not just main.c.
 if {[file exists [file join $ws loader_app src]]} {
-    file copy -force [file join $root app main.c] [file join $ws loader_app src main.c]
-    puts "SDK_MAIN copied"
+    foreach f {main.c usb_hid.c usb_hid.h usb_gamepad.c usb_gamepad.h} {
+        file copy -force [file join $root app $f] [file join $ws loader_app src $f]
+        puts "SDK_APP_SRC copied $f"
+    }
 }
 
 sdk projects -build

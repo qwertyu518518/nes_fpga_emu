@@ -13,7 +13,10 @@ produces a bootable SD image.
 | `build_ps.tcl` | Vivado 2018.3 block design + synthesis + implementation + bitstream + `.hdf` |
 | `run_build.ps1` | launcher for `build_ps.tcl` (sets CWD, retries the XGUI flake, modes) |
 | `ps7_vendor_cfg.tcl` | the PS7 IP configuration, derived from the vendor's own board example |
-| `app/main.c` | the bare-metal cartridge loader |
+| `app/main.c` | the bare-metal cartridge loader, then the USB gamepad |
+| `app/usb_hid.c` / `.h` | pure USB descriptor / HID parsing and the report-to-NES mapping (no Xilinx, host-tested) |
+| `app/usb_gamepad.c` / `.h` | USB0 host-mode glue over the BSP `xusbps` driver |
+| `host_test/` | the host test for `usb_hid.c` (builds and runs on this machine) |
 | `sdk_flow.tcl` | xsct flow: hardware platform, FSBL, loader application (xilffs on its BSP) |
 | `run_sdk.ps1` | launcher for `sdk_flow.tcl` + `bootgen` |
 | `boot.bif` | boot image description: FSBL + application + PL bitstream |
@@ -59,6 +62,9 @@ behaviour. The PL-only flow's frozen copy of the tree is unaffected.
 # 5. INIT differential (optional; proves the BRAM content)
 & D:\Vivado\Vivado\2018.3\bin\vivado.bat -mode batch -source tools\ps\init_diff.tcl
 .\tools\ps\init_diff.ps1
+
+# 6. host test for the USB gamepad parsing logic (no Vivado, no hardware)
+.\tools\ps\host_test\run_host_test.ps1
 ```
 
 Toolchain paths used by the launchers: Vivado
@@ -97,6 +103,31 @@ and `bootgen.bat`.
 Failure reporting is distinct and the console is **not** released on any of
 them: link check failed, no card / unreadable filesystem, file not found, bad
 iNES header, short read on PRG, short read on CHR.
+
+## USB gamepad
+
+After the console is released the application brings USB0 up in **host** mode,
+enumerates one HID gamepad over the BSP `xusbps` driver, and polls its interrupt
+IN endpoint, mapping each report to the NES button byte and writing it into
+`SCRATCH[7:0]`. The loader runs first and is unchanged; the gamepad only starts
+once the console is running. Full detail is in
+[`docs/modules/ps-usb-gamepad.md`](../../docs/modules/ps-usb-gamepad.md).
+
+* The pure logic (configuration-descriptor walk, HID report descriptor,
+  report-to-NES mapping) is in `app/usb_hid.c` and is **host-tested**:
+  `.\tools\ps\host_test\run_host_test.ps1` (60 checks, non-vacuity counters in
+  `host_test/README.md`). The glue (`app/usb_gamepad.c`) cannot be tested here.
+* **P4 "OTG SW" jumper.** The four Type-A host ports are only live in host mode,
+  which the P4 jumper selects. A user who has not set P4 for host routing will
+  see no device and no enumeration -- there is no software workaround.
+* **Finding -- the buttons do not yet reach the NES.** The register bank is
+  sufficient to *carry* the byte in `SCRATCH`, and the write is real and
+  read-back-verifiable, but `nes_zynq_top.v` feeds `buttons1` from the touch
+  panel only; no AXI register reaches it. Delivering the buttons needs a
+  one-wire PL change (`reg_scratch[7:0]` -> `buttons1`, muxed with the touch
+  pad), which means editing `rtl/`. This task must not edit `rtl/`, so it was
+  not made. Until it is, a gamepad write reaches `SCRATCH` but no button press
+  reaches the NES.
 
 ## Boot mode
 

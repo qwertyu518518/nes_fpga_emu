@@ -147,11 +147,15 @@ runtime image is what the application streams in.
 The design assumes the board boots from the **SD card**:
 
 1. format a micro SD card FAT32;
-2. copy `tools/ps/BOOT.bin` (4,199,040 bytes,
-   SHA256 `E0F0F3A358A707B5A72772877C4FBCBBA7D5A0FC95F5EE64F379636C4D58798F`)
+2. copy `tools/ps/BOOT.bin` (4,215,424 bytes,
+   SHA256 `CD4F682A1180EC80C23D67B279B84977D85EB35026EEC83635EDEEEE41A5B39D`)
    to the root;
 3. copy the cartridge image to the root as `0:/game.nes`;
 4. set the board's boot-mode selector to SD and power on.
+
+(That `BOOT.bin` carries the cartridge loader *and* the USB gamepad path; the
+loader still runs first and is unchanged. See
+[`ps-usb-gamepad.md`](ps-usb-gamepad.md).)
 
 `BOOT.bin` carries three partitions: the FSBL, the loader application, and the
 PL bitstream (verified by measuring `bootgen` output with and without the

@@ -29,6 +29,23 @@
  *   released: link check failed, no card / unreadable filesystem, file not
  *   found, bad iNES header, short read.  Only a fully streamed image clears
  *   LOAD_EN.
+ *
+ * USB GAMEPAD (added after the loader is unchanged)
+ *   When the console has been released this app brings USB0 up in host mode,
+ *   enumerates one HID gamepad, and polls its interrupt IN endpoint, mapping
+ *   each report to the NES button byte and writing it into the low byte of the
+ *   existing SCRATCH register (0x04).  The loader runs FIRST and completes
+ *   before any USB work starts, so nothing in the load path changes and the
+ *   SCRATCH link check is never raced.  See usb_gamepad.c and the "USB gamepad"
+ *   section of tools/ps/README.md.
+ *
+ *   NOTE ON THE REGISTER: the register bank is used to CARRY the buttons, but
+ *   it does not yet deliver them to the controller -- nes_zynq_top.v feeds
+ *   nes_system_v6.buttons1 from the touch panel only, and no AXI register
+ *   reaches it.  Writing SCRATCH is real and read-back-verifiable, but a
+ *   one-wire PL change (sample reg_scratch[7:0] into buttons1) is required
+ *   before a button press can reach the NES.  That change is deliberately NOT
+ *   made: this task must not edit rtl/.  See the finding in tools/ps/README.md.
  */
 
 #include <string.h>
@@ -36,7 +53,10 @@
 #include "xil_io.h"
 #include "xil_printf.h"
 #include "xil_types.h"
+#include "sleep.h"
 #include "ff.h"
+
+#include "usb_gamepad.h"
 
 #define AXI_REG_BASE   0x41200000u
 #define REG_CTRL       (AXI_REG_BASE + 0x00u)
@@ -138,6 +158,57 @@ static u32 read_region(u32 n, u32 data_reg)
         total += (u32)br;
     }
     return total;
+}
+
+/* Bring up the USB gamepad and then poll it forever, writing the mapped NES
+ * button byte into SCRATCH[7:0].  Called only after the console has been
+ * released, so the loader has already finished and SCRATCH is free.  Every
+ * failure below prints a stage name; there is no silent stall. */
+static void run_gamepad(void)
+{
+    int st;
+    u8 buttons = 0;
+    u8 prev = 0xFFu;   /* differs from any real report, so the first write lands */
+
+    xil_printf("\r\nUSB: bringing USB0 up in host mode\r\n");
+    st = usb_gamepad_init();
+    if (st != USBGP_OK) {
+        xil_printf("RESULT: FAIL (USB controller init: %s)\r\n", usbgp_strerror(st));
+        for (;;) { }
+    }
+    xil_printf("USB: controller up (host mode, root port powered)\r\n");
+
+    for (;;) {
+        st = usb_gamepad_enumerate();
+        if (st == USBGP_OK) { break; }
+        xil_printf("USB: enumerate failed: %s\r\n", usbgp_strerror(st));
+        usleep(1000000);   /* retry; a pad can be plugged in later */
+    }
+
+    {
+        usb_gamepad_info_t info = usb_gamepad_info();
+        xil_printf("USB: enumerated -- HID interface %u, interrupt IN EP 0x%02x, "
+                   "wMaxPacketSize %u, bInterval %u, report %u B, gamepad %d\r\n",
+                   (unsigned)info.hid_interface, (unsigned)info.ep_address,
+                   (unsigned)info.max_packet_size, (unsigned)info.interval,
+                   (unsigned)info.report_bytes, info.is_gamepad);
+    }
+    xil_printf("PAD: polling; buttons -> SCRATCH[7:0] @ 0x%08x\r\n",
+               (unsigned)REG_SCRATCH);
+
+    for (;;) {
+        st = usb_gamepad_poll(&buttons);
+        if (st != USBGP_OK) {
+            xil_printf("PAD: poll error: %s -- re-enumerating\r\n", usbgp_strerror(st));
+            (void)usb_gamepad_enumerate();
+            prev = 0xFFu;
+            continue;
+        }
+        if (buttons != prev) {
+            Xil_Out32(REG_SCRATCH, (u32)buttons);
+            prev = buttons;
+        }
+    }
 }
 
 int main(void)
@@ -260,6 +331,9 @@ int main(void)
 
     f_close(&g_file);
     xil_printf("RESULT: PASS (cartridge loaded, console running)\r\n");
+
+    /* The loader is done and the console is running; now the gamepad. */
+    run_gamepad();
 
     for (;;) { }
     return 0;

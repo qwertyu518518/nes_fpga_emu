@@ -54,3 +54,8 @@ build/
 /tools/ps/*.hdf
 /tools/ps/*.dcp
 /tools/ps/*.log
+
+# Host test for the USB gamepad: compiled with a host compiler by
+# tools/ps/host_test/run_host_test.ps1. The sources are tracked; the executable,
+# objects and build log are not.
+/tools/ps/host_test/out/
