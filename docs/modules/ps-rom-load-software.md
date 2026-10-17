@@ -148,7 +148,7 @@ The design assumes the board boots from the **SD card**:
 
 1. format a micro SD card FAT32;
 2. copy `tools/ps/BOOT.bin` (4,215,424 bytes,
-   SHA256 `CD4F682A1180EC80C23D67B279B84977D85EB35026EEC83635EDEEEE41A5B39D`)
+   SHA256 `0A560ED84682B22EA331D4AD4CD06583E3E47B4EFE5BCFBD760262F93785310F`)
    to the root;
 3. copy the cartridge image to the root as `0:/game.nes`;
 4. set the board's boot-mode selector to SD and power on.

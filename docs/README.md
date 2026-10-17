@@ -91,6 +91,16 @@
 | [`system-v5.md`](modules/system-v5.md) | mapper 接入（PRG bank / mapper IRQ） |
 | [`system-v6.md`](modules/system-v6.md) | PPU 外部 CHR（读/写/取数仲裁） |
 
+### 3.6 Zynq PS 平台（运行时卡带加载 / USB）
+
+`nes_zynq_top` 的 PS 侧即 runbook 第 9 节的"流程 E"，与纯 PL 流程**并存**。三条文档是一个整体：RTL 接口 → PS 软件 → 输入设备。
+
+| 文档 | 内容 |
+|---|---|
+| [`ps-rom-load.md`](modules/ps-rom-load.md) | `axi_lite_regs` + `nes_cart_load_bridge` + 卡带数组加载端口（**默认三重惰性**） |
+| [`ps-rom-load-software.md`](modules/ps-rom-load-software.md) | 块设计 / FSBL / SD 加载器应用 / `BOOT.bin` 的构建与烧写步骤 |
+| [`ps-usb-gamepad.md`](modules/ps-usb-gamepad.md) | USB HID 手柄：描述符解析（**主机侧已测**）+ `xusbps` host mode + 与触摸通路**按位或** |
+
 ### 3.6 平台层
 
 | 文档 | 平台 |
