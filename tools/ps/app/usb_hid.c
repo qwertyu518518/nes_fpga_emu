@@ -3,6 +3,14 @@
  *
  * No Xilinx header, no hardware, no allocation: this file is a function of its
  * byte arguments and is asserted on the host by tools/ps/host_test.
+ *
+ * The report-to-button mapping at the bottom of this file is a FIXED LAYOUT
+ * CONVENTION, not a general HID interpreter.  It assumes the two button bytes
+ * live immediately after any Report ID; a real Xbox-style pad that puts the
+ * analog axes in the low bytes and the buttons in a 16-bit word later in the
+ * report will therefore read axes as buttons (wrong or absent buttons).  That
+ * is a layout limit of the convention, not a bus or wiring fault, and it is
+ * documented in usb_hid.h next to nes_buttons_from_report().
  */
 
 #include <string.h>
@@ -292,33 +300,44 @@ const char *hid_parse_strerror(int rc)
 /* report -> NES buttons                                                      */
 /* ------------------------------------------------------------------------- */
 
-uint8_t nes_buttons_from_report(const uint8_t *report, int report_len, int report_bytes)
+uint8_t nes_buttons_from_report(const uint8_t *report, int report_len,
+                                int report_bytes, int report_offset)
 {
     uint8_t b = 0;
+    int avail;
     int usable;
 
-    if (report == 0) {
+    if (report == 0 || report_offset < 0) {
         return 0;
     }
 
     /* Never read past either the caller's buffer or the report size the HID
-     * descriptor implied. */
-    usable = report_len;
-    if (report_bytes < usable) {
-        usable = report_bytes;
+     * descriptor implied.  report_bytes INCLUDES the Report ID byte when one is
+     * present, so the bound below still holds with an offset: the offset and the
+     * bytes it skips are inside both report_len and report_bytes. */
+    avail = report_len;
+    if (report_bytes < avail) {
+        avail = report_bytes;
+    }
+    usable = avail - report_offset;
+    if (usable < 0) {
+        usable = 0;
     }
 
+    /* The first button byte is report[report_offset], NOT report[0]: when the
+     * descriptor declares a Report ID, report[0] is that ID and reading it as
+     * buttons is the off-by-one this offset prevents. */
     if (usable >= 1) {
-        if ((report[0] & 0x01u) != 0u) { b |= NES_BTN_A; }
-        if ((report[0] & 0x02u) != 0u) { b |= NES_BTN_B; }
+        if ((report[report_offset] & 0x01u) != 0u) { b |= NES_BTN_A; }
+        if ((report[report_offset] & 0x02u) != 0u) { b |= NES_BTN_B; }
     }
     if (usable >= 2) {
-        if ((report[1] & 0x01u) != 0u) { b |= NES_BTN_SELECT; }
-        if ((report[1] & 0x02u) != 0u) { b |= NES_BTN_START; }
-        if ((report[1] & 0x10u) != 0u) { b |= NES_BTN_UP; }
-        if ((report[1] & 0x20u) != 0u) { b |= NES_BTN_DOWN; }
-        if ((report[1] & 0x40u) != 0u) { b |= NES_BTN_LEFT; }
-        if ((report[1] & 0x80u) != 0u) { b |= NES_BTN_RIGHT; }
+        if ((report[report_offset + 1] & 0x01u) != 0u) { b |= NES_BTN_SELECT; }
+        if ((report[report_offset + 1] & 0x02u) != 0u) { b |= NES_BTN_START; }
+        if ((report[report_offset + 1] & 0x10u) != 0u) { b |= NES_BTN_UP; }
+        if ((report[report_offset + 1] & 0x20u) != 0u) { b |= NES_BTN_DOWN; }
+        if ((report[report_offset + 1] & 0x40u) != 0u) { b |= NES_BTN_LEFT; }
+        if ((report[report_offset + 1] & 0x80u) != 0u) { b |= NES_BTN_RIGHT; }
     }
 
     return b;

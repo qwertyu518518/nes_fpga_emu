@@ -25,8 +25,9 @@ touches Vivado, the SDK, or the ARM toolchain.
 | --- | --- |
 | configuration-descriptor walk | a well-formed gamepad (HID interface first) with an 8-byte interrupt IN endpoint; the HID interface **not** first (a vendor interface precedes it); a HID interface whose interrupt IN endpoint has a **non-default `wMaxPacketSize`** (16 and 64) |
 | distinct failure codes | HID interface but no interrupt IN endpoint (`NO_INT_IN`); an interrupt IN endpoint but no HID interface (`NO_HID`); `wTotalLength` past the buffer, and ending mid-descriptor (`TRUNCATED`); a zero-length descriptor (`BAD_LENGTH`); too short (`TOO_SHORT`); not a configuration (`NOT_CONFIG`) |
-| HID report descriptor | a 16-button gamepad (2-byte report); a gamepad with two axes (3-byte report); a mouse that must **not** be reported as a gamepad; a truncated item; an empty descriptor |
+| HID report descriptor | a 16-button gamepad (2-byte report); a gamepad with two axes (3-byte report); a **report-ID** gamepad (16 buttons + Report ID = 3-byte report, `report_id_seen`); a mouse that must **not** be reported as a gamepad; a truncated item; an empty descriptor |
 | report -> NES buttons | every button pressed, none pressed, each single button, A+Right, unused bits only, and a report whose declared size is 1 byte against a 2-byte buffer (proves the size is honoured, not the buffer) |
+| report ID offset | a report whose first byte is the Report ID and whose buttons follow it, with ID bytes chosen to alias the wrong button, so the expected byte can only come from honouring the offset; an offset past the end and a negative offset must both yield 0 |
 
 The exact expected endpoint, packet size, interval, interface number, report
 size and button byte of every case are asserted, so a stub returning a constant
@@ -38,10 +39,10 @@ The test additionally counts that the code it claims to exercise actually ran,
 and fails if any counter is zero. The numbers observed on this machine:
 
 ```
-checks                = 60
+checks                = 74
 endpoints_seen_total  = 6      (endpoint descriptors actually walked)
-input_items_total     = 5      (HID report-descriptor Input items actually walked)
-nonzero_btn_cases     = 12     (mapping cases whose result != 0)
+input_items_total     = 6      (HID report-descriptor Input items actually walked)
+nonzero_btn_cases     = 18     (mapping cases whose result != 0)
 ```
 
 `endpoints_seen_total > 0` is the guard against a parser that reports success

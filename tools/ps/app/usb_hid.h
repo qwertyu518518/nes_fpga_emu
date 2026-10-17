@@ -152,29 +152,55 @@ const char *hid_parse_strerror(int rc);
 /*
  * Map one HID input report to the NES controller byte.
  *
- * The accepted report layout is a fixed, documented convention (this project
- * has no vendor reference and no device to interrogate, so the button order is
- * a contract, not a discovery):
+ * LAYOUT ASSUMPTION -- A FIXED CONVENTION, NOT A GENERAL HID INTERPRETER
+ *   The accepted report layout is a fixed, documented convention (this project
+ *   has no vendor reference and no device to interrogate, so the button order is
+ *   a contract, not a discovery):
  *
- *   report[0]: bit0 = A        -> NES A
- *              bit1 = B        -> NES B
- *              bit2 = C        -> ignored
- *              bit3 = X        -> ignored
- *              bit4 = L1       -> ignored
- *              bit5 = R1       -> ignored
- *              bit6 = L2       -> ignored
- *              bit7 = R2       -> ignored
- *   report[1]: bit0 = Select   -> NES Select
- *              bit1 = Start    -> NES Start
- *              bit4 = Up       -> NES Up
- *              bit5 = Down     -> NES Down
- *              bit6 = Left     -> NES Left
- *              bit7 = Right    -> NES Right
+ *     byte 0: bit0 = A        -> NES A
+ *             bit1 = B        -> NES B
+ *             bit2 = C        -> ignored
+ *             bit3 = X        -> ignored
+ *             bit4 = L1       -> ignored
+ *             bit5 = R1       -> ignored
+ *             bit6 = L2       -> ignored
+ *             bit7 = R2       -> ignored
+ *     byte 1: bit0 = Select   -> NES Select
+ *             bit1 = Start    -> NES Start
+ *             bit4 = Up       -> NES Up
+ *             bit5 = Down     -> NES Down
+ *             bit6 = Left     -> NES Left
+ *             bit7 = Right    -> NES Right
  *
- * Only the bytes the report actually has are read: a 1-byte report can only
- * ever set A/B, and a report shorter than `report_bytes` is never read past its
- * caller-declared length.  Returns the NES byte (0 when nothing is pressed).
+ *   THIS LAYOUT DOES NOT MATCH MOST REAL PADS.  A real Xbox-style pad typically
+ *   packs the buttons into a 16-bit field later in the report and puts the
+ *   analog axes in the low bytes (report[0] = X, report[1] = Y, then the button
+ *   word), so this convention reads axes instead of buttons and the wrong or no
+ *   buttons appear.  That is a layout mismatch in this function, NOT a wiring or
+ *   bus fault: if the pad enumerates (no USBGP_ERR_* stage) and the buttons are
+ *   wrong, the device simply does not follow this convention.  Reading a
+ *   specific device's real layout is the fix and is deliberately out of scope
+ *   here, which is why the limit is stated rather than silently pretending the
+ *   layout is general.
+ *
+ * REPORT IDS
+ *   A HID report may carry a one-byte Report ID prefix on the wire.  When the
+ *   report descriptor declares a Report ID, `report[0]` of the transfer IS that
+ *   ID, so the layout above starts at `report[1]` and every button bit would be
+ *   read one byte early if this were ignored.  The caller states which case it
+ *   is with `report_offset`: 0 when there is no Report ID, 1 when there is one.
+ *   The button bytes are read from report[report_offset] and
+ *   report[report_offset+1].  `report_offset != (descriptor has a Report ID)`
+ *   is the wiring contract; feeding the ID byte as buttons is exactly the
+ *   defect this parameter exists to make impossible.
+ *
+ *   Only the bytes the report actually has are read: a report with one
+ *   available button byte can only ever set A/B, and the reader never goes past
+ *   the smaller of `report_len` and `report_bytes`.  `report_bytes` counts the
+ *   Report ID byte, so it also bounds that byte.  Returns the NES byte (0 when
+ *   nothing is pressed, or when report is NULL / report_offset is negative).
  */
-uint8_t nes_buttons_from_report(const uint8_t *report, int report_len, int report_bytes);
+uint8_t nes_buttons_from_report(const uint8_t *report, int report_len,
+                                int report_bytes, int report_offset);
 
 #endif /* USB_HID_H */

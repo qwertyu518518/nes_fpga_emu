@@ -13,7 +13,7 @@ param(
         'controller-tb',
         'cart-ines-tb', 'cart-rom-tb', 'cart-boot-rom-tb',
         'video-core', 'video-tb', 'line-buffer-core', 'line-buffer-tb', 'vga-timing-core', 'vga-timing-tb',
-        'video800-tb', 'video800-dc-tb', 'video-hdmi-core', 'video-hdmi-tb',
+        'video800-tb', 'video800-dc-tb', 'video-hdmi-core', 'video-hdmi-tb', 'video-hdmi-dc-tb',
         'system-core', 'system-v0', 'system-v0-nmi', 'system-v1-audio', 'system-v2', 'system-v3', 'system-v4', 'system-v5', 'system-v6', 'system-v6-uxrom-prg',
         'platform-core', 'platform-tb', 'qsf-if-core',
         'zynq-clk-tb', 'zynq-top-tb',
@@ -118,6 +118,7 @@ $vgaTimingRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_vga_timing.v'
 $video800Rtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_video_800x480.v'
 $video800DcRtl = Join-Path $repoRoot 'tb\video\tb_nes_video_800x480_dc.v'
 $videoHdmiRtl = Join-Path $repoRoot 'rtl\nes_core\video\nes_video_hdmi.v'
+$videoHdmiDcTbRtl = Join-Path $repoRoot 'tb\video\tb_nes_video_hdmi_dc.v'
 
 $systemV0Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v0.v'
 $systemV1Rtl = Join-Path $repoRoot 'rtl\nes_core\system\nes_system_v1.v'
@@ -171,6 +172,7 @@ $vgaTimingSources = @($vgaTimingRtl)
 $video800Sources = @($video800Rtl)
 $video800DcSources = @($video800Rtl, $video800DcRtl)
 $videoHdmiSources = @($videoHdmiRtl)
+$videoHdmiDcSources = @($videoHdmiRtl, $videoHdmiDcTbRtl)
 $systemV0Sources = @($systemV0Rtl) + $ppuSources + $cpuSources
 $systemV1Sources = @($systemV1Rtl) + $ppuSources + $apuSources + $cpuSources
 $systemV2Sources = @($systemV2Rtl) + $ppuSources + $apuSources + $busSources + $cpuSources
@@ -628,6 +630,23 @@ $allTargets = @(
         Label       = '720x480p60 HDMI video scaler tb'
         Top         = 'tb_nes_video_hdmi'
         Sources     = $videoHdmiSources + (Join-Path $repoRoot 'tb\video\tb_nes_video_hdmi.v')
+        Standard    = '2012'
+        Run         = $true
+    },
+    # The HDMI scaler is the one scaler that adds a fourth clock domain: its
+    # read port is on the 27.000 MHz HDMI pixel clock while its write port is on
+    # the 21.477272727 MHz core clock (the 800x480 module's is 25 MHz).  The
+    # bench above ties both clocks to one source, so it cannot see the crossing.
+    # This companion bench follows tb_nes_video_800x480_dc.v: two real clocks,
+    # every write counted at the write port, every presented dot checked on the
+    # read clock, and both clock phases asserted to sweep (so re-tying the two
+    # clocks fails the run rather than passing vacuously).
+    [pscustomobject]@{
+        Id          = 'video-hdmi-dc-tb'
+        Group       = 'video'
+        Label       = '720x480p60 HDMI video scaler dual-clock tb'
+        Top         = 'tb_nes_video_hdmi_dc'
+        Sources     = $videoHdmiDcSources
         Standard    = '2012'
         Run         = $true
     },

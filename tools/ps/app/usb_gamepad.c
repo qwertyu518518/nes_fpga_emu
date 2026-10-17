@@ -346,6 +346,7 @@ int usb_gamepad_enumerate(void)
     g_info.max_packet_size = loc.max_packet_size;
     g_info.interval        = loc.interval;
     g_info.report_bytes    = (uint16_t)rinfo.report_bytes;
+    g_info.report_id_seen  = rinfo.report_id_seen;
     g_info.is_gamepad      = rinfo.is_gamepad;
     g_info.interfaces_seen = loc.interfaces_seen;
     g_info.endpoints_seen  = loc.endpoints_seen;
@@ -374,7 +375,12 @@ int usb_gamepad_poll(uint8_t *nes_buttons)
         return USBGP_OK;   /* nothing arrived this poll; not an error */
     }
 
-    *nes_buttons = nes_buttons_from_report(rx_buf, (int)rx_len, (int)g_info.report_bytes);
+    /* report_id_seen is 0/1 and is exactly the leading byte count: 1 when the
+     * report carries a Report ID, so the mapper starts after it and does not
+     * read the ID byte as buttons. */
+    *nes_buttons = nes_buttons_from_report(rx_buf, (int)rx_len,
+                                           (int)g_info.report_bytes,
+                                           g_info.report_id_seen);
     XUsbPs_EpBufferRelease(handle);
     return USBGP_OK;
 }

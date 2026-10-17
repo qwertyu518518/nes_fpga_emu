@@ -47,6 +47,9 @@ typedef struct {
     uint16_t max_packet_size;
     uint8_t  interval;
     uint16_t report_bytes;
+    int      report_id_seen;   /* 1 when the report descriptor declares a Report ID; used as
+                                * the nes_buttons_from_report() offset so the ID byte is not
+                                * read as buttons */
     int      is_gamepad;
     /* carried straight through from the host-tested parser for diagnostics */
     int      interfaces_seen;

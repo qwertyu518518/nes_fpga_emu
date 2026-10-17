@@ -99,7 +99,10 @@ module tb_nes_video_hdmi;
     integer ref_col [0:719];
 
     // Both clocks are tied to the bench clock, both resets to the bench reset,
-    // so every assertion runs in the single-clock regime it was written for.
+    // so every assertion here runs in the single-clock regime it was written
+    // for.  The real write-to-read crossing (core_clk -> the 27 MHz HDMI pixel
+    // clock) is NOT exercised by this bench; it is covered by the companion
+    // tb_nes_video_hdmi_dc.v, which runs two real clocks and counts every write.
     nes_video_hdmi dut (
         .wr_clk(clk),
         .wr_reset(reset),

@@ -14,7 +14,7 @@
 
 ## 1. 证据标记（先读这一节）
 
-本分支最危险的一件事，是把**仿真门禁的绿灯**读成**板子能跑**。`.\tools\sim_all.ps1 -Mode all` 现在是 73/73 全过，但仿真里没有一个真实 GT9147、没有一个 USB 设备、没有一张 SD 卡、没有一个显示器。为了让这两种状态无法被混读，本文每条关于行为的断言都只带以下三个标记之一，**不留空**：
+本分支最危险的一件事，是把**仿真门禁的绿灯**读成**板子能跑**。`.\tools\sim_all.ps1 -Mode all` 现在是 74/74 全过，但仿真里没有一个真实 GT9147、没有一个 USB 设备、没有一张 SD 卡、没有一个显示器。为了让这两种状态无法被混读，本文每条关于行为的断言都只带以下三个标记之一，**不留空**：
 
 | 标记 | 含义 | 现在属于它的东西 |
 |---|---|---|
@@ -60,40 +60,52 @@ Stage 3 只有在 **Stage 1 出了画面**之后才做：画面是"PL 被正确�
 
 ## 4. 上板前置清单（物理前提）
 
-开工之前逐项打勾。这几项中有**任何一项没做，后面的排查都会指向错误的方向**：
+开工之前逐项打勾。这几项中有**任何一项没做，后面的排查都会指向错误的方向**。注意后面几项**按阶段**成立，不是一开始就全部就位：
 
 - [ ] **JTAG ribbon 插到底、卡扣扣好。** 它反复是"能不能 enumerate"与"根本连不上"的差别；**主板 USB 侧 enumerate 失败就是这个签名**——先怀疑排线，不要先怀疑 bitstream。
-- [ ] **SD 卡是 FAT32**（不是 exFAT、不是 NTFS），`tools\ps\BOOT.bin` 放在**根目录**。
-- [ ] **卡带镜像命名为 `0:/game.nes`**（根目录、小写 `game.nes`）。loader 打开的就是这个路径。
-- [ ] **boot-mode 选择器置 SD**（不是 JTAG、不是 QSPI）。
-- [ ] **P4 "OTG SW" 跳线置 host**（USB 用）。四个 Type-A 口只在 host routing 下带电；**没有软件绕过**。
-- [ ] HDMI 线接到**已知支持 720×480p60 的显示器**；显示器输入源切到对应口。
-- [ ] 串口接好，**115200 8N1**（UART0，MIO 14/15）。
-- [ ] 已知并接受一条板级事实：DDC/EDID **故意不做**——`tmds_scl`/`tmds_sda` 在板上是 R19/P20，归触摸控制器，顶层没有声明这两个端口。不要指望设计去读 EDID。
+- [ ] **串口接好，115200 8N1**（UART0，MIO 14/15）。
+- [ ] **P4 "OTG SW" 跳线置 host**（仅 Stage 4 需要）。四个 Type-A 口只在 host routing 下带电；**没有软件绕过**。
+- [ ] **选择器与卡槽按阶段分开，不能一上来就都置好：**
+      - **Stage 1 = boot-mode 置 JTAG、卡槽为空、不接 HDMI 线。** 此时 PS 完全不参与，BootROM 干净地等 JTAG，上电状态没有歧义。
+      - **Stage 3 = boot-mode 才置 SD、并把卡插入。** 只有到这一步两者才就位。
+      在 SD 模式下空卡上电，BootROM 会重试/回退而不是干净地等 JTAG——这正是"照前置清单做、再做 Stage 1"会得到的含糊上电；反过来，JTAG 模式下插着卡上电会让人误以为 Stage 1 和 PS 有关。两者都会把 Stage 1 的失败引向错误方向。
+- [ ] **（Stage 3 前置）SD 卡是 FAT32**（不是 exFAT、不是 NTFS），`tools\ps\BOOT.bin` 放在**根目录**。
+- [ ] **（Stage 3 前置）卡带镜像命名为 `0:/game.nes`**（根目录、小写 `game.nes`）。loader 打开的就是这个路径。
+- [ ] 已知并接受一条板级事实：DDC/EDID **故意不做**——`tmds_scl`/`tmds_sda` 在板上是 R19/P20，而**这一对引脚与触摸 I2C 共用**（见 XDC 的 CONFLICT 块），顶层没有声明这两个端口。不要指望设计去读 EDID。**也正因如此，HDMI 线在 Stage 1 的后半段才接**，见下一节。
 
 ---
 
 ## 5. Stage 1 — JTAG 烧 v10（PL-only）
 
-### 做什么
+### 做什么（1a：先不接 HDMI 线）
 
-用 JTAG 把 `D:\vivadoProject\zynq_bitstream_v10\nes_zynq_top_a_default.bit` 编程进 PL。**不插 SD、不动启动模式、不依赖 PS、不接 USB。**
+用 JTAG 把 `D:\vivadoProject\zynq_bitstream_v10\nes_zynq_top_a_default.bit` 编程进 PL。**boot-mode 选择器置 JTAG、不插 SD 卡、不接 HDMI 线、不接 USB。**
 
-### 成功标志
+先**在不接 HDMI 线**的状态下验证 LCD 与触摸，让"触摸是否可用"有一个干净的基线：
 
 - **LCD 出画面**（不是白屏、不是花屏）；NES 画面几何稳定。
 - **触摸 dpad 四方向正确**：在屏幕上按左/右/上/下，NES 里方向正确。这是自校准是否读对了坐标帧的直接判据。
-- **HDMI 出画面**：同一帧内容出现在 HDMI 显示器上。
 - **TPAD 替换正确**：按住板载 TPAD 时，`key0`→**Start**、`key1`→**Select**；不按 TPAD 时，`key0`→**A**、`key1`→**B**。
+
+### 做什么（1b：再接 HDMI 线，然后重新确认触摸）
+
+1a 通过后，**才**把 HDMI 线接到**已知支持 720×480p60 的显示器**，显示器输入源切到对应口，然后：
+
+- **HDMI 出画面**：同一帧内容出现在 HDMI 显示器上。
+- **触摸仍然正确**：把 1a 里的四方向测试**再按一遍**，必须仍然全对。
+- **TPAD 仍然正确**。
+
+**为什么必须是这个顺序：** HDMI 的 DDC 脚（`tmds_scl`/`tmds_sda`）与触摸 I2C（`touch_scl`/`touch_sda`）在板上是 **R19/P20 同一对物理引脚**（XDC 的 CONFLICT 块）。显示器端的 DDC/EDID 是 **5 V 标准**、带自己的上拉，插上来就把显示器的 EDID EEPROM 与 5 V 上拉挂到了 3.3 V 的触摸总线上。所以"接上 HDMI 后触摸坏"完全可能是这根线造成的，**不是**校准或坐标帧的问题。先测无 HDMI 的基线、再接线上重复触摸，才能把这两者区分开。
 
 ### 失败怎么办
 
 按第 9 节症状表分流。三条独立判据（画面、触摸、TPAD）可以两两组合，这正是 Stage 1 能"一句话定位"的根据：
 
-- 画面坏 → 视频通路（LCD 侧），见症状表第 2 行。
-- 画面好、触摸方向坏 → 触摸校准或坐标帧，见第 3、4 行。
+- 画面坏（1a）→ 视频通路（LCD 侧），见症状表第 2 行。
+- 画面好、触摸方向坏且**在 1a 就坏** → 触摸校准或坐标帧，见第 3、4 行。
 - 触摸好、TPAD 坏 → TPAD 极性，见第 5 行。
-- 只有 HDMI 坏 → 见第 1 行，并用 Stage 2 的 v9 把它拿掉。
+- 只有 HDMI 坏（1b）→ 见第 1 行，并用 Stage 2 的 v9 把它拿掉。
+- **1a 触摸好、1b 接上 HDMI 线后触摸变坏 → 见第 3b 行：先怀疑共用引脚，不要先去查校准或坐标帧。**
 
 ---
 
@@ -123,7 +135,7 @@ Stage 1 不需要额外操作，本阶段是当 Stage 1 出现"画面与输入�
 ### 做什么
 
 1. 按第 4 节准备 SD 卡：FAT32、`tools\ps\BOOT.bin` 在根、`0:/game.nes` 在根。
-2. boot-mode 选择器置 SD。
+2. boot-mode 选择器**从 Stage 1 的 JTAG 改置 SD**，并插入刚才准备好的卡。（Stage 1 是 **JTAG + 空卡**；到 Stage 3 这一步，选择器和卡才第一次就位。）
 3. 上电，打开串口（115200 8N1）。
 
 ### 成功标志
@@ -161,7 +173,7 @@ UART 不在任何 `USBGP_ERR_*` 阶段停下；插拔手柄时能枚举；按手
 
 | 现象 | 先查 |
 |---|---|
-| **`no device attached (port reset failed)`，完全没枚举** | **P4 跳线**必须 host；其次 PS USB0 配置。跳线没设时四个口全死，**无软件绕过** |
+| **`no device attached (port reset failed)`，完全没枚举** | **P4 跳线**必须 host；其次 PS USB0 配置（reset 现按 vendor 参考设计配在 MIO 9，见第 10 节）。跳线没设时四个口全死，**无软件绕过** |
 | **停在某个 `USBGP_ERR_*` 阶段** | 那个阶段名就是修法：`controller lookup/init`、`endpoint/DMA config`、`device descriptor malformed`、`SET_ADDRESS`、`configuration descriptor malformed`、`no HID interface`、`no interrupt IN endpoint`、`SET_CONFIGURATION`、`SET_IDLE`、`report descriptor`、`not a gamepad` |
 | **枚举成功但按键无效** | OR 仲裁进 `buttons1` 在仿真里已断言（非空），所以怀疑 **report 解析或 `GAMEPAD`(0x20) 寄存器写**；确认设备 HID report layout 与 `usb_hid.h` 的约定一致 |
 
@@ -176,12 +188,13 @@ UART 不在任何 `USBGP_ERR_*` 阶段停下；插拔手柄时能枚举；按手
 | 1 | LCD 有画面，**HDMI 全黑 / 无信号** | HDMI 线缆与显示器输入源 → 换一台已知支持 480p 的显示器 → TMDS 引脚与第二个 MMCM | TMDS 差分对、第二个 MMCM（`u_mmcm_hdmi`）未 LOCK、或接收端不接受无 EDID 的固定模式 | **【从未运行】** HDMI 从未点亮任何显示器 | DDC/EDID **故意不做**（`tmds_scl`/`tmds_sda` = R19/P20 归触摸，顶层未声明端口）。720×480p60 是标准 CEA 应被接受，但输出**零条 `set_output_delay`**，连接器眼图未约束——**WNS 为正 ≠ 眼图有效** |
 | 2 | **HDMI 有画面，LCD 全黑** | 用 v9 回退（拿掉 HDMI 变量） | 共享视频通路回归；这条通路本应逐字节未动 | **【仿真已验】** `nes_video_800x480` 被刻意保持逐字节未动 | v9 下 LCD 正常 → 是 HDMI 引入的回归；v9 下也坏 → 与 HDMI 无关 |
 | 3 | **触摸 dpad 四方向仍全错** | 先问：画面对不对？ | 画面对、只有方向错 = **坐标帧问题**（校准没生效或退回编译期常量）；画面也错 = 视频链问题 | **【仿真已验】** 校准五场景 + 切口逐点归属（`touch-input-tb`）；**【从未运行】** 校准从未读过真实控制器 | 读只读诊断线 `touch_calib_ok`/`touch_x_max`/`touch_y_max`/`touch_x2y`；`touch_calib_ok=0` 说明回退。另注意点 1 地址假设 `16'h8150` vs `16'h8158` |
+| 3b | **1a 触摸好、接上 HDMI 线后触摸变坏**（拔线后恢复） | 先拔掉 HDMI 线重测触摸 | **R19/P20 是触摸 I2C 与 HDMI DDC 的同一对物理引脚**；显示器端 DDC 的 5 V 上拉与 EDID EEPROM 挂到了 3.3 V 触摸总线 | **【从未运行】** 无显示器接入过 | **不是校准/坐标帧问题**，不要先去改 `touch_calib_ok`/坐标帧。保持 HDMI 与触摸不同时使用，或把触摸改到面板连接器/PS I2C（板级决定，见 XDC 的 CONFLICT 块） |
 | 4 | **触摸 dpad 错，但 TPAD 正常** | 隔离到校准通路而非触摸总线 | 触摸校准路径（TPAD 走独立按键链，不受 dpad 影响） | 同第 3 行 | 同第 3 行；TPAD 正常说明 I2C 总线/按键链没坏 |
 | 5 | **TPAD 什么都不做** | 先怀疑**极性** | TPAD 极性。按 vendor RTL（`touch_led.v` 上升沿=按下）实现为**高有效**，从未在硬件上确认 | **【仿真已验】** 替换与独立性回归；**【从未运行】** 真实 TPAD 极性 | **一行取反**（`touch_key` 极性）就是修法；一次只改这一行 |
 | 6 | **SD 启动完全无 UART 输出** | boot-mode 选择器 → 卡格式 → FSBL | BootROM/FSBL 根本没启动，或 PL 未被编程 | **【从未运行】** 整条 PS 启动链从未执行 | 按第 4 节逐项确认；确认串口 115200 8N1 |
 | 7 | **UART 显示 link check 失败**（`SCRATCH` 图案或 `ID ≠ 0x4E455301`） | 确认地址映射 `0x4120_0000` → 协议转换器 → PS 时钟/复位 | AXI 寄存器通路——**唯一有仿真覆盖**的部分 | **【仿真已验】** `axi-lite-regs-tb`（五通道握手/WSTRB/OKAY/GAMEPAD）、`cart-rom-load-tb`（AXI→bridge→数组） | 仿真过而板上不过 → 优先怀疑 PS 侧地址/协议/时钟，而不是寄存器逻辑本身 |
 | 8 | **手柄识别不到**（`no device attached`） | **P4 "OTG SW" 跳线** → PS USB0 配置 | 跳线未置 host（四个 Type-A 口全死，**无软件绕过**），或 USB0 配置 | **【从未运行】** 无 USB 设备被连接、无枚举 | 先动跳线再动软件；这是唯一"没有软件绕过"的硬件前提 |
-| 9 | **手柄枚举成功，但按键无效** | HID report layout 是否与 `usb_hid.h` 约定一致 → `GAMEPAD`(0x20) 寄存器写 | report 解析或寄存器写 | **【仿真已验】** `GP_BTN_AT_CORE`/`GP_OR_ARBITRATION`（`zynq-top-tb`）、host test 60 checks | 约定：`report[0]` bit0=A、bit1=B；`report[1]` bit0=Select、bit1=Start、bit4=Up、bit5=Down、bit6=Left、bit7=Right。设备不同则需补 layout |
+| 9 | **手柄枚举成功，但按键无效** | HID report layout 是否与 `usb_hid.h` 约定一致 → `GAMEPAD`(0x20) 寄存器写（并确认 report 带 Report ID 时偏移已按 1 传入） | report 解析或寄存器写 | **【仿真已验】** `GP_BTN_AT_CORE`/`GP_OR_ARBITRATION`（`zynq-top-tb`）、host test 74 checks（含 report-ID 偏移用例） | 约定（在任一 Report ID **之后**）：byte0 bit0=A、bit1=B；byte1 bit0=Select、bit1=Start、bit4=Up、bit5=Down、bit6=Left、bit7=Right。此约定**不匹配多数真实 Xbox 风格手柄**（它们低位字节是摇杆轴、按键在后面的 16 位字段），所以"枚举成功但按键无效/全是错键"多半是 **layout 假设不符，不是接线故障**；需按该设备真实 report layout 补映射 |
 | 10 | **JTAG 连不上 / PC 认不到板** | JTAG ribbon 插好没 → 换口/换线 | 物理连接 | —（这是上板前通用项） | 主板 USB 侧 enumerate 失败就是排线没插好的签名 |
 
 ---
@@ -191,6 +204,7 @@ UART 不在任何 `USBGP_ERR_*` 阶段停下；插拔手柄时能枚举；按手
 以下几条是**最可能先失败**的地方，全部标为 **【从未运行】**；不要因为它们编译过了、时序 met 了就假定它们能跑：
 
 - **`xusbps` 在本次 SDK 里似乎只有 device-mode。** 没有 `ConfigureHost`；host-mode 进入和 host 侧 device-address 处理是用**直接寄存器写**做的。这是**整条分支里最不确定的部分**。`XUsbPs_SetDeviceAddress()` 写的是 `0x154`，在 host 模式下那是 periodic-frame-list base，**不能调用**。
+- **USB0 PHY reset 按 vendor 参考设计配置（MIO 9），但从未构建或运行验证过。** vendor 配置里 USB0 reset 原本停在 disabled 占位值（`USB0_RESET_ENABLE=0`、`RESET_IO=<Select>`）；本分支把它改成这块板的 vendor 参考设计值（`PCW_USB0_RESET_ENABLE=1`、`RESET_IO=MIO 9`、`PCW_USB_RESET_ENABLE=1`、`PCW_USB_RESET_POLARITY=Active Low`、`PCW_USB_RESET_SELECT=Share reset pin`），**provenance 写在 `tools\ps\build_ps.tcl` 的 override 注释里**（来自 `ZYNQ_7020_PYNQ.zip` 的 `base` 设计）。这些值**未在 Vivado 里重建验证过**（只改了配置 TCL），也从未在板上生效过。
 - **从未连接过任何 USB 设备**，从未枚举，从未见过任何设备的真实描述符或 HID report。
 - **从未读取过任何 SD 卡**，loader 从未执行。
 - **HDMI 从未点亮过显示器**，且 TMDS 输出**没有任何 `set_output_delay` 约束**——一个时序报告全绿的比特流，不是"连接器眼图有效"的证据。
@@ -203,8 +217,8 @@ UART 不在任何 `USBGP_ERR_*` 阶段停下；插拔手柄时能枚举；按手
 
 | 证据 | 命令 / 位置 | 覆盖什么 |
 |---|---|---|
-| 仿真回归门禁 | `.\tools\sim_all.ps1 -Mode all`（**73 个目标**） | AXI 寄存器协议、卡带加载通路、OR 仲裁、触摸校准状态机、TMDS 编码/串行器 elaborate、第二个 MMCM 频率 |
-| USB 解析 host test | `.\tools\ps\host_test\run_host_test.ps1` | 配置描述符走查、HID report 走查、report→NES 映射（60 checks，带非空计数器） |
+| 仿真回归门禁 | `.\tools\sim_all.ps1 -Mode all`（**74 个目标**） | AXI 寄存器协议、卡带加载通路、OR 仲裁、触摸校准状态机、TMDS 编码/串行器 elaborate、第二个 MMCM 频率、HDMI scaler 的 core→27 MHz 双时钟写读交叉（`video-hdmi-dc-tb`） |
+| USB 解析 host test | `.\tools\ps\host_test\run_host_test.ps1` | 配置描述符走查、HID report 走查、report→NES 映射（74 checks，带非空计数器） |
 | 构建脚本 | `tools\ps\`（`run_build.ps1`、`run_sdk.ps1`） | 块设计、比特流、FSBL、应用、`BOOT.bin` 的产生过程 |
 | XDC 控制流陷阱表 | `docs/00-overview/vivado-runbook.md` 第 4 节 | `if`/`puts` 不能写进 XDC，否则约束被静默丢弃——这正是 gamepad 的 `set_max_delay` 一度放进 `if` 而 8 条端点失败的原因 |
 

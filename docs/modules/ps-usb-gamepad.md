@@ -151,10 +151,25 @@ order is A, B, Select, Start, Up, Down, Left, Right"*, with
 
 `nes_buttons_from_report()` produces exactly this byte. The accepted HID report
 layout it maps from is a **documented convention** (there is no device to
-interrogate): `report[0]` bit0 = A, bit1 = B (other bits ignored);
-`report[1]` bit0 = Select, bit1 = Start, bit4 = Up, bit5 = Down, bit6 = Left,
-bit7 = Right. A device whose report differs will mis-map until its layout is
-added; see `usb_hid.h`.
+interrogate): after any Report ID, byte 0 bit0 = A, bit1 = B (other bits
+ignored); byte 1 bit0 = Select, bit1 = Start, bit4 = Up, bit5 = Down, bit6 =
+Left, bit7 = Right. A device whose report differs will mis-map until its layout
+is added; see `usb_hid.h`.
+
+**This convention is a contribution, not a general HID interpreter, and it does
+not match most real pads.** A typical Xbox-style pad puts the analog axes in the
+low bytes and packs the buttons into a 16-bit word later in the report, so this
+layout reads axes as buttons and the buttons come out wrong or absent. That is a
+layout mismatch in `nes_buttons_from_report()`, **not** a wiring or bus fault: if
+the pad enumerates (stops at no `USBGP_ERR_*` stage) but the buttons are wrong,
+the device simply does not follow this convention. The fix is to read that
+device's real report layout, which is deliberately out of scope here.
+
+When the report descriptor declares a Report ID, the report on the wire is
+`[ID][buttons...]`, so the mapper is given an explicit offset (1 with a Report ID,
+0 without) and reads the buttons from the byte after the ID. Reading the ID byte
+as buttons was a real defect; the host test now pins it down with a report-ID
+gamepad whose ID byte aliases the wrong button.
 
 ## 6. The P4 "OTG SW" jumper -- a user instruction
 

@@ -222,6 +222,22 @@ set_property -dict $ps7_vendor_cfg [get_bd_cells processing_system7_0]
 
 # The vendor config is the board's own example.  FCLK0 = 50 MHz, M_AXI_GP0 on,
 # SD0 on MIO 40..45 without card detect, USB0 on MIO 28..39, UART0 on MIO 14/15.
+#
+# USB0 PHY RESET.  The vendor config lifted from ref_ps7.xci leaves USB0
+# disabled and its reset at the disabled placeholder (USB0_RESET_ENABLE 0,
+# USB0_RESET_IO <Select>), so the override below used to switch USB0 on WITHOUT
+# its reset.  If this board's ULPI PHY needs that reset asserted, enumeration
+# fails with exactly "no device attached", which is indistinguishable from the
+# P4 host jumper being wrong and would send the user down the wrong path.
+# The reset settings below are NOT invented.  They are copied from this board's
+# own reference design shipped in the vendor material:
+#   ZYNQ_7020_PYNQ.zip -> base/base.srcs/sources_1/bd/base/ip/base_ps7_0_0/
+#                         ps7_parameters.xml
+# which sets PCW_USB0_RESET_ENABLE=1, PCW_USB0_RESET_IO="MIO 9",
+# PCW_USB_RESET_ENABLE=1, PCW_USB_RESET_POLARITY=Active Low,
+# PCW_USB_RESET_SELECT="Share reset pin", and MIO 9 as out / LVCMOS 3.3V /
+# pullup enabled / slew slow.  Every value below is copied from those lines.
+# (MIO 9 is free here: SD0 card-detect is disabled and SD0 data is on MIO 40..45.)
 set ps7_over [list \
     CONFIG.PCW_EN_CLK0_PORT             {1} \
     CONFIG.PCW_EN_RST0_PORT             {1} \
@@ -231,8 +247,13 @@ set ps7_over [list \
     CONFIG.PCW_EN_USB0                  {1} \
     CONFIG.PCW_USB0_PERIPHERAL_ENABLE   {1} \
     CONFIG.PCW_USB0_USB0_IO             {MIO 28 .. 39} \
-    CONFIG.PCW_USB0_RESET_ENABLE        {0} \
+    CONFIG.PCW_USB0_RESET_ENABLE        {1} \
+    CONFIG.PCW_USB0_RESET_IO            {MIO 9} \
+    CONFIG.PCW_USB_RESET_ENABLE         {1} \
+    CONFIG.PCW_USB_RESET_SELECT         {Share reset pin} \
+    CONFIG.PCW_USB_RESET_POLARITY       {Active Low} \
     CONFIG.PCW_SD0_GRP_CD_ENABLE        {0} \
+    CONFIG.PCW_MIO_9_DIRECTION {out} CONFIG.PCW_MIO_9_IOTYPE {LVCMOS 3.3V} CONFIG.PCW_MIO_9_PULLUP {enabled} CONFIG.PCW_MIO_9_SLEW {slow} \
     CONFIG.PCW_MIO_28_DIRECTION {inout} CONFIG.PCW_MIO_28_IOTYPE {LVCMOS 3.3V} CONFIG.PCW_MIO_28_PULLUP {enabled} CONFIG.PCW_MIO_28_SLEW {slow} \
     CONFIG.PCW_MIO_29_DIRECTION {inout} CONFIG.PCW_MIO_29_IOTYPE {LVCMOS 3.3V} CONFIG.PCW_MIO_29_PULLUP {enabled} CONFIG.PCW_MIO_29_SLEW {slow} \
     CONFIG.PCW_MIO_30_DIRECTION {inout} CONFIG.PCW_MIO_30_IOTYPE {LVCMOS 3.3V} CONFIG.PCW_MIO_30_PULLUP {enabled} CONFIG.PCW_MIO_30_SLEW {slow} \

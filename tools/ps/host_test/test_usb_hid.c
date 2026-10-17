@@ -5,7 +5,9 @@
  *   Every byte-level decision in tools/ps/app/usb_hid.c: walking a
  *   configuration descriptor to the HID interface and its interrupt IN
  *   endpoint, reading a HID report descriptor for its report size and a
- *   gamepad hint, and mapping one report to the NES button byte.
+ *   gamepad hint, and mapping one report to the NES button byte -- including
+ *   the Report ID offset, so a device whose report starts with an ID byte has
+ *   its buttons read from the bytes after it rather than from the ID.
  *
  * WHAT IT CANNOT COVER (no board, no device, no host USB stack):
  *   enumeration, control transfers, port reset, timing, a real device's actual
@@ -260,6 +262,26 @@ static const unsigned char RD_GAMEPAD_AXES[] = {
     0xC0
 };
 
+/* Same 16-button gamepad, but with a Report ID (0x03) declared before the
+ * buttons.  On the wire the report is [ID][byte0][byte1], so report_bytes must
+ * be 3 (2 button bytes + the ID) and a mapper that ignores the ID reads the ID
+ * byte as buttons.  This is the descriptor shape a real device may use. */
+static const unsigned char RD_GAMEPAD_REPORTID[] = {
+    0x05, 0x01,        /* Usage Page (Generic Desktop) */
+    0x09, 0x05,        /* Usage (Game Pad) */
+    0xA1, 0x01,        /* Collection (Application) */
+    0x85, 0x03,        /*   Report ID (3) */
+    0x05, 0x09,        /*   Usage Page (Button) */
+    0x19, 0x01,        /*   Usage Minimum (1) */
+    0x29, 0x10,        /*   Usage Maximum (16) */
+    0x15, 0x00,        /*   Logical Minimum (0) */
+    0x25, 0x01,        /*   Logical Maximum (1) */
+    0x95, 0x10,        /*   Report Count (16) */
+    0x75, 0x01,        /*   Report Size (1) */
+    0x81, 0x02,        /*   Input (Data,Var,Abs) -> 16 bits = 2 bytes + ID */
+    0xC0               /* End Collection */
+};
+
 static const unsigned char RD_MOUSE[] = {
     0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,       /* Generic Desktop / Mouse */
     0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
@@ -305,6 +327,18 @@ static void test_report_descriptors(void)
     CHECK(info.is_gamepad == 0, "rd3: a mouse is NOT a gamepad");
     CHECK(info.button_page_seen == 1, "rd3: mouse has a Button page too");
 
+    /* A gamepad that declares a Report ID: the declared size must include the
+     * ID prefix byte, and report_id_seen must be set so the caller knows the
+     * offset.  If this were 2 the mapper would be handed a length one byte too
+     * small and would read the ID as buttons. */
+    memset(&info, 0xAB, sizeof(info));
+    rc = parse_rd(RD_GAMEPAD_REPORTID, (int)sizeof(RD_GAMEPAD_REPORTID), &info);
+    CHECK(rc == HID_PARSE_OK, "rd6: report-ID gamepad parses");
+    CHECK(info.report_id_seen == 1, "rd6: Report ID was seen");
+    CHECK(info.report_bytes == 3, "rd6: 16 buttons + Report ID -> 3 report bytes (incl. ID)");
+    CHECK(info.is_gamepad == 1, "rd6: still looks like a gamepad");
+    CHECK(info.input_items_seen == 1, "rd6: 1 Input item");
+
     /* Truncated: Usage Page (bSize=2) with only one data byte present. */
     {
         static const unsigned char rd_bad[] = { 0x05, 0x01, 0x06, 0x01 };
@@ -322,9 +356,9 @@ static void test_report_descriptors(void)
 /* ------------------------------------------------------------- mapping cases */
 
 static void map_case(const char *what, const unsigned char *rep, int len,
-                     int bytes, uint8_t expect)
+                     int bytes, int offset, uint8_t expect)
 {
-    uint8_t got = nes_buttons_from_report(rep, len, bytes);
+    uint8_t got = nes_buttons_from_report(rep, len, bytes, offset);
     if (got != 0) { g_nonzero_btn_cases++; }
     CHECK(got == expect, what);
     if (got != expect) {
@@ -348,31 +382,63 @@ static void test_button_mapping(void)
     static const unsigned char junk[2]     = { 0xFC, 0x0C }; /* only unused bits */
     static const unsigned char one_byte[1] = { 0x03 };
     static const unsigned char one_byte_pad[2] = { 0x03, 0xFF };
+
+    /* Report-ID cases: report[0] is the ID, so the buttons start at [1].  The
+     * ID bytes below are chosen so that a mapper which ignores the offset reads
+     * a WRONG button (or none) from report[0]/report[1]; the expected value can
+     * therefore only be produced by honouring the offset.  This is the case
+     * that fails against a version of nes_buttons_from_report() that reads
+     * report[0] as the first button byte. */
+    static const unsigned char rid_id_only[3] = { 0x03, 0x00, 0x00 }; /* ID=3, nothing pressed */
+    static const unsigned char rid_a[3]       = { 0x03, 0x01, 0x00 }; /* ID=3, A */
+    static const unsigned char rid_b[3]       = { 0x03, 0x02, 0x00 }; /* ID=3, B */
+    static const unsigned char rid_sel[3]     = { 0x05, 0x00, 0x01 }; /* ID=5 (aliases A), Select */
+    static const unsigned char rid_up[3]      = { 0x07, 0x00, 0x10 }; /* ID=7 (aliases A/B), Up */
+    static const unsigned char rid_all[3]     = { 0x01, 0xFF, 0xFF };
+    static const unsigned char rid_short[2]   = { 0x03, 0x02 };       /* ID + only 1 button byte */
     uint8_t got;
 
     printf("[report -> NES buttons]\n");
 
-    map_case("every button pressed -> 0xFF", all_on, 2, 2, 0xFF);
-    map_case("no button pressed -> 0x00", all_off, 2, 2, 0x00);
-    map_case("only A -> 0x01", a_only, 2, 2, NES_BTN_A);
-    map_case("only B -> 0x02", b_only, 2, 2, NES_BTN_B);
-    map_case("only Select -> 0x04", sel_only, 2, 2, NES_BTN_SELECT);
-    map_case("only Start -> 0x08", sta_only, 2, 2, NES_BTN_START);
-    map_case("only Up -> 0x10", up_only, 2, 2, NES_BTN_UP);
-    map_case("only Down -> 0x20", dn_only, 2, 2, NES_BTN_DOWN);
-    map_case("only Left -> 0x40", lf_only, 2, 2, NES_BTN_LEFT);
-    map_case("only Right -> 0x80", rt_only, 2, 2, NES_BTN_RIGHT);
-    map_case("A + Right -> 0x81", a_right, 2, 2, NES_BTN_A | NES_BTN_RIGHT);
-    map_case("unused bits only -> 0x00", junk, 2, 2, 0x00);
+    map_case("every button pressed -> 0xFF", all_on, 2, 2, 0, 0xFF);
+    map_case("no button pressed -> 0x00", all_off, 2, 2, 0, 0x00);
+    map_case("only A -> 0x01", a_only, 2, 2, 0, NES_BTN_A);
+    map_case("only B -> 0x02", b_only, 2, 2, 0, NES_BTN_B);
+    map_case("only Select -> 0x04", sel_only, 2, 2, 0, NES_BTN_SELECT);
+    map_case("only Start -> 0x08", sta_only, 2, 2, 0, NES_BTN_START);
+    map_case("only Up -> 0x10", up_only, 2, 2, 0, NES_BTN_UP);
+    map_case("only Down -> 0x20", dn_only, 2, 2, 0, NES_BTN_DOWN);
+    map_case("only Left -> 0x40", lf_only, 2, 2, 0, NES_BTN_LEFT);
+    map_case("only Right -> 0x80", rt_only, 2, 2, 0, NES_BTN_RIGHT);
+    map_case("A + Right -> 0x81", a_right, 2, 2, 0, NES_BTN_A | NES_BTN_RIGHT);
+    map_case("unused bits only -> 0x00", junk, 2, 2, 0, 0x00);
 
     /* A one-byte report can only ever set A/B. */
-    map_case("1-byte report 0x03 -> A|B", one_byte, 1, 1, NES_BTN_A | NES_BTN_B);
+    map_case("1-byte report 0x03 -> A|B", one_byte, 1, 1, 0, NES_BTN_A | NES_BTN_B);
 
     /* The parser says report_bytes == 1, so the trailing 0xFF must be ignored:
      * this proves the mapping honours the report size, not just the buffer. */
-    got = nes_buttons_from_report(one_byte_pad, 2, 1);
+    got = nes_buttons_from_report(one_byte_pad, 2, 1, 0);
     if (got != 0) { g_nonzero_btn_cases++; }
     CHECK(got == (NES_BTN_A | NES_BTN_B), "report_bytes==1 ignores byte 1");
+
+    /* --- report-ID cases: the offset must be honoured ----------------------- */
+    map_case("report-ID: nothing (ID=3) -> 0x00", rid_id_only, 3, 3, 1, 0x00);
+    map_case("report-ID: A after ID=3 -> 0x01", rid_a, 3, 3, 1, NES_BTN_A);
+    map_case("report-ID: B after ID=3 -> 0x02", rid_b, 3, 3, 1, NES_BTN_B);
+    map_case("report-ID: Select, ID=5 aliases A -> 0x04", rid_sel, 3, 3, 1, NES_BTN_SELECT);
+    map_case("report-ID: Up, ID=7 aliases A/B -> 0x10", rid_up, 3, 3, 1, NES_BTN_UP);
+    map_case("report-ID: every button -> 0xFF", rid_all, 3, 3, 1, 0xFF);
+    /* Only 1 button byte arrived (the ID plus one): offset 1 leaves usable==1,
+     * so only A/B can be set and byte [2] is never read. */
+    map_case("report-ID: 1 button byte only -> B", rid_short, 2, 3, 1, NES_BTN_B);
+
+    /* An offset past the available bytes must yield no buttons, never an
+     * out-of-range read. */
+    CHECK(nes_buttons_from_report(rid_a, 3, 3, 3) == 0x00,
+          "report-ID: offset past the end -> 0x00");
+    CHECK(nes_buttons_from_report(rid_a, 3, 3, -1) == 0x00,
+          "report-ID: negative offset -> 0x00");
 }
 
 /* ------------------------------------------------------------------- main */
