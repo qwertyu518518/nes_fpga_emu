@@ -96,7 +96,7 @@
 | 文档 | 平台 |
 |---|---|
 | [`hardware/13-platform-top.md`](hardware/13-platform-top.md) | `nes_ep4ce10_top`（EP4CE10，VGA 行缓冲链路） |
-| [`zynq-platform.md`](modules/zynq-platform.md) | `nes_zynq_clk` + `nes_zynq_top`（Zynq-7020，三时钟域） |
+| [`zynq-platform.md`](modules/zynq-platform.md) | `nes_zynq_clk` + `nes_zynq_top`（Zynq-7020，四时钟域） |
 
 ## 4. 事实、范围与证据的边界
 
