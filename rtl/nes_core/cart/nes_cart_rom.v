@@ -111,6 +111,51 @@
 //   a CHR ROM cannot be written by a $2007 store and its contents stay whatever
 //   $readmemh put there.
 //
+// CARTRIDGE LOAD PORT -- the PS writes a cartridge image in at runtime
+//   A second, independent write port per array lets the Zynq PS load PRG and CHR
+//   from the TF card instead of shipping them inside the bitstream.  It is
+//   INERT BY DEFAULT: nothing reaches either array unless prg_ld_en/chr_ld_en is
+//   high AND the matching prg_ld_we/chr_ld_we strobe is high, and every existing
+//   instance leaves those ports unconnected.  An unconnected input is z, and a
+//   z condition in an if is false, so with no caller driving them this file's
+//   behaviour is bit-for-bit what it was: the 69-strong gate, and every bench
+//   that instantiates this module, pass unmodified.
+//
+//   GRANULARITY IS ONE BYTE PER STROBE, and the enable is a level:
+//     prg_ld_en/prg_ld_addr/prg_ld_data/prg_ld_we   one PRG byte
+//     chr_ld_en/chr_ld_addr/chr_ld_data/chr_ld_we   one CHR byte
+//   Both arrays are 8 bits wide, so a byte is one array word and one strobe is
+//   exactly one write to the single block-RAM write port.  A 32-bit load port
+//   would need four simultaneous writes to four consecutive array words on one
+//   clock edge, which is not a shape a byte-wide block RAM can take: the tool
+//   would either build four separate byte-wide RAMs (four cells where there is
+//   one today) or fail to map it to RAM at all.  The AXI side is 32 bits wide,
+//   so axi_lite_regs expands one 32-bit WSTRB write into up to four of these
+//   byte strobes, one per core clock; the arrays stay byte-wide and keep the
+//   primitive they already had.
+//
+//   THE LOAD WRITE IS NOT GATED BY reset.  The console is held in reset while
+//   the PS loads, and the hold and the load are the same control bit upstream,
+//   so a load write that reset suppressed could never happen.  The read path is
+//   still gated by reset exactly as before (both output registers clear to
+//   8'h00).  Gating the write on the mapper's own chr_ram_enable && chr_we is
+//   unchanged: with the console held the CPU performs no $2007 store, so the
+//   mapper write can never be asserted during a load, and the load is given
+//   priority in the one write-if so a stray mapper write cannot corrupt a
+//   streaming image.
+//
+//   ONE WRITE PORT, NOT TWO.  The CHR array had a read port and one write port
+//   (the mapper's $2007 path); the load shares that write port through a SINGLE
+//   muxed write statement (mux on enable, address and data), so the inference is
+//   still a simple dual-port RAM with ONE write port and one read port.  A
+//   two-branch if/else on the array would be TWO write statements, which Vivado
+//   cannot map to a simple dual port and silently implements as distributed RAM;
+//   see the comment on the CHR block.  PRG gains a write port it did not have,
+//   so it goes from a read-only ROM to the same simple dual-port RAM, still one
+//   write port; no second write port is created anywhere.  This is why no array
+//   changes primitive and why RAMB18 stays 0 and LUT-as-Memory stays 2 (both read
+//   back from a routed build; see docs/modules/ps-rom-load.md).
+//
 // PRG LATENCY (why the registered read returns the right byte)
 //   The core reads prg_rom combinationally, in the same clk:
 //     assign prg_readback = prg_rom[prg_index];
@@ -165,7 +210,19 @@ module nes_cart_rom #(
     input  wire [13:0]              chr_waddr,
     input  wire                     chr_we,
     input  wire [7:0]               chr_wdata,
-    input  wire                     chr_ram_enable
+    input  wire                     chr_ram_enable,
+
+    // Cartridge load port.  Inert by default: both halves are written only while
+    // the matching enable is high AND the strobe is high.  See CARTRIDGE LOAD
+    // PORT above.  Left unconnected by every pre-existing instance.
+    input  wire                     prg_ld_en,
+    input  wire [PRG_ADDR_BITS-1:0] prg_ld_addr,
+    input  wire [7:0]               prg_ld_data,
+    input  wire                     prg_ld_we,
+    input  wire                     chr_ld_en,
+    input  wire [CHR_LOCAL_BITS-1:0] chr_ld_addr,
+    input  wire [7:0]               chr_ld_data,
+    input  wire                     chr_ld_we
 );
 
     generate
@@ -181,6 +238,13 @@ module nes_cart_rom #(
                 prg_rdata <= 8'h00;
             else if (prg_en)
                 prg_rdata <= prg_rom[prg_addr];
+
+            // The load write is independent of reset on purpose: the console is
+            // held in reset for the whole load and must still be writable.  It
+            // is the only write port on PRG, so this is one write port whether
+            // the design loads or not.
+            if (prg_ld_en && prg_ld_we)
+                prg_rom[prg_ld_addr] <= prg_ld_data;
         end
     end else begin : g_prg_off
         always @(posedge clk) begin
@@ -193,9 +257,34 @@ module nes_cart_rom #(
         reg [7:0] chr_rom [0:CHR_SIZE_BYTES-1];
         wire [CHR_LOCAL_BITS-1:0] chr_rindex;
         wire [CHR_LOCAL_BITS-1:0] chr_windex;
+        wire [CHR_LOCAL_BITS-1:0] chr_lindex;
+        wire                      chr_ld_wr;
+        wire                      chr_wenable;
+        wire [CHR_LOCAL_BITS-1:0] chr_wsel;
+        wire [7:0]                chr_wdat;
 
         assign chr_rindex = chr_addr[CHR_LOCAL_BITS-1:0];
         assign chr_windex = chr_waddr[CHR_LOCAL_BITS-1:0];
+        assign chr_lindex = chr_ld_addr[CHR_LOCAL_BITS-1:0];
+
+        // ONE write statement, ONE write port.  The load and the mapper share the
+        // port through a mux on the enable, address and data -- not through an
+        // if/else that names the array twice.  An if/else on the array is TWO
+        // write statements, which Vivado reads as two write ports, cannot map to a
+        // simple-dual-port RAM, and silently falls back to distributed RAM: that
+        // measured as CHR leaving block RAM (2 tiles -> 0) with LUT-as-Memory
+        // going 2 -> 3074.  The muxed single write keeps the primitive a RAMB36.
+        // Load is the priority: with the console held the mapper condition is
+        // never true, so this only guarantees a straggling $2007 store cannot
+        // corrupt a streaming image, and with the load disabled it is the mapper
+        // write byte-for-byte.  The select uses === so that an unconnected load
+        // enable (z in simulation) reads as "not selected" and can never leak z
+        // into the mapper's write address; synthesis treats === as ==, so the
+        // hardware is unaffected.
+        assign chr_ld_wr    = (chr_ld_en === 1'b1) && (chr_ld_we === 1'b1);
+        assign chr_wenable  = chr_ld_wr | (chr_ram_enable && chr_we);
+        assign chr_wsel     = chr_ld_wr ? chr_lindex : chr_windex;
+        assign chr_wdat     = chr_ld_wr ? chr_ld_data : chr_wdata;
 
         initial
             $readmemh(CHR_INIT_FILE, chr_rom);
@@ -203,12 +292,13 @@ module nes_cart_rom #(
         always @(posedge clk) begin
             if (reset)
                 chr_rdata <= 8'h00;
-            else begin
-                if (ce_ppu && chr_req)
-                    chr_rdata <= chr_rom[chr_rindex];
-                if (chr_ram_enable && chr_we)
-                    chr_rom[chr_windex] <= chr_wdata;
-            end
+            else if (ce_ppu && chr_req)
+                chr_rdata <= chr_rom[chr_rindex];
+
+            // Not gated by reset: the console is held in reset for the whole load
+            // and the array must still be writable.
+            if (chr_wenable)
+                chr_rom[chr_wsel] <= chr_wdat;
         end
     end else begin : g_chr_off
         always @(posedge clk) begin

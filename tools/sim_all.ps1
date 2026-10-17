@@ -23,7 +23,8 @@ param(
         'cdc-fifo-core', 'cdc-fifo-tb',
         'i2s-shifter-core', 'i2s-shifter-tb',
         'audio-i2s-core', 'audio-i2s-tb',
-        'hdmi-tmds-encoder-core', 'hdmi-tmds-encoder-tb', 'hdmi-serializer-core', 'hdmi-tx-core'
+        'hdmi-tmds-encoder-core', 'hdmi-tmds-encoder-tb', 'hdmi-serializer-core', 'hdmi-tx-core',
+        'axi-lite-regs-core', 'axi-lite-regs-tb', 'cart-load-core', 'cart-rom-load-tb'
     )]
     [string]$Mode = 'all'
 )
@@ -99,6 +100,10 @@ $busRtl = Join-Path $repoRoot 'rtl\nes_core\bus\nes_cpu_bus.v'
 $controllerRtl = Join-Path $repoRoot 'rtl\nes_core\controller\nes_controller.v'
 $cartParserRtl = Join-Path $repoRoot 'rtl\nes_core\cart\ines_header_parser.v'
 $cartRomRtl = Join-Path $repoRoot 'rtl\nes_core\cart\nes_cart_rom.v'
+$cartLoadBridgeRtl = Join-Path $repoRoot 'rtl\nes_core\cart\nes_cart_load_bridge.v'
+$axiLiteRegsRtl = Join-Path $repoRoot 'rtl\platform\zynq\axi_lite_regs.v'
+$axiLiteRegsTbRtl = Join-Path $repoRoot 'tb\platform\tb_axi_lite_regs.v'
+$cartRomLoadTbRtl = Join-Path $repoRoot 'tb\cart\tb_nes_cart_rom_load.v'
 
 $mapperNromRtl = Join-Path $repoRoot 'rtl\nes_core\mapper\nes_mapper_nrom.v'
 $mapperCnromRtl = Join-Path $repoRoot 'rtl\nes_core\mapper\nes_mapper_cnrom.v'
@@ -184,6 +189,16 @@ $systemV6Sources = @($systemV6Rtl) + $ppuSources + $apuSources + $busSources + $
 # the committed placeholders, which is what lets this target run from committed
 # files alone; a real .nes run overrides them from a wrapper outside the gate.
 $cartBootRomTbSources = $systemV6Sources + @($cartBootRomTbRtl)
+# The AXI4-Lite slave and the clock-crossing bridge are board-independent except
+# for living under platform/zynq; the slave is elaboration-only (it has X_INTERFACE
+# attributes a block design will use next task) and gets a protocol bench, the
+# bridge gets an elaboration target.  The ROM-load bench elaborates the whole v6
+# core (its internal PRG half is what the load path reaches from the core side)
+# plus the two new modules; nes_cart_rom is already in $systemV6Sources.
+$axiLiteRegsSources = @($axiLiteRegsRtl)
+$axiLiteRegsTbSources = @($axiLiteRegsRtl, $axiLiteRegsTbRtl)
+$cartLoadBridgeSources = @($cartLoadBridgeRtl)
+$cartRomLoadSources = $systemV6Sources + @($axiLiteRegsRtl, $cartLoadBridgeRtl, $cartRomLoadTbRtl)
 $platformSources = @($platformTopRtl, $platformPllRtl, $platformQsfIfRtl)
 $platformElabSources = $platformSources + $systemV4Sources + $lineBufferVgaSources + $vgaTimingSources
 $peripheralSources = @($wm8960I2cRtl)
@@ -901,6 +916,50 @@ $allTargets = @(
         Sources     = $hdmiTxSources
         Standard    = '2001'
         Run         = $false
+    },
+    # PS-driven cartridge loading.  The slave is the hand-written AXI4-Lite bank
+    # written from the AXI4-Lite specification (provenance in its file header),
+    # and the bridge is the bundled-data toggle handshake that carries one load
+    # byte from the 50 MHz PS / AXI domain into the 21.477 MHz core domain.  The
+    # ROM-load bench drives the whole path end to end and additionally requires
+    # the loaded image to differ from the committed placeholder and the core to
+    # execute the loaded reset vector, so a pass cannot come from the ROM simply
+    # still being there.
+    [pscustomobject]@{
+        Id          = 'axi-lite-regs-core'
+        Group       = 'platform'
+        Label       = 'AXI4-Lite register bank / cartridge load source (elaboration)'
+        Top         = 'axi_lite_regs'
+        Sources     = $axiLiteRegsSources
+        Standard    = '2001'
+        Run         = $false
+    },
+    [pscustomobject]@{
+        Id          = 'axi-lite-regs-tb'
+        Group       = 'platform'
+        Label       = 'AXI4-Lite slave protocol and load-transaction tb'
+        Top         = 'tb_axi_lite_regs'
+        Sources     = $axiLiteRegsTbSources
+        Standard    = '2012'
+        Run         = $true
+    },
+    [pscustomobject]@{
+        Id          = 'cart-load-core'
+        Group       = 'cart'
+        Label       = 'Cartridge load clock-crossing bridge (elaboration)'
+        Top         = 'nes_cart_load_bridge'
+        Sources     = $cartLoadBridgeSources
+        Standard    = '2001'
+        Run         = $false
+    },
+    [pscustomobject]@{
+        Id          = 'cart-rom-load-tb'
+        Group       = 'cart'
+        Label       = 'Cartridge ROM load through AXI + bridge into PRG/CHR tb'
+        Top         = 'tb_nes_cart_rom_load'
+        Sources     = $cartRomLoadSources
+        Standard    = '2012'
+        Run         = $true
     }
 )
 

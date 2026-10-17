@@ -74,6 +74,15 @@ module nes_system_v6 #(
 )(
     input wire clk,
     input wire reset,
+    // Cartridge PRG load port, forwarded to the internal nes_cart_rom PRG half.
+    // Inert by default: an instance that leaves these unconnected drives z, the
+    // load gate treats z as false, and nothing reaches the array.  See
+    // nes_cart_rom.v CARTRIDGE LOAD PORT.  CHR is a board-level instance above
+    // this module, so only the PRG word crosses here.
+    input wire                     prg_ld_en,
+    input wire [PRG_ADDR_BITS-1:0] prg_ld_addr,
+    input wire [7:0]               prg_ld_data,
+    input wire                     prg_ld_we,
     input wire [7:0] buttons1,
     input wire [7:0] buttons2,
     input wire [7:0] chr_rdata,
@@ -572,7 +581,15 @@ nes_cart_rom #(
     .chr_waddr(14'h0000),
     .chr_we(1'b0),
     .chr_wdata(8'h00),
-    .chr_ram_enable(1'b0)
+    .chr_ram_enable(1'b0),
+    .prg_ld_en(prg_ld_en),
+    .prg_ld_addr(prg_ld_addr),
+    .prg_ld_data(prg_ld_data),
+    .prg_ld_we(prg_ld_we),
+    .chr_ld_en(1'b0),
+    .chr_ld_addr(13'h0000),
+    .chr_ld_data(8'h00),
+    .chr_ld_we(1'b0)
 );
 
 assign prg_readback = prg_rdata;

@@ -683,7 +683,20 @@ module nes_zynq_top #(
         .chr_waddr    (core_chr_waddr),
         .chr_we       (core_chr_we),
         .chr_wdata    (core_chr_wdata),
-        .chr_ram_enable(core_mapper_chr_ram_enable)
+        .chr_ram_enable(core_mapper_chr_ram_enable),
+        // Cartridge load port, tied inert.  The PS loader (axi_lite_regs plus the
+        // clock-crossing bridge) has no block design yet: this task delivers its
+        // RTL and its benches, and the block design that connects S_AXI to the
+        // PS M_AXI_GP0 is the next task.  Tied rather than left unconnected so
+        // this instance is deterministic in synthesis instead of floating.
+        .prg_ld_en    (1'b0),
+        .prg_ld_addr  (17'd0),
+        .prg_ld_data  (8'h00),
+        .prg_ld_we    (1'b0),
+        .chr_ld_en    (1'b0),
+        .chr_ld_addr  (13'd0),
+        .chr_ld_data  (8'h00),
+        .chr_ld_we    (1'b0)
     );
 
     // ---------------------------------------------------------------- 核心
@@ -711,7 +724,13 @@ module nes_zynq_top #(
         .chr_waddr               (core_chr_waddr),
         .chr_we                  (core_chr_we),
         .chr_wdata               (core_chr_wdata),
-        .mapper_chr_ram_enable   (core_mapper_chr_ram_enable)
+        .mapper_chr_ram_enable   (core_mapper_chr_ram_enable),
+        // PRG load port, tied inert for the same reason as the CHR cart above:
+        // the PS loader has no block design yet and this task must not add one.
+        .prg_ld_en               (1'b0),
+        .prg_ld_addr             (17'd0),
+        .prg_ld_data             (8'h00),
+        .prg_ld_we               (1'b0)
     );
 
     // -------------------------------------------------------------- 调色板
