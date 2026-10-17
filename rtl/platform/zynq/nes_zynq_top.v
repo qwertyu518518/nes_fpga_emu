@@ -244,6 +244,32 @@
 //
 // TWO PL keys are not a controller and are wired to the touch module's
 // key0/key1, which handles their active-low polarity and debouncing.
+//
+// PS CARTRIDGE LOAD PATH
+//   The console can be made to load its cartridge from the TF card at runtime
+//   instead of from the image baked into the bitstream.  The PS-side half of
+//   that feature -- the AXI4-Lite register bank axi_lite_regs.v and the
+//   FSBL/app/BOOT.bin that drive it -- lives in tools/ps/ and the block design
+//   built there.  This module owns the PL half of the crossing: the seven
+//   ps_* ports below carry the AXI-side request handshake, and the
+//   nes_cart_load_bridge instance near the cartridge carries each byte into the
+//   core clock domain.
+//
+//   The seven ports are in the sys_clk domain, which in the block design is
+//   driven by the PS FCLK_CLK0.  They are inert whenever ps_load_enable is low,
+//   so the platform testbench and any board-independent instance that ties them
+//   off behaves exactly as it did before the load port existed.  ps_ld_ready is
+//   an output rather than an input because the bridge is here, not on the AXI
+//   side: keeping the crossing inside this module means the only signals
+//   crossing the module boundary are in one clock domain.
+//
+//   ps_console_hold is the console hold from axi_lite_regs (CTRL bit1 HOLD OR
+//   bit0 LOAD_EN).  It is ORed into the core-domain resets ONLY -- the CPU/PPU
+//   reset and the CHR cartridge reset -- and deliberately NOT into the bridge's
+//   core_reset, because the load must proceed while the console is held; see
+//   nes_cart_load_bridge.v's header.  A partially loaded image cannot run: the
+//   same bit that permits writes to the arrays is the bit that holds the
+//   console, so releasing it is the deliberate "image complete" action.
 // ============================================================================
 
 module nes_zynq_top #(
@@ -355,7 +381,19 @@ module nes_zynq_top #(
     output wire [2:0]  tmds_data_p,
     output wire [2:0]  tmds_data_n,
     output wire        tmds_clk_p,
-    output wire        tmds_clk_n
+    output wire        tmds_clk_n,
+    // ------------------------------------------------------ PS cartridge load
+    // AXI-side load handshake from axi_lite_regs.v, in the sys_clk domain,
+    // plus the console hold.  See the PS CARTRIDGE LOAD PATH header block.
+    // Tied inert by every board-independent instance; the block design in
+    // tools/ps/ drives them from the PS.
+    input  wire        ps_ld_valid,
+    input  wire        ps_ld_target,
+    input  wire [16:0] ps_ld_addr,
+    input  wire [7:0]  ps_ld_data,
+    output wire        ps_ld_ready,
+    input  wire        ps_load_enable,
+    input  wire        ps_console_hold
 );
 
     // ------------------------------------------------------------------ 复位
@@ -644,6 +682,75 @@ module nes_zynq_top #(
     assign touch_sda_i   = touch_sda;
     assign touch_rst_n   = ct_rst_n;
 
+    // ------------------------------------------------- PS cartridge load bridge
+    // The crossing from the AXI/PS domain into the core domain.  Its host side
+    // runs on sys_clk (the PS FCLK_CLK0 in the block design) and its core side
+    // on mmcm_core_clk.  core_reset is rst_core, the clock domain reset, NOT
+    // the console hold: the load has to run while the console is held, which is
+    // the whole mechanism.  See the PS CARTRIDGE LOAD PATH header block.
+    wire        ld_prg_en;
+    wire [16:0] ld_prg_addr;
+    wire [7:0]  ld_prg_data;
+    wire        ld_prg_we;
+    wire        ld_chr_en;
+    wire [12:0] ld_chr_addr;
+    wire [7:0]  ld_chr_data;
+    wire        ld_chr_we;
+
+    nes_cart_load_bridge #(
+        .PRG_ADDR_BITS(17),
+        .CHR_ADDR_BITS(13),
+        .ADDR_W(17)
+    ) u_ps_load_bridge (
+        .host_clk        (sys_clk),
+        .host_reset      (~sys_rst_n),
+        .host_valid      (ps_ld_valid),
+        .host_target     (ps_ld_target),
+        .host_addr       (ps_ld_addr),
+        .host_data       (ps_ld_data),
+        .host_load_enable(ps_load_enable),
+        .host_ready      (ps_ld_ready),
+        .core_clk        (mmcm_core_clk),
+        .core_reset      (rst_core),
+        .prg_ld_en       (ld_prg_en),
+        .prg_ld_addr     (ld_prg_addr),
+        .prg_ld_data     (ld_prg_data),
+        .prg_ld_we       (ld_prg_we),
+        .chr_ld_en       (ld_chr_en),
+        .chr_ld_addr     (ld_chr_addr),
+        .chr_ld_data     (ld_chr_data),
+        .chr_ld_we       (ld_chr_we)
+    );
+
+    // ps_console_hold arrives in the sys_clk (PS) domain.  It is synchronised
+    // into the core domain with the project's two-flop idiom BEFORE it is ORed
+    // into the core reset, for the same reason every other cross-domain reset
+    // qualifier is: ORing a register from another clock domain straight into the
+    // core reset builds a combinational path from that domain into every
+    // reset-sampling flop in the core.  Measured on the first routed build of
+    // this design, that single path put 37,412 endpoints on the
+    // clk_fpga_0 -> mmcm_core_clk setup check at -12.798 ns.  The hold is a slow
+    // control level -- asserted before the first load write and cleared only
+    // after the last -- so a two-flop synchroniser is the right crossing.  The
+    // console hold is ORed into the core-domain resets and nowhere else; it
+    // reaches the CPU/PPU reset inside u_core and the CHR array reset in
+    // u_cart_chr, exactly as the load bench wires them, and it must NOT reach
+    // u_ps_load_bridge above.
+    (* ASYNC_REG = "TRUE" *) reg ps_hold_core_q0;
+    (* ASYNC_REG = "TRUE" *) reg ps_hold_core_q1;
+
+    always @(posedge mmcm_core_clk or negedge sys_rst_n) begin
+        if (!sys_rst_n) begin
+            ps_hold_core_q0 <= 1'b0;
+            ps_hold_core_q1 <= 1'b0;
+        end else begin
+            ps_hold_core_q0 <= ps_console_hold;
+            ps_hold_core_q1 <= ps_hold_core_q0;
+        end
+    end
+
+    wire core_domain_reset = rst_core | ps_hold_core_q1;
+
     // ---------------------------------------------------------- CHR 存储器
     // PRG is inside the core (PRG_ENABLE=1, CHR_ENABLE=0).  CHR is here.
     wire [7:0]  chr_rdata;
@@ -672,7 +779,7 @@ module nes_zynq_top #(
         .CHR_INIT_FILE(CHR_INIT_FILE)
     ) u_cart_chr (
         .clk          (mmcm_core_clk),
-        .reset        (rst_core),
+        .reset        (core_domain_reset),
         .prg_en       (1'b0),
         .prg_addr     (17'd0),
         .prg_rdata    (),
@@ -684,19 +791,15 @@ module nes_zynq_top #(
         .chr_we       (core_chr_we),
         .chr_wdata    (core_chr_wdata),
         .chr_ram_enable(core_mapper_chr_ram_enable),
-        // Cartridge load port, tied inert.  The PS loader (axi_lite_regs plus the
-        // clock-crossing bridge) has no block design yet: this task delivers its
-        // RTL and its benches, and the block design that connects S_AXI to the
-        // PS M_AXI_GP0 is the next task.  Tied rather than left unconnected so
-        // this instance is deterministic in synthesis instead of floating.
+        // CHR half of the PS load port, driven by the bridge above.
         .prg_ld_en    (1'b0),
         .prg_ld_addr  (17'd0),
         .prg_ld_data  (8'h00),
         .prg_ld_we    (1'b0),
-        .chr_ld_en    (1'b0),
-        .chr_ld_addr  (13'd0),
-        .chr_ld_data  (8'h00),
-        .chr_ld_we    (1'b0)
+        .chr_ld_en    (ld_chr_en),
+        .chr_ld_addr  (ld_chr_addr),
+        .chr_ld_data  (ld_chr_data),
+        .chr_ld_we    (ld_chr_we)
     );
 
     // ---------------------------------------------------------------- 核心
@@ -704,7 +807,7 @@ module nes_zynq_top #(
         .PRG_INIT_FILE(PRG_INIT_FILE)
     ) u_core (
         .clk                     (mmcm_core_clk),
-        .reset                   (rst_core),
+        .reset                   (core_domain_reset),
         .buttons1                (btn_sync_q),
         .buttons2                (8'h00),
         .chr_rdata               (chr_rdata),
@@ -725,12 +828,12 @@ module nes_zynq_top #(
         .chr_we                  (core_chr_we),
         .chr_wdata               (core_chr_wdata),
         .mapper_chr_ram_enable   (core_mapper_chr_ram_enable),
-        // PRG load port, tied inert for the same reason as the CHR cart above:
-        // the PS loader has no block design yet and this task must not add one.
-        .prg_ld_en               (1'b0),
-        .prg_ld_addr             (17'd0),
-        .prg_ld_data             (8'h00),
-        .prg_ld_we               (1'b0)
+        // PRG half of the PS load port, driven by the bridge above.  The core's
+        // internal nes_cart_rom forwards it to the PRG array.
+        .prg_ld_en               (ld_prg_en),
+        .prg_ld_addr             (ld_prg_addr),
+        .prg_ld_data             (ld_prg_data),
+        .prg_ld_we               (ld_prg_we)
     );
 
     // -------------------------------------------------------------- 调色板

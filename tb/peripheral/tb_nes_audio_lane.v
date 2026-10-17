@@ -138,7 +138,17 @@ module tb_nes_audio_lane;
         .aud_dacdat  (aud_dacdat),
         .aud_mclk    (aud_mclk),
         .aud_iic_scl (aud_iic_scl),
-        .aud_iic_sda (aud_iic_sda)
+        .aud_iic_sda (aud_iic_sda),
+        // PS cartridge load path: tied inert here, exactly as tb_nes_zynq_top
+        // does, so ps_console_hold cannot float to z and turn the core reset
+        // into an x through the hold synchroniser.
+        .ps_ld_valid     (1'b0),
+        .ps_ld_target    (1'b0),
+        .ps_ld_addr      (17'd0),
+        .ps_ld_data      (8'h00),
+        .ps_ld_ready     (),
+        .ps_load_enable  (1'b0),
+        .ps_console_hold (1'b0)
     );
 
     pullup pu_touch_sda (touch_sda);

@@ -701,6 +701,11 @@ bootgen -image boot.bif -arch zynq -o BOOT.bin -w on
 - **本节数字不携带可复现源文件。** 与第 1–8 节不同，流程 E 两次探针的产物都没有登记在 `D:\vivadoProject\` 里，因此其他节"每个数字都点源文件"的纪律在这里**不成立**——这是一个诚实的缺口，不是省事。probe 2 的比特流与 `.hdf` 同样没有进入仓库。
 - **本文件仍然不做 PL-vs-PS 迁移决定**（见文件头边界声明）。流程 E 只是回答"如果走 PS，会撞到什么"，不是推荐。
 
+### 9.7 流程 E 已经进了仓库（软件半边）
+
+第 9 节那两次探针之后，PS 这条路已经有一份**可复现**的流程进了仓库：`tools/ps/`（块设计、FSBL、裸机加载程序、`BOOT.bin`）与模块文档
+[`../modules/ps-rom-load-software.md`](../modules/ps-rom-load-software.md)。流程 E 的构建配方（`build_ps.tcl` / `run_build.ps1` / `sdk_flow.tcl` / `run_sdk.ps1`）与它这次跑出来的数（LUT / FF / BRAM、0 失败端点、比特流与 `BOOT.bin` 的 SHA256、INIT 差分）都在那份文档里，并且**这一次是有源文件的**（报告在 `tools/ps/out/`，由流程自己生成）。仍然成立的是第 9.6 节的边界：**没有上机验证。**
+
 ---
 
 ## 附：本文件引用的全部源文件

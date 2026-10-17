@@ -164,7 +164,18 @@ module tb_nes_zynq_top;
         .tmds_data_p (tmds_data_p),
         .tmds_data_n (tmds_data_n),
         .tmds_clk_p  (tmds_clk_p),
-        .tmds_clk_n  (tmds_clk_n)
+        .tmds_clk_n  (tmds_clk_n),
+        // PS cartridge load path: tied inert here.  This bench has no PS, so
+        // the bridge sees no requests and the cartridge load gates stay off,
+        // which is byte-for-byte the pre-load-port behaviour.  It is tied
+        // rather than left implicit so no input is z and no reset term can go x.
+        .ps_ld_valid     (1'b0),
+        .ps_ld_target    (1'b0),
+        .ps_ld_addr      (17'd0),
+        .ps_ld_data      (8'h00),
+        .ps_ld_ready     (),
+        .ps_load_enable  (1'b0),
+        .ps_console_hold (1'b0)
     );
 
     task err;

@@ -1,0 +1,21 @@
+// boot.bif -- Zynq boot image for the NES FPGA runtime cartridge loader.
+//
+// Partitions, in order:
+//   [bootloader]  the FSBL built by tools/ps/sdk_flow.tcl.  FSBL initialises
+//                 DDR and the clocking, then programs the PL from the bitstream
+//                 partition below and hands control to the application.
+//   loader_app    the bare-metal cartridge loader.  It brings up UART0, mounts
+//                 the SD card, reads the iNES image, proves the AXI link
+//                 (SCRATCH round-trip and ID = 0x4E455301), streams PRG and CHR
+//                 into the PL, then clears LOAD_EN to release the console.
+//   ps_nes.bit    the PL bitstream.  Included here (unlike the earlier probe,
+//                 whose design never routed): without it the PL fabric is empty
+//                 and the register bank the application writes does not exist.
+//
+// Paths are relative to the directory bootgen runs in (tools/ps).
+the_ROM_image:
+{
+  [bootloader]sdk_ws/fsbl/Debug/fsbl.elf
+  sdk_ws/loader_app/Debug/loader_app.elf
+  out/ps_nes.bit
+}

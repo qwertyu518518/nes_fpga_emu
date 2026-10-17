@@ -211,12 +211,14 @@ $touchInputSources = @($touchInputRtl)
 # them again here makes iverilog reject the whole target as a duplicate module.
 # nes_zynq_top now instantiates nes_video_hdmi and nes_hdmi_tx, and the latter
 # elaborates the serialiser, so the HDMI RTL and the behavioural OSERDESE2 /
-# OBUFDS models are compile dependencies of this target too.
+# OBUFDS models are compile dependencies of this target too.  It also now
+# instantiates nes_cart_load_bridge for the PS cartridge load path, so that
+# module is a compile dependency as well.
 $zynqTopSources = @($zynqTopRtl, $zynqClkRtl, $touchInputRtl, $video800Rtl,
                     $videoHdmiRtl, $hdmiEncoderRtl, $hdmiSerializerRtl,
                     $hdmiTxRtl, $hdmiPrimSimRtl,
                     $zynqClkTbRtl) + $systemV6Sources + $audioI2sSources +
-                   @($wm8960I2cRtl)
+                   @($wm8960I2cRtl, $cartLoadBridgeRtl)
 $zynqTopTbSources = $zynqTopSources + @($zynqTopTbRtl)
 $zynqClkSources = @($zynqClkRtl)
 # The HDMI transmit core is mode-independent and not wired into the top level,
