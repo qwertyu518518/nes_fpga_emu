@@ -25,11 +25,14 @@
 // straight into pixel-domain flops.  The serialiser RST is active high, so the
 // pclk_x5 synchroniser's reset is inverted for it.
 //
-// Integration.  This module is deliberately not instantiated anywhere yet.
-// nes_zynq_top.v has no HDMI ports and nes_zynq_top.xdc has no TMDS pins; the
-// four pairs in Bank 35 and the pixel/5x clocks are wired up once the video
-// mode (and therefore the two clock frequencies) is chosen.  See the report
-// accompanying this commit for the integration plan.
+// Integration.  This module IS instantiated, by nes_zynq_top.v, and the four
+// Bank 35 pairs ARE constrained in nes_zynq_top.xdc as TMDS_33.  The video mode
+// was chosen as 720x480p60, so pclk = 27.000 MHz and pclk_x5 = 135.000 MHz,
+// both from the second MMCM (u_mmcm_hdmi, VCO 675 MHz).  The earlier text here
+// said the module was deliberately not instantiated and that the mode was still
+// open; both were true when it was written and were stale by the time the
+// integration landed.  Clock arithmetic and the mode rationale are in
+// docs/modules/hdmi-tx.md.
 // ============================================================================
 
 module nes_hdmi_tx (

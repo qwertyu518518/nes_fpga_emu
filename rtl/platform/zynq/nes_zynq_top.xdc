@@ -5,7 +5,9 @@
 # IOSTANDARD    : LVCMOS33 on every pin below.  That is the vendor value for
 #                 every signal this design uses on this board; the only
 #                 non-LVCMOS33 entries in the vendor file are the HDMI TMDS
-#                 pairs, which this design does not instantiate.
+#                 pairs, and this design DOES instantiate those, as the four
+#                 TMDS_33 P-side pins further down this file.  So LVCMOS33 is
+#                 the standard for every pin below EXCEPT that HDMI block.
 #
 # Primary source, every pin below is traceable to one line of it
 #   D:\BaiduNetdiskDownload\【正点原子】领航者(V2)ZYNQ开发板资料 资料盘(A盘)\

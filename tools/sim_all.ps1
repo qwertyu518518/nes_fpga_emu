@@ -857,10 +857,12 @@ $allTargets = @(
         Standard    = '2012'
         Run         = $true
     },
-    # HDMI/DVI transmit core.  Mode independent: it takes pclk, pclk_x5 and the
-    # parallel video stream from its caller and is not instantiated by
-    # nes_zynq_top.v yet, because the video mode (and therefore the two clock
-    # frequencies) is still an open decision.  The encoder pair proves the
+    # HDMI/DVI transmit core.  Mode independent by construction: it takes pclk,
+    # pclk_x5 and the parallel video stream from its caller.  It IS instantiated
+    # by nes_zynq_top.v at 720x480p60 (pclk 27.000 MHz, pclk_x5 135.000 MHz,
+    # second MMCM).  The earlier text here said it was not instantiated and that
+    # the video mode was still an open decision; the mode has since been chosen
+    # and the integration landed.  The encoder pair proves the
     # 8b/10b algorithm against the DVI specification; the two elaboration
     # targets prove the serialiser and the wrapper build against the
     # behavioural OSERDESE2/OBUFDS models in tb/platform/nes_hdmi_tmds_prim_sim.v.
