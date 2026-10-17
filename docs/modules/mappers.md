@@ -104,8 +104,12 @@ mapper_select ──┬─ select_nrom  ──> u_nrom  输出
                 ├─ select_mmc1  ──> u_mmc1 输出
                 ├─ select_uxrom ──> u_uxrom 输出
                 ├─ select_cnrom ──> u_cnrom 输出
-                └─ select_mmc3  ──> u_mmc3 输出 ──> mux ──> prg_bank_offset / chr_bank_offset / ...
+                └─ select_mmc3 ──> u_mmc3  输出 ──> mux ──> prg_bank_offset / chr_bank_offset / ...
 ```
+
+![图 1：Mapper 组合分发](../figures/mapper-dispatch.svg)
+
+**图 1** · `nes_mapper` 的组合分发：`mapper_select` 同时选中/隔离五个并存的子模块（各自的寄存器内容写在框内），经组合 mux 汇聚到 bank offset / mirroring / IRQ 输出。事实来源 `rtl/nes_core/mapper/nes_mapper.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
 
 差别有两个，都是刻意的：
 

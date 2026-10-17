@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="680" viewBox="0 0 1160 680" role="img" aria-label="nes_mapper：mapper_select 组合分发到五个子模块与输出 mux">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1160" height="680" fill="var(--bg)"/>
+<text x="580" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Mapper 顶层：五个子模块并存 + 组合 mux</text>
+<text x="580" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/nes_core/mapper/nes_mapper.v · cpu_we 与 select_* 与门隔离子模块</text>
+<rect x="30" y="130" width="200" height="190" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="130" y="151" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">输入</text>
+<text x="42" y="171" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">mapper_select[7:0]</text>
+<text x="42" y="186" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_addr[15:0]</text>
+<text x="42" y="201" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_we / cpu_dout[7:0]</text>
+<text x="42" y="216" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ppu_addr[13:0] / ppu_we</text>
+<text x="42" y="231" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ppu_dout[7:0]</text>
+<text x="42" y="246" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ppu_a12</text>
+<text x="42" y="261" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">prg_readback[7:0]</text>
+<line x1="252" y1="110" x2="252" y2="548" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="5 5"/>
+<path d="M 230 225 L 250 225" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<rect x="280" y="100" width="280" height="80" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="420" y="121" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_mapper_nrom   m0</text>
+<text x="292" y="141" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">无寄存器（纯组合）</text>
+<text x="292" y="156" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">PRG 固定 $8000-$FFFF</text>
+<path d="M 252 140 L 278 140" fill="none" stroke="var(--blue)" stroke-width="1.2" marker-end="url(#arw-blue)"/>
+<rect x="280" y="192" width="280" height="80" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="420" y="213" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_mapper_mmc1   m1</text>
+<text x="292" y="233" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">5 次串行写 + 4 寄存器</text>
+<text x="292" y="248" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">CHR 4/8 KiB、PRG 16/32 KiB</text>
+<path d="M 252 232 L 278 232" fill="none" stroke="var(--blue)" stroke-width="1.2" marker-end="url(#arw-blue)"/>
+<rect x="280" y="284" width="280" height="80" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="420" y="305" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_mapper_uxrom  m2</text>
+<text x="292" y="325" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">1 × 16 KiB PRG bank</text>
+<text x="292" y="340" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cpu_we &amp; select_uxrom</text>
+<path d="M 252 324 L 278 324" fill="none" stroke="var(--blue)" stroke-width="1.2" marker-end="url(#arw-blue)"/>
+<rect x="280" y="376" width="280" height="80" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="420" y="397" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_mapper_cnrom  m3</text>
+<text x="292" y="417" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">1 × 8 KiB CHR bank</text>
+<text x="292" y="432" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">bus conflict 来源</text>
+<path d="M 252 416 L 278 416" fill="none" stroke="var(--blue)" stroke-width="1.2" marker-end="url(#arw-blue)"/>
+<rect x="280" y="468" width="280" height="80" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="420" y="489" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_mapper_mmc3   m4</text>
+<text x="292" y="509" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">8 bank 寄存器</text>
+<text x="292" y="524" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">A12 上升沿 IRQ FSM</text>
+<path d="M 252 508 L 278 508" fill="none" stroke="var(--blue)" stroke-width="1.2" marker-end="url(#arw-blue)"/>
+<rect x="620" y="250" width="180" height="140" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="710" y="271" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">组合 mux</text>
+<text x="632" y="291" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">mapper_select 选线</text>
+<text x="632" y="306" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">五路同时存在</text>
+<text x="632" y="321" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">换 mapper 不重综合</text>
+<path d="M 560 140 L 618 260" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<path d="M 560 170 L 618 290" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<path d="M 560 200 L 618 320" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<path d="M 560 230 L 618 350" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<path d="M 560 260 L 618 380" fill="none" stroke="var(--green)" stroke-width="1.2" marker-end="url(#arw-green)"/>
+<rect x="880" y="110" width="250" height="430" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="1005" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">输出</text>
+<text x="892" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">prg_bank_offset[16:0]</text>
+<text x="892" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">chr_bank_offset[16:0]</text>
+<text x="892" y="181" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">mirroring[2:0]</text>
+<text x="892" y="196" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nametable_map[7:0]</text>
+<text x="892" y="211" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">prg_ram_enable / prg_ram_we</text>
+<text x="892" y="226" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">chr_ram_enable / chr_ram_we</text>
+<text x="892" y="241" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">irq（高有效 = 有效）</text>
+<text x="892" y="256" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">bus_conflict</text>
+<text x="892" y="271" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dbg_prg_bank_number</text>
+<text x="892" y="286" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dbg_chr_bank_number</text>
+<text x="892" y="301" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dbg_mapper_id</text>
+<path d="M 800 320 L 878 320" fill="none" stroke="var(--purple)" stroke-width="1.6" marker-end="url(#arw-purple)"/>
+<text x="60" y="470" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">每个子模块的写使能都先与过自己的 select_*，所以同一地址写不会串到别的 mapper 寄存器。</text>
+<text x="60" y="492" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nametable_map 由顶层一个 decode 函数集中生成，不复制四份 nametable 数组。</text>
+<rect x="60" y="560" width="361" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="72" y="580" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<path d="M 106 575 L 128 575" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="132" y="580" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">分发 / 输出</text>
+<rect x="200" y="568" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="226" y="580" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">mapper 子模块</text>
+<rect x="314" y="568" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="340" y="580" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">选择 / mux</text>
+</svg>

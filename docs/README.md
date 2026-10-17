@@ -67,6 +67,7 @@
 | [`line-buffer-vga.md`](modules/line-buffer-vga.md) | `nes_line_buffer_vga`（EP4CE10 行缓冲） |
 | [`vga-timing.md`](modules/vga-timing.md) | `nes_vga_timing`（640×480 时序） |
 | [`video-800x480.md`](modules/video-800x480.md) | `nes_video_800x480`（Zynq 800×480 双时钟） |
+| [`hdmi-tx.md`](modules/hdmi-tx.md) | `nes_video_hdmi` + `nes_hdmi_tx` + TMDS 编码器/串行器（Zynq 720×480p60 HDMI） |
 | [`controller.md`](modules/controller.md) | `nes_controller`（$4016/$4017） |
 | [`touch-input.md`](modules/touch-input.md) | `nes_touch_input`（GT9147 电容触摸） |
 
@@ -217,6 +218,7 @@ EP4CE10 开拓者板的板级事实与数字逻辑/时序基础：板卡、时�
 | [`walkthrough/39-audio-i2s.md`](walkthrough/39-audio-i2s.md) | 39 组装层精读：`nes_audio_i2s.v` |
 | [`walkthrough/40-wm8960-i2c.md`](walkthrough/40-wm8960-i2c.md) | 40 WM8960 立体声 codec 的 I2C 主控：`wm8960_i2c.v` |
 | [`walkthrough/41-zynq-clk.md`](walkthrough/41-zynq-clk.md) | 41 时钟生成精读：`nes_zynq_clk.v` |
+| [`walkthrough/42-hdmi-tx.md`](walkthrough/42-hdmi-tx.md) | 42 HDMI 发射通路精读：`nes_video_hdmi.v` + `nes_hdmi_tx.v`（720×480p60 与 TMDS） |
 | [`walkthrough/50-cpu6502.md`](walkthrough/50-cpu6502.md) | 50 复杂核心精读：`nes_cpu6502.v` |
 | [`walkthrough/51-ppu2c02.md`](walkthrough/51-ppu2c02.md) | 51 复杂核心精读：`nes_ppu2c02.v` |
 | [`walkthrough/52-ppu-sprite.md`](walkthrough/52-ppu-sprite.md) | 52 精灵精读：`nes_ppu_sprite.v` |
@@ -243,6 +245,7 @@ EP4CE10 开拓者板的板级事实与数字逻辑/时序基础：板卡、时�
 | [`modules/chr-fetch-feasibility.md`](modules/chr-fetch-feasibility.md) | CHR 取数可行性测量：单口外部 CHR 的 dot 预算与 attribute 陷阱 |
 | [`modules/controller.md`](modules/controller.md) | 标准 NES 手柄（$4016 / $4017）：从 SDL 键盘事件到并联输入 + 串行移位器 |
 | [`modules/cpu-bus.md`](modules/cpu-bus.md) | CPU 总线模块：软件 `switch(address)` 与硬件 ready/valid 的对应关系 |
+| [`modules/hdmi-tx.md`](modules/hdmi-tx.md) | HDMI/DVI 发射子系统（`nes_video_hdmi` + `nes_hdmi_tx` + TMDS 编码器/串行器）：720×480p60、第二个 MMCM、缩放与 DDC 限制 |
 | [`modules/i2s-audio.md`](modules/i2s-audio.md) | I2S 音频位串行器（`nes_i2s_shifter`）与组装层（`nes_audio_i2s`）：从 32 位立体声样点到 BCL… |
 | [`modules/ines-loader.md`](modules/ines-loader.md) | iNES/NES2.0 头解析（`ines_header_parser`）：从软件 loader 的 `fread` 到硬件配置寄存器 |
 | [`modules/line-buffer-vga.md`](modules/line-buffer-vga.md) | 视频行缓冲：软件 framebuffer `y++`/blit 与硬件双 bank 行乒乓的对应 |

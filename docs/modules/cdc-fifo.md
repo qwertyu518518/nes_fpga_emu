@@ -83,6 +83,10 @@ rd_empty_next   = (rd_gray_next == wr_gray_sync2);
 
 如果指针不是格雷码，同步器采到撕裂值，这两条等式就会命中一个本不存在的状态。判据的正确性完全建立在第 2 节的性质上。
 
+![图 1：异步 FIFO 指针跨域](../figures/cdc-fifo-pointers.svg)
+
+**图 1** · 两个时钟域的完整结构：二进制指针负责本地寻址、格雷码指针负责跨域发布、两级同步器压亚稳态，以及满/空两条判据为何成立与指针为何多一位。事实来源 `rtl/nes_core/peripheral/nes_cdc_fifo.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ---
 
 ## 4. 存储阵列为什么长这样

@@ -55,6 +55,7 @@
 | [`39-audio-i2s.md`](39-audio-i2s.md) | `nes_audio_i2s.v`：FIFO + 位串行器的组装 |
 | [`40-wm8960-i2c.md`](40-wm8960-i2c.md) | `wm8960_i2c.v`：I2C 主控状态机 |
 | [`41-zynq-clk.md`](41-zynq-clk.md) | `nes_zynq_clk.v`：MMCM 时钟生成 |
+| [`42-hdmi-tx.md`](42-hdmi-tx.md) | `nes_video_hdmi.v` + `nes_hdmi_tx.v`：720×480p60 与 TMDS 发射通路 |
 
 ### ⑤ 复杂核心
 

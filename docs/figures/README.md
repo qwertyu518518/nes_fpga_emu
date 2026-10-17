@@ -25,6 +25,10 @@ python tools/gen_figures.py --check   # 校验已是最新
 | [`apu-to-i2s.svg`](apu-to-i2s.svg) | 五通道混合、2016/55 有理抽取、CDC FIFO 与 I2S 移位器。 | `nes_apu2a03.v + nes_zynq_top.v + nes_audio_i2s.v + nes_cdc_fifo.v` | [`modules/i2s-audio.md`](../modules/i2s-audio.md) 图 1 |
 | [`video-scaling-800x480.svg`](video-scaling-800x480.svg) | 水平 3:1+每 8 取 4（32 组 × 25 dot）与垂直 2:1，frame_mem 双口跨域。 | `rtl/nes_core/video/nes_video_800x480.v` | [`modules/video-800x480.md`](../modules/video-800x480.md) 图 1 |
 | [`touch-state-and-regions.svg`](touch-state-and-regions.svg) | 复位→校准→轮询状态序列、轴交换与由最大值派生的区域切点。 | `rtl/nes_core/peripheral/nes_touch_input.v` | [`modules/touch-input.md`](../modules/touch-input.md) 图 1 |
+| [`hdmi-path.svg`](hdmi-path.svg) | 两个 MMCM 的四条时钟、core_clk 写 / hdmi_pclk 读的跨域 scaler、TMDS 编码器到串行器到连接器与 DDC 限制。 | `rtl/nes_core/video/nes_video_hdmi.v + rtl/platform/zynq/nes_hdmi_tx.v + rtl/platform/zynq/nes_hdmi_tmds_encoder.v + rtl/platform/zynq/nes_hdmi_tmds_serializer.v + rtl/platform/zynq/nes_zynq_clk.v` | [`modules/hdmi-tx.md`](../modules/hdmi-tx.md) 图 1 |
+| [`mapper-dispatch.svg`](mapper-dispatch.svg) | mapper_select 分发到五个并存的子模块、各自与 select_* 的写门，经组合 mux 到 bank offset / mirroring / IRQ 输出。 | `rtl/nes_core/mapper/nes_mapper.v` | [`modules/mappers.md`](../modules/mappers.md) 图 1 |
+| [`cdc-fifo-pointers.svg`](cdc-fifo-pointers.svg) | 二进制指针本地寻址、格雷码指针跨域、两级同步器与满/空判据，以及指针为何多一位。 | `rtl/nes_core/peripheral/nes_cdc_fifo.v` | [`modules/cdc-fifo.md`](../modules/cdc-fifo.md) 图 1 |
+| [`oam-dma-path.svg`](oam-dma-path.svg) | start 锁存、四态状态机、513/514 周期账、总线握手与 OAMADDR 两种接法。 | `rtl/nes_core/ppu/nes_oam_dma.v` | [`modules/oam-dma.md`](../modules/oam-dma.md) 图 1 |
 
 ## 视觉约定
 

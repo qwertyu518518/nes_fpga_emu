@@ -1061,6 +1061,348 @@ def fig_touch_input():
 
 
 # ---------------------------------------------------------------------------
+# Figure 10 -- HDMI path
+# ---------------------------------------------------------------------------
+def fig_hdmi_path():
+    c = Svg(1220, 830, "HDMI/DVI 发射通路：两族时钟、一个跨域 scaler、编码器到连接器")
+    title_block(c, "HDMI 通路：core_clk 写、hdmi_pclk 读、TMDS 编码与串行",
+                "nes_video_hdmi.v + nes_hdmi_tx.v + nes_hdmi_tmds_encoder.v"
+                " + nes_hdmi_tmds_serializer.v + nes_zynq_clk.v")
+
+    # clock tree
+    c.node(40, 98, 170, 64, "sys_clk 50 MHz", [
+        "U18 · 20.000 ns",
+    ], accent="blue")
+    c.node(260, 80, 270, 100, "MMCM #1 核心", [
+        "DIVCLK_DIVIDE 1 · MULT_F 23.625",
+        "VCO 1181.25 MHz",
+        "CLKOUT1 ÷55 → core 21.477",
+        "CLKOUT0 ÷47.25 → lcd 25.000",
+    ], accent="purple")
+    c.node(580, 80, 300, 100, "MMCM #2 HDMI", [
+        "DIVCLK_DIVIDE 1 · MULT_F 13.5",
+        "VCO 675.000 MHz",
+        "CLKOUT0 ÷25 → hdmi_pclk 27.000",
+        "CLKOUT1 ÷5 → pclk_x5 135.000",
+    ], accent="purple")
+    c.node(930, 80, 250, 100, "四条时钟", [
+        "core_clk 21.477 MHz",
+        "lcd_clk 25.000 MHz",
+        "hdmi_pclk 27.000 MHz",
+        "hdmi_pclk_x5 135.000 MHz",
+    ], accent="blue")
+    c.flow([(210, 130), (258, 130)], color="blue")
+    c.flow([(530, 130), (578, 130)], color="blue")
+    c.flow([(880, 130), (928, 130)], color="blue")
+
+    # domain frames
+    c.rect(28, 232, 282, 170, fill="none", stroke="green", rx=8, sw=1.2, dash="6 4")
+    c.text(169, 246, "core_clk 域", size=FS_S, fill="green")
+    c.rect(736, 232, 470, 322, fill="none", stroke="orange", rx=8, sw=1.2,
+           dash="6 4")
+    c.text(971, 246, "hdmi_pclk 域 · 串行 135 MHz", size=FS_S, fill="orange")
+
+    # data path
+    c.node(40, 250, 250, 140, "core_clk 像素流", [
+        "VID 每可见 dot 一拍",
+        "vid_we_q / vid_in_x[7:0]",
+        "vid_in_y[7:0]",
+        "vid_in_rgb_q[15:0]",
+    ], accent="green")
+    c.node(330, 250, 380, 260, "nes_video_hdmi", [
+        "frame_mem 61440×16 真双口 BRAM",
+        "写口 wr_clk=core_clk",
+        "读口 rd_clk=hdmi_pclk · ce=1",
+        "垂直 src_row=v_row_index[8:1] 2:1",
+        "水平 累加器 +256/-720 = 45/16",
+        "光栅 858×525  DE[122,842)×[36,516)",
+        "hsync[0,62) vsync[0,6) 负极性",
+        "59.94 Hz = 27e6/(858×525)",
+    ], accent="purple")
+    c.node(750, 250, 200, 90, "RGB565→RGB888", [
+        "全量位复制",
+        "hdmi_rgb888[23:0]",
+    ], accent="orange")
+    c.node(750, 390, 200, 150, "nes_hdmi_tx", [
+        "3 × tmds_encoder",
+        "4 × tmds_serializer",
+        "pclk 27 / pclk_x5 135",
+        "蓝道载 hsync/vsync",
+        "绿/红道 c0=c1=0",
+    ], accent="orange")
+    c.node(1020, 250, 180, 290, "HDMI 连接器", [
+        "tmds_data_p[2:0]",
+        "tmds_data_n[2:0]",
+        "tmds_clk_p / tmds_clk_n",
+        "G19 K19 J20 / J18",
+        "时钟道固定",
+        "10'b1111100000",
+        "",
+        "DDC/HPD 不可用",
+        "R19/P20 属触摸",
+        "无 EDID · 固定模式",
+    ], accent="blue")
+
+    c.flow([(290, 320), (328, 320)], color="green")
+    c.flow([(710, 320), (748, 320)], color="purple")
+    c.flow([(850, 340), (850, 388)], color="orange")
+    c.flow([(950, 465), (1018, 465)], color="orange")
+    c.text(300, 340, "256×240", size=FS_S, fill="muted")
+    c.text(846, 366, "逐像素", size=FS_S, fill="orange")
+
+    # notes
+    c.node(40, 560, 500, 170, "TMDS 编码（蓝道为例）", [
+        "阶段1 8b→9b：XNOR/XOR 最小跳变链",
+        "阶段2 9b→10b：balanced/oppose/follow",
+        "4 个控制符号 {c1,c0}：00 1101010100",
+        "  01 0010101011  10 0101010100",
+        "  11 1010101011（q_out[0] 先发）",
+        "运行差异界 ±8，不是 IBM 8b/10b 的 ±1",
+    ], accent="blue")
+    c.node(560, 560, 620, 170, "为什么需要第二个 MMCM", [
+        "核心 VCO 被 1181.25 MHz 钉死以精确命中核时钟",
+        "唯一分数输出 CLKOUT0 已给 25 MHz LCD",
+        "1181.25/27 = 43.75 不是 CLKOUT1..6 的整数分频",
+        "1181.25/371.25 = 35/11 既非整数也非 0.125 步",
+        "→ 27/135 MHz 改由 675 MHz VCO 的第二个 MMCM 给出",
+    ], accent="red")
+
+    legend(c, 44, 770, [
+        ("box", "core_clk 逻辑"), ("mem", "跨域存储"), ("arrow", "像素 / 数据"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 11 -- mapper dispatch
+# ---------------------------------------------------------------------------
+def fig_mapper_dispatch():
+    c = Svg(1160, 680, "nes_mapper：mapper_select 组合分发到五个子模块与输出 mux")
+    title_block(c, "Mapper 顶层：五个子模块并存 + 组合 mux",
+                "rtl/nes_core/mapper/nes_mapper.v · cpu_we 与 select_* 与门隔离子模块")
+
+    c.node(30, 130, 200, 190, "输入", [
+        "mapper_select[7:0]",
+        "cpu_addr[15:0]",
+        "cpu_we / cpu_dout[7:0]",
+        "ppu_addr[13:0] / ppu_we",
+        "ppu_dout[7:0]",
+        "ppu_a12",
+        "prg_readback[7:0]",
+    ], accent="blue")
+
+    # dispatch rail
+    c.line(252, 110, 252, 548, stroke="muted", sw=1.2, dash="5 5")
+    c.flow([(230, 225), (250, 225)], color="blue")
+
+    subs = [
+        ("nes_mapper_nrom   m0", ["无寄存器（纯组合）", "PRG 固定 $8000-$FFFF"], 100),
+        ("nes_mapper_mmc1   m1", ["5 次串行写 + 4 寄存器", "CHR 4/8 KiB、PRG 16/32 KiB"], 192),
+        ("nes_mapper_uxrom  m2", ["1 × 16 KiB PRG bank", "cpu_we & select_uxrom"], 284),
+        ("nes_mapper_cnrom  m3", ["1 × 8 KiB CHR bank", "bus conflict 来源"], 376),
+        ("nes_mapper_mmc3   m4", ["8 bank 寄存器", "A12 上升沿 IRQ FSM"], 468),
+    ]
+    for title, lines, y in subs:
+        c.node(280, y, 280, 80, title, lines, accent="green")
+        c.flow([(252, y + 40), (278, y + 40)], color="blue", sw=1.2)
+
+    c.node(620, 250, 180, 140, "组合 mux", [
+        "mapper_select 选线",
+        "五路同时存在",
+        "换 mapper 不重综合",
+    ], accent="purple")
+    for y in (260, 290, 320, 350, 380):
+        c.flow([(560, 140 + (y - 260)), (618, y)], color="green", sw=1.2)
+
+    c.node(880, 110, 250, 430, "输出", [
+        "prg_bank_offset[16:0]",
+        "chr_bank_offset[16:0]",
+        "mirroring[2:0]",
+        "nametable_map[7:0]",
+        "prg_ram_enable / prg_ram_we",
+        "chr_ram_enable / chr_ram_we",
+        "irq（高有效 = 有效）",
+        "bus_conflict",
+        "dbg_prg_bank_number",
+        "dbg_chr_bank_number",
+        "dbg_mapper_id",
+    ], accent="orange")
+    c.flow([(800, 320), (878, 320)], color="purple")
+
+    c.text(60, 470, "每个子模块的写使能都先与过自己的 select_*，"
+           "所以同一地址写不会串到别的 mapper 寄存器。",
+           size=FS_S, anchor="start", fill="muted")
+    c.text(60, 492, "nametable_map 由顶层一个 decode 函数集中生成，"
+           "不复制四份 nametable 数组。",
+           size=FS_S, anchor="start", fill="muted")
+
+    legend(c, 60, 560, [
+        ("arrow", "分发 / 输出"), ("box", "mapper 子模块"), ("mem", "选择 / mux"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 12 -- CDC FIFO pointers
+# ---------------------------------------------------------------------------
+def fig_cdc_fifo_pointers():
+    c = Svg(1200, 700, "nes_cdc_fifo：二进制寻址、格雷码发布、两级同步与满/空判据")
+    title_block(c, "异步 FIFO：跨域只传格雷码指针",
+                "rtl/nes_core/peripheral/nes_cdc_fifo.v · 每拍最多翻一位")
+
+    c.rect(28, 84, 340, 500, fill="none", stroke="green", rx=8, sw=1.2, dash="6 4")
+    c.text(198, 100, "wr_clk 域", size=FS_S, fill="green")
+    c.rect(832, 84, 340, 500, fill="none", stroke="orange", rx=8, sw=1.2, dash="6 4")
+    c.text(1002, 100, "rd_clk 域", size=FS_S, fill="orange")
+
+    c.node(44, 120, 308, 100, "wr_bin / wr_gray", [
+        "wr_bin 低位 → mem 写地址",
+        "wr_gray = bin ^ (bin >> 1)",
+        "提交：wr_en && !wr_full",
+    ], accent="green")
+    c.node(44, 250, 308, 90, "写口提交", [
+        "wr_en && !wr_full → 指针 +1",
+        "满时写被忽略，指针不动",
+    ], accent="green")
+    c.node(44, 376, 308, 110, "wr_full 比较", [
+        "wr_gray_next ==",
+        "{~rd_sync2[top:top-1], rd_sync2[top-2:0]}",
+        "用延迟的读指针判定",
+    ], accent="red")
+
+    c.node(848, 120, 308, 100, "rd_bin / rd_gray", [
+        "rd_bin 低位 → mem 读地址",
+        "rd_gray = bin ^ (bin >> 1)",
+        "提交：rd_en && !rd_empty",
+    ], accent="orange")
+    c.node(848, 250, 308, 90, "读口提交 / 寄存输出", [
+        "rd_data <= mem[rd_bin]",
+        "空时 rd_data 保持上一拍值",
+    ], accent="orange")
+    c.node(848, 376, 308, 110, "rd_empty 比较", [
+        "rd_gray_next == wr_sync2",
+        "整字相等即无数据",
+        "复位后初值 1",
+    ], accent="red")
+
+    c.node(420, 120, 360, 110, "mem（双时钟 SDP）", [
+        "写 mem[wr_bin] @ wr_clk",
+        "读 mem[rd_bin] @ rd_clk",
+        "每 bit 一对触发器（多推断为 BRAM）",
+        "复位不清阵列",
+    ], accent="purple")
+    c.node(420, 274, 360, 140, "格雷指针同步器", [
+        "rd_gray_sync1/2  位于 wr_clk",
+        "wr_gray_sync1/2  位于 rd_clk",
+        "(* ASYNC_REG *) 两级相邻",
+        "每拍只翻一位 → 不会撕裂",
+    ], accent="blue")
+    c.node(420, 452, 360, 120, "为什么指针多一位", [
+        "深度 = 2^ADDR，指针 0..2^(ADDR+1)-1",
+        "多出的最高位区分满与空",
+        "满 = 最高两位取反的格雷签名",
+    ], accent="muted")
+
+    c.flow([(352, 165), (418, 150)], color="green")
+    c.flow([(780, 150), (846, 165)], color="orange")
+    c.flow([(352, 210), (418, 344)], color="green")
+    c.text(300, 300, "wr_gray", size=FS_S, fill="green", anchor="end")
+    c.flow([(848, 210), (782, 344)], color="orange")
+    c.text(902, 300, "rd_gray", size=FS_S, fill="orange", anchor="start")
+    c.flow([(420, 352), (352, 410)], color="red")
+    c.text(430, 388, "rd_gray_sync2", size=FS_S, fill="red", anchor="start")
+    c.flow([(780, 352), (848, 410)], color="red")
+    c.text(770, 388, "wr_gray_sync2", size=FS_S, fill="red", anchor="end")
+
+    legend(c, 44, 616, [
+        ("arrow", "指针流"), ("box", "本地指针 / 同步器"), ("mem", "存储 / 判据"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 13 -- OAM DMA path
+# ---------------------------------------------------------------------------
+def fig_oam_dma_path():
+    c = Svg(1160, 730, "nes_oam_dma：锁存、四态、513/514 周期账与总线握手")
+    title_block(c, "OAM DMA：总线主设备 + 513/514 周期停机",
+                "rtl/nes_core/ppu/nes_oam_dma.v · $4014 page -> 256 × $2004")
+
+    c.node(40, 140, 250, 150, "start 锁存", [
+        "锁 src_page → page_q",
+        "read_addr_q = {page, 8'h00}",
+        "锁 oam_base_q / oam_cur_q",
+        "index_q <= 0",
+    ], accent="purple")
+
+    c.node(330, 150, 180, 90, "ST_IDLE", [
+        "等 start",
+    ], accent="blue")
+    c.node(530, 150, 180, 90, "ST_ALIGN", [
+        "dummy 1 或 2 拍",
+        "OAMADDR_WRITE=1",
+        " 时在 dummy 拍发 $2003",
+    ], accent="blue")
+    c.node(730, 150, 180, 90, "ST_READ", [
+        "发 cpu_read_req",
+        "等 cpu_read_ack",
+    ], accent="green")
+    c.node(930, 150, 180, 90, "ST_WRITE", [
+        "一次 $2004 写",
+        "index_q==FF → done",
+    ], accent="green")
+
+    c.flow([(290, 215), (328, 195)], color="purple")
+    c.flow([(510, 195), (528, 195)], color="blue")
+    c.flow([(710, 195), (728, 195)], color="blue")
+    c.flow([(910, 195), (928, 195)], color="green")
+    c.flow([(1020, 240), (1020, 272), (820, 272), (820, 242)], color="green")
+    c.flow([(950, 150), (950, 118), (420, 118), (420, 148)], color="red")
+    c.text(1042, 266, "读-写交替", size=FS_S, fill="green", anchor="start")
+    c.text(760, 110, "done（第 256 次写）", size=FS_S, fill="red", anchor="start")
+
+    c.node(40, 330, 380, 150, "周期账", [
+        "cycle_count 从 start 拍编号为 1",
+        "偶数对齐 1 + 256×2 = 513",
+        "奇数对齐 2 + 256×2 = 514",
+        "对齐拍不额外占周期（$2003 搭车）",
+        "延迟 ack：512 + align + 256×(1+ack)",
+    ], accent="purple")
+    c.node(460, 330, 340, 150, "总线握手", [
+        "cpu_read_req   电平",
+        "cpu_read_addr  {page, index}",
+        "cpu_read_ack   可延迟任意拍",
+        "cpu_rdata      ack 同拍有效",
+        "cpu_hold = busy（513/514 拍）",
+    ], accent="green")
+    c.node(840, 330, 290, 150, "OAMADDR 两种接法", [
+        "OAMADDR_WRITE=0 默认",
+        "  CPU 在 $4014 前写 $2003",
+        "OAMADDR_WRITE=1",
+        "  本模块在 align 拍发 $2003",
+        "两种接法 256 字节内容相同",
+    ], accent="blue")
+
+    c.node(40, 510, 540, 130, "输出稳定性", [
+        "cpu_read_req 与 ppu_reg_cs 永不同拍",
+        "read_addr_q 只在 ack 时 +1",
+        "ppu_reg_* 只由 state 决定",
+        "所有输出 = 寄存器的组合函数",
+    ], accent="orange")
+    c.node(620, 510, 510, 130, "边界（与 PPU 的切分）", [
+        "OAM RAM 本体在 nes_ppu2c02",
+        "$2004 写由外部驱动",
+        "真实 OAMADDR 自增由 PPU 完成",
+        "可见区 DMA 撕裂不检测（硬件也不）",
+    ], accent="muted")
+
+    legend(c, 44, 670, [
+        ("arrow", "状态 / 请求"), ("box", "时序与握手"), ("mem", "锁存 / 接法"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
 # Catalogue
 # ---------------------------------------------------------------------------
 FIGURES = [
@@ -1144,6 +1486,49 @@ FIGURES = [
         host="docs/modules/touch-input.md",
         num=1,
         desc="复位→校准→轮询状态序列、轴交换与由最大值派生的区域切点。",
+    ),
+    dict(
+        fn=fig_hdmi_path,
+        file="hdmi-path.svg",
+        title="HDMI/DVI 发射通路",
+        source=("rtl/nes_core/video/nes_video_hdmi.v + "
+                "rtl/platform/zynq/nes_hdmi_tx.v + "
+                "rtl/platform/zynq/nes_hdmi_tmds_encoder.v + "
+                "rtl/platform/zynq/nes_hdmi_tmds_serializer.v + "
+                "rtl/platform/zynq/nes_zynq_clk.v"),
+        host="docs/modules/hdmi-tx.md",
+        num=1,
+        desc="两个 MMCM 的四条时钟、core_clk 写 / hdmi_pclk 读的跨域 scaler、"
+             "TMDS 编码器到串行器到连接器与 DDC 限制。",
+    ),
+    dict(
+        fn=fig_mapper_dispatch,
+        file="mapper-dispatch.svg",
+        title="Mapper 组合分发",
+        source="rtl/nes_core/mapper/nes_mapper.v",
+        host="docs/modules/mappers.md",
+        num=1,
+        desc="mapper_select 分发到五个并存的子模块、各自与 select_* 的写门，"
+             "经组合 mux 到 bank offset / mirroring / IRQ 输出。",
+    ),
+    dict(
+        fn=fig_cdc_fifo_pointers,
+        file="cdc-fifo-pointers.svg",
+        title="异步 FIFO 指针跨域",
+        source="rtl/nes_core/peripheral/nes_cdc_fifo.v",
+        host="docs/modules/cdc-fifo.md",
+        num=1,
+        desc="二进制指针本地寻址、格雷码指针跨域、两级同步器与满/空判据，"
+             "以及指针为何多一位。",
+    ),
+    dict(
+        fn=fig_oam_dma_path,
+        file="oam-dma-path.svg",
+        title="OAM DMA 路径",
+        source="rtl/nes_core/ppu/nes_oam_dma.v",
+        host="docs/modules/oam-dma.md",
+        num=1,
+        desc="start 锁存、四态状态机、513/514 周期账、总线握手与 OAMADDR 两种接法。",
     ),
 ]
 

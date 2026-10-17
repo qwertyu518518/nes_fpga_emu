@@ -212,6 +212,10 @@ cycle_count = 512 + align_len + 256 x (1 + ack_delay)
 
 其中 `align_len` 是 1 或 2，零等待时就是 513 / 514。`align_len` 那一拍不受 ack 延迟影响（它是纯空转拍），所以 `OAMADDR_WRITE=1` 时那个 `$2003` 写**不额外占用周期**：它就搭在 dummy 拍里。
 
+![图 1：OAM DMA 路径](../figures/oam-dma-path.svg)
+
+**图 1** · `nes_oam_dma` 的全景：`start` 锁存、四态状态机（含读-写交替与 `done` 回环）、513/514 周期账、总线握手与 `OAMADDR` 两种接法。事实来源 `rtl/nes_core/ppu/nes_oam_dma.v`。生成图，勿手改，见 [`../figures/`](../figures/)。
+
 ---
 
 ## 4. `start` 的锁存语义
