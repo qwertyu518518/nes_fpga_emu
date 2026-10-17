@@ -233,15 +233,15 @@ codec 寄存器表与时钟方案的逐项数据手册引用见 `rtl/nes_core/pe
 
 `nes_touch_input` 在 `sys_clk` 上，把 GT9147 电容屏变成 NES 手柄。引脚：`touch_scl`/`touch_sda`（**真 inout，开漏**，R19/P20）、`touch_rst_n`（M19）、`touch_int`（U19）。板载两个 PL 键 `key[1:0]`（L14/K16，**低有效**）与第三个离散按钮 `touch_key`（F16，**高有效**，不是触摸屏上的点）。输出 `touch_buttons[7:0]`，位序与 `nes_controller` 一致：`[7:4]` 是触摸 d-pad `{Up,Down,Left,Right}`，`[1:0]` 是 A/B，`[3:2]` 在 `touch_key` 按住时改当 Start/Select。
 
-驱动会**一次性自校准**：读 `16'h8048/8049` X Output Max、`16'h804A/804B` Y Output Max、`16'h804D` Module_Switch1 的 bit3（X2Y），据此推出 d-pad 的三个分区切点（`touch_x_max`/`touch_y_max`/`touch_x2y`/`touch_x_left_edge` 等是顶层内部 wire，**没有引出为端口**，只在仿真里读）。但它不在本仓库的模块文档里（`docs/modules/touch-input.md` 尚不存在），以 `rtl/nes_core/peripheral/nes_touch_input.v` 文件头为准。
+驱动会**一次性自校准**：读 `16'h8048/8049` X Output Max、`16'h804A/804B` Y Output Max、`16'h804D` Module_Switch1 的 bit3（X2Y），据此推出 d-pad 的三个分区切点（`touch_x_max`/`touch_y_max`/`touch_x2y`/`touch_x_left_edge` 等是顶层内部 wire，**没有引出为端口**，只在仿真里读）。接口合同与时序账见 [`touch-input.md`](touch-input.md)，RTL 细节以 `rtl/nes_core/peripheral/nes_touch_input.v` 文件头为准。
 
 ### 7.2 卡带（CHR-only 在顶层，PRG 在核内）
 
-`nes_cart_rom` 在本顶层实例化**一次**，只用 CHR 半边（`PRG_ENABLE(0)`、`CHR_ENABLE(1)`）：它的 `ce_ppu` 用核导出的 `core_ce_ppu`，它的 `chr_rdata` 驱动核的 `chr_rdata` 输入。PRG 半边在 `nes_system_v6` **内部**再实例化一次（`PRG_ENABLE=1`、`CHR_ENABLE=0`）。`ce_ppu` **逐字使用、绝不重新生成 `div_phase`**：除非模块疏忽，重生成会差 1..3 拍、在错误的 `ce_ppu` 沿锁存 `chr_addr`，静默返回上一个 pattern 字节（见 `nes_cart_rom.v` 文件头 CHR READ LATENCY）。ROM 内容来自 `$readmemh` 读的 hex 文件（`PRG_INIT_FILE`/`CHR_INIT_FILE`，默认是占位文件），**没有卡读取器、没有引导加载器**。细节见 `rtl/nes_core/cart/nes_cart_rom.v`（本仓库暂无 `docs/modules/cart-rom.md`）。
+`nes_cart_rom` 在本顶层实例化**一次**，只用 CHR 半边（`PRG_ENABLE(0)`、`CHR_ENABLE(1)`）：它的 `ce_ppu` 用核导出的 `core_ce_ppu`，它的 `chr_rdata` 驱动核的 `chr_rdata` 输入。PRG 半边在 `nes_system_v6` **内部**再实例化一次（`PRG_ENABLE=1`、`CHR_ENABLE=0`）。`ce_ppu` **逐字使用、绝不重新生成 `div_phase`**：除非模块疏忽，重生成会差 1..3 拍、在错误的 `ce_ppu` 沿锁存 `chr_addr`，静默返回上一个 pattern 字节（见 `nes_cart_rom.v` 文件头 CHR READ LATENCY）。ROM 内容来自 `$readmemh` 读的 hex 文件（`PRG_INIT_FILE`/`CHR_INIT_FILE`，默认是占位文件），**没有卡读取器、没有引导加载器**。细节见 [`cart-rom.md`](cart-rom.md) 与 `rtl/nes_core/cart/nes_cart_rom.v`。
 
 ### 7.3 视频（`nes_video_800x480` + RGB565→RGB888）
 
-写口 `core_clk`、读口 `lcd_clk`，`ce` 恒 1。800×480 有效区套在 1056×525 里，缩放精确（`800 = 256*3 + 32`，`32 = 256/8`；纵向 240→480 恰为 2:1）。PPU 与写口之间有**两级流水寄存器**，64 项调色板 LUT 夹在两级之间。写选通是 `core_ce_ppu && core_pixel_valid`：`core_pixel_valid` 是**电平**（一个 dot 持续 4 个核心钟），而 `nes_video_800x480` 在每个 `wr_clk` 沿只要 `in_valid` 高就写，所以要靠 `ce_ppu` 收敛成每 dot 一拍（详见 `rtl/nes_core/video/nes_video_800x480.v` 文件头；本仓库暂无 `docs/modules/video-800x480.md`）。
+写口 `core_clk`、读口 `lcd_clk`，`ce` 恒 1。800×480 有效区套在 1056×525 里，缩放精确（`800 = 256*3 + 32`，`32 = 256/8`；纵向 240→480 恰为 2:1）。PPU 与写口之间有**两级流水寄存器**，64 项调色板 LUT 夹在两级之间。写选通是 `core_ce_ppu && core_pixel_valid`：`core_pixel_valid` 是**电平**（一个 dot 持续 4 个核心钟），而 `nes_video_800x480` 在每个 `wr_clk` 沿只要 `in_valid` 高就写，所以要靠 `ce_ppu` 收敛成每 dot 一拍（详见 [`video-800x480.md`](video-800x480.md) 与 `rtl/nes_core/video/nes_video_800x480.v` 文件头）。
 
 RGB565→RGB888 用**全长位复制**：`{r5, r5[4:2]}`、`{g6, g6[5:4]}`、`{b5, b5[4:2]}`，所以 0→0、满→满、每通道单调。总线 `lcd_rgb` 双向，仅在 `vid_de` 高时驱动（`assign lcd_rgb = vid_de ? {lcd_r8,lcd_g8,lcd_b8} : 24'hz;`），红色落在 `[23:16]`。
 
@@ -303,4 +303,4 @@ RGB565→RGB888 用**全长位复制**：`{r5, r5[4:2]}`、`{g6, g6[5:4]}`、`{b
 - I2S 位流与组装层（32 `ce` 沿、`rd_clk`/`mclk` 同网、一位延迟）：`docs/modules/i2s-audio.md`。
 - WM8960 控制字（7 位地址 + 9 位数据、上电表）：`docs/modules/wm8960-i2c.md`。
 - NES 核与控制器位序：`docs/modules/system-v6.md`、`docs/modules/controller.md`。
-- 尚未存在的模块文档：`docs/modules/touch-input.md`、`docs/modules/cart-rom.md`、`docs/modules/video-800x480.md`，本文对应内容以 `rtl/nes_core/peripheral/nes_touch_input.v`、`rtl/nes_core/cart/nes_cart_rom.v`、`rtl/nes_core/video/nes_video_800x480.v` 的文件头为准。
+- 触摸、卡带、视频缩放三条：`docs/modules/touch-input.md`、`docs/modules/cart-rom.md`、`docs/modules/video-800x480.md`。本文对应内容仍以 `rtl/nes_core/peripheral/nes_touch_input.v`、`rtl/nes_core/cart/nes_cart_rom.v`、`rtl/nes_core/video/nes_video_800x480.v` 的文件头为准——**文档描述合同，文件头才是实现的可信来源**。

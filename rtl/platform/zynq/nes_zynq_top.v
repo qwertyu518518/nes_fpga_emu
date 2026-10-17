@@ -298,12 +298,19 @@ module nes_zynq_top #(
     //
     // A $readmemh that cannot find its file, or that finds a file of the wrong
     // length, leaves the array partly uninitialised and Vivado then optimises
-    // it away SILENTLY: the Block RAM Tile count falls from 50 to 0 and the
-    // design still meets timing and still places all 44 pins.  A bitstream built
-    // that way looks perfect and carries no cartridge.  tb_nes_zynq_top.v
-    // asserts the CHR array holds non-constant content; for a synthesis build
-    // the equivalent check is that report_utilization reports 50 Block RAM
-    // Tiles and not 0.
+    // it away SILENTLY: the Block RAM Tile count drops by the cartridge's own
+    // 18 tiles (16 PRG + 2 CHR) and the design still meets timing and still
+    // places all 53 pins.  A bitstream built that way looks perfect and carries
+    // no cartridge.  tb_nes_zynq_top.v asserts the CHR array holds
+    // non-constant content; for a synthesis build the equivalent check is the
+    // absolute tile count, which is 82 in this design (16 PRG + 2 CHR + 32 LCD
+    // frame_mem + 32 HDMI frame_mem), so a cartridge that failed to load shows
+    // 64 rather than 82.
+    //
+    // The older text here said the count "falls from 50 to 0" and that 44 pins
+    // are placed.  Both were true when this design had a single frame buffer and
+    // no HDMI; neither is true now, and "0" was never right for a whole-design
+    // count because the frame buffers are not part of the cartridge.
     //
     // NEITHER PATH IS RELOCATABLE BY ITSELF.  $readmemh resolves a relative path
     // against the SIMULATOR'S OR VIVADO'S WORKING DIRECTORY, not against this
