@@ -219,7 +219,7 @@ $zynqTopSources = @($zynqTopRtl, $zynqClkRtl, $touchInputRtl, $video800Rtl,
                     $hdmiTxRtl, $hdmiPrimSimRtl,
                     $zynqClkTbRtl) + $systemV6Sources + $audioI2sSources +
                    @($wm8960I2cRtl, $cartLoadBridgeRtl)
-$zynqTopTbSources = $zynqTopSources + @($zynqTopTbRtl)
+$zynqTopTbSources = $zynqTopSources + @($axiLiteRegsRtl, $zynqTopTbRtl)
 $zynqClkSources = @($zynqClkRtl)
 # The HDMI transmit core is mode-independent and not wired into the top level,
 # so its targets are self-contained: the encoder pair plus two elaborations that

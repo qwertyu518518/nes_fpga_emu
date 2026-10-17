@@ -18,7 +18,7 @@
 //   Lite) is required in front of it; that converter is a primitive instantiated
 //   in the block design, not vendor reference code copied into this repository.
 //
-// REGISTER MAP (32-bit, word addressed, offset = addr[4:2])
+// REGISTER MAP (32-bit, word addressed, offset = addr[C_S_AXI_ADDR_WIDTH-1:2])
 //   0x00  CTRL      RW  bit0 LOAD_EN, bit1 HOLD.  See CONSOLE HOLD below.
 //   0x04  SCRATCH   RW  general scratch; write/read-back proves the link.
 //   0x08  STATUS    RO  {24'b0, pl_status_in[7:0]}.
@@ -28,6 +28,14 @@
 //   0x14  PRG_DATA  WO  one AXI word of PRG bytes; auto-increments PRG_ADDR.
 //   0x18  CHR_ADDR  RW  byte address into the CHR array.
 //   0x1C  CHR_DATA  WO  one AXI word of CHR bytes; auto-increments CHR_ADDR.
+//   0x20  GAMEPAD   RW  USB gamepad button byte on pl_gamepad[7:0], WSTRB per
+//                       byte lane like every other writable register.  Added
+//                       after the eight load-path words, which are unchanged;
+//                       reaching 0x20 is why the address port is six bits wide
+//                       and the map is now 16 words.  It is deliberately NOT a
+//                       reuse of SCRATCH: the application's link check writes
+//                       four patterns through SCRATCH and must not race the
+//                       gamepad's per-report writes.
 //   Writes to a RO register are decoded and acknowledged (OKAY) and dropped,
 //   which is legal for a read-only register.
 //
@@ -72,7 +80,11 @@
 
 module axi_lite_regs #(
     parameter integer C_S_AXI_DATA_WIDTH = 32,
-    parameter integer C_S_AXI_ADDR_WIDTH = 5,
+    // Six bits so the map reaches 0x20 (GAMEPAD).  Five bits stopped at 0x1C.
+    // IMPORTANT: 5 is still a legal override and is what the load-only benches
+    // use; the decode below is written against C_S_AXI_ADDR_WIDTH generally, and
+    // with only 5 bits the GAMEPAD case simply never selects.
+    parameter integer C_S_AXI_ADDR_WIDTH = 6,
     parameter integer PRG_ADDR_BITS = 17,
     parameter integer CHR_ADDR_BITS = 13,
     // Must be >= max(PRG_ADDR_BITS, CHR_ADDR_BITS).  A parameter rather than a
@@ -138,17 +150,23 @@ module axi_lite_regs #(
     output wire [ADDR_W-1:0]             pl_ld_addr,
     output wire [7:0]                    pl_ld_data,
     input  wire                          pl_ld_ready,
-    input  wire [7:0]                    pl_status_in
+    input  wire [7:0]                    pl_status_in,
+    // Gamepad button byte from the GAMEPAD register (0x20), low 8 bits.  Plain
+    // level, no handshake: the top ORs it with the touch panel's byte and then
+    // crosses the sum to the core clock domain with its button synchroniser.
+    output wire [7:0]                    pl_gamepad
 );
 
     // ---------------------------------------------------------------- registers
     reg [31:0]               reg_ctrl;
     reg [31:0]               reg_scratch;
+    reg [31:0]               reg_gamepad;
     reg [PRG_ADDR_BITS-1:0]  prg_addr_reg;
     reg [CHR_ADDR_BITS-1:0]  chr_addr_reg;
 
     assign pl_load_enable  = reg_ctrl[0];
     assign pl_console_hold = reg_ctrl[1] | reg_ctrl[0];
+    assign pl_gamepad      = reg_gamepad[7:0];
 
     // ------------------------------------------------------------ write channel
     reg                            aw_seen;
@@ -183,8 +201,8 @@ module axi_lite_regs #(
     // the same cycle, and it is caught here because this bench does.
     wire commit  = aw_seen & w_seen & ~s_axi_bvalid & ~ld_pending;
 
-    wire [2:0] waddr_sel  = awaddr_q[4:2];
-    wire       is_ld_reg  = (waddr_sel == 3'd5) | (waddr_sel == 3'd7);
+    wire [C_S_AXI_ADDR_WIDTH-3:0] waddr_sel = awaddr_q[C_S_AXI_ADDR_WIDTH-1:2];
+    wire       is_ld_reg  = (waddr_sel == 4'd5) | (waddr_sel == 4'd7);
     wire       start_load = commit & is_ld_reg & reg_ctrl[0] & (|wstrb_q);
 
     function [31:0] apply_strb;
@@ -245,6 +263,7 @@ module axi_lite_regs #(
             s_axi_bresp  <= 2'b00;
             reg_ctrl     <= 32'h00000000;
             reg_scratch  <= 32'h00000000;
+            reg_gamepad  <= 32'h00000000;
             prg_addr_reg <= {PRG_ADDR_BITS{1'b0}};
             chr_addr_reg <= {CHR_ADDR_BITS{1'b0}};
             ld_pending   <= 1'b0;
@@ -279,14 +298,15 @@ module axi_lite_regs #(
                     s_axi_bvalid <= 1'b1;
                     s_axi_bresp  <= 2'b00;
                     case (waddr_sel)
-                        3'd0:    reg_ctrl     <= apply_strb(reg_ctrl,    wdata_q, wstrb_q);
-                        3'd1:    reg_scratch  <= apply_strb(reg_scratch, wdata_q, wstrb_q);
-                        3'd2:    ; // status, read only
-                        3'd3:    ; // id, read only
-                        3'd4:    prg_addr_reg <= wdata_q[PRG_ADDR_BITS-1:0];
-                        3'd5:    ; // PRG_DATA with LOAD_EN low, or WSTRB 0: dropped
-                        3'd6:    chr_addr_reg <= wdata_q[CHR_ADDR_BITS-1:0];
-                        3'd7:    ; // CHR_DATA with LOAD_EN low, or WSTRB 0: dropped
+                        4'd0:    reg_ctrl     <= apply_strb(reg_ctrl,    wdata_q, wstrb_q);
+                        4'd1:    reg_scratch  <= apply_strb(reg_scratch, wdata_q, wstrb_q);
+                        4'd2:    ; // status, read only
+                        4'd3:    ; // id, read only
+                        4'd4:    prg_addr_reg <= wdata_q[PRG_ADDR_BITS-1:0];
+                        4'd5:    ; // PRG_DATA with LOAD_EN low, or WSTRB 0: dropped
+                        4'd6:    chr_addr_reg <= wdata_q[CHR_ADDR_BITS-1:0];
+                        4'd7:    ; // CHR_DATA with LOAD_EN low, or WSTRB 0: dropped
+                        4'd8:    reg_gamepad  <= apply_strb(reg_gamepad, wdata_q, wstrb_q);
                         default: ;
                     endcase
                 end
@@ -322,15 +342,16 @@ module axi_lite_regs #(
     reg [C_S_AXI_DATA_WIDTH-1:0] rdata_n;
 
     always @(*) begin
-        case (s_axi_araddr[4:2])
-            3'd0:    rdata_n = reg_ctrl;
-            3'd1:    rdata_n = reg_scratch;
-            3'd2:    rdata_n = {24'b0, pl_status_in};
-            3'd3:    rdata_n = 32'h4E455301;
-            3'd4:    rdata_n = {{(32-PRG_ADDR_BITS){1'b0}}, prg_addr_reg};
-            3'd5:    rdata_n = 32'h00000000;
-            3'd6:    rdata_n = {{(32-CHR_ADDR_BITS){1'b0}}, chr_addr_reg};
-            3'd7:    rdata_n = 32'h00000000;
+        case (s_axi_araddr[C_S_AXI_ADDR_WIDTH-1:2])
+            4'd0:    rdata_n = reg_ctrl;
+            4'd1:    rdata_n = reg_scratch;
+            4'd2:    rdata_n = {24'b0, pl_status_in};
+            4'd3:    rdata_n = 32'h4E455301;
+            4'd4:    rdata_n = {{(32-PRG_ADDR_BITS){1'b0}}, prg_addr_reg};
+            4'd5:    rdata_n = 32'h00000000;
+            4'd6:    rdata_n = {{(32-CHR_ADDR_BITS){1'b0}}, chr_addr_reg};
+            4'd7:    rdata_n = 32'h00000000;
+            4'd8:    rdata_n = reg_gamepad;
             default: rdata_n = 32'hDEADBEEF;
         endcase
     end

@@ -250,10 +250,20 @@
 //   instead of from the image baked into the bitstream.  The PS-side half of
 //   that feature -- the AXI4-Lite register bank axi_lite_regs.v and the
 //   FSBL/app/BOOT.bin that drive it -- lives in tools/ps/ and the block design
-//   built there.  This module owns the PL half of the crossing: the seven
+//   built there.  This module owns the PL half of the crossing: the seven load
 //   ps_* ports below carry the AXI-side request handshake, and the
 //   nes_cart_load_bridge instance near the cartridge carries each byte into the
 //   core clock domain.
+//
+//   An eighth ps_* port, ps_gamepad, carries the USB gamepad button byte.  It
+//   is a plain sys_clk level from axi_lite_regs' GAMEPAD register (0x20); it is
+//   ORed with the touch panel's byte in the sys_clk domain and the sum crosses
+//   into the core domain through the SAME two-flop synchroniser the touch
+//   buttons already use (btn_meta_q/btn_sync_q).  The rule is OR, not override:
+//   the touch panel and TPAD are proven inputs and a gamepad must be able to
+//   play alongside them, not silently disable them.  The gamepad register's
+//   launch arc needs its own bounded CDC constraint (the source XDC bounds the
+//   touch half); see the gamepad block in build_ps.tcl's derived XDC.
 //
 //   The seven ports are in the sys_clk domain, which in the block design is
 //   driven by the PS FCLK_CLK0.  They are inert whenever ps_load_enable is low,
@@ -393,7 +403,12 @@ module nes_zynq_top #(
     input  wire [7:0]  ps_ld_data,
     output wire        ps_ld_ready,
     input  wire        ps_load_enable,
-    input  wire        ps_console_hold
+    input  wire        ps_console_hold,
+    // USB gamepad button byte from axi_lite_regs' GAMEPAD register (0x20), in
+    // the sys_clk domain.  See the PS CARTRIDGE LOAD PATH header block.  Tied
+    // to 8'h00 by every board-independent instance, so an unmodified testbench
+    // or PL-only wrapper behaves exactly as before.
+    input  wire [7:0]  ps_gamepad
 );
 
     // ------------------------------------------------------------------ 复位
@@ -589,6 +604,15 @@ module nes_zynq_top #(
     // The only non-pixel cross-domain path in the design: sys_clk -> core_clk.
     // ASYNC_REG keeps the two stages adjacent and gives the tool the
     // metastability attribute it needs to place them together.
+    //
+    // Two sys_clk sources are combined BEFORE the crossing: the touch panel
+    // byte and the USB gamepad byte from the AXI GAMEPAD register.  Combining
+    // in the source domain and crossing the sum once is deliberate.  Both
+    // sources are sys_clk, so the OR is an intra-domain operation; crossing
+    // them separately and ORing in the core domain would let the two crossings
+    // sample different reports.  The rule is OR: a gamepad augments the touch
+    // panel and TPAD, it does not replace them.  (Override would silently drop
+    // a working, hardware-verified input path whenever a pad reported.)
     (* ASYNC_REG = "TRUE" *) reg [7:0] btn_meta_q;
     (* ASYNC_REG = "TRUE" *) reg [7:0] btn_sync_q;
 
@@ -597,7 +621,7 @@ module nes_zynq_top #(
             btn_meta_q <= 8'h00;
             btn_sync_q <= 8'h00;
         end else begin
-            btn_meta_q <= touch_buttons;
+            btn_meta_q <= touch_buttons | ps_gamepad;
             btn_sync_q <= btn_meta_q;
         end
     end

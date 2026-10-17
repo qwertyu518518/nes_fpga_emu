@@ -3,16 +3,20 @@
 This is the USB HID gamepad path for the Zynq PS bare-metal application. It
 brings USB0 up in **host** mode, enumerates one attached HID gamepad, and polls
 its interrupt IN endpoint, mapping each report to the NES controller byte and
-writing it into the existing AXI register bank.
+writing it into the AXI register bank's dedicated `GAMEPAD` register (0x20). The
+PL combines that register with the touch panel and delivers it to the console,
+so a written button byte now reaches `nes_system_v6.buttons1`.
 
 It is built on the BSP's **`xusbps`** driver (a driver library, like `xsdps`),
 not on any copied vendor RTL. There is **no vendor USB example anywhere** for
 this board, so unlike the SD path this is original work with no reference.
 
-> **This half has never touched hardware.** No device has been attached, no
-> enumeration has run, no button press has reached the NES. The structure is
-> built so that as much as possible is testable on the host and so that every
-> failure names its stage; what remains unverified is stated at the end.
+> **This half has never touched hardware.** No device has been attached and no
+> enumeration has run. The PL delivery path is now simulated -- a byte written to
+> `GAMEPAD` reaches `nes_system_v6.buttons1` -- but no button press has ever come
+> from a real device. The structure is built so that as much as possible is
+> testable on the host and so that every failure names its stage; what remains
+> unverified is stated at the end.
 
 ---
 
@@ -167,31 +171,48 @@ the image and released the console (`CTRL = 0`) does `main()` call
 `run_gamepad()`. This is a deliberate, single-threaded decision:
 
 * the console is held during the load, so no input is needed then;
-* the loader's `SCRATCH` link check and the gamepad's `SCRATCH` button writes
-  never overlap;
+* the loader's `SCRATCH` link check and the gamepad's `GAMEPAD` (0x20) button
+  writes are different registers and can never race;
 * the loader path is byte-for-byte the code that was already gated.
 
 If the loader fails it still stops before the gamepad, exactly as before.
 
-## 8. The register the buttons go through, and the finding
+## 8. The register the buttons go through, and how they reach the console
 
-The register bank does not have a dedicated button register, and all eight word
-offsets are allocated (CTRL, SCRATCH, STATUS, ID, PRG_ADDR, PRG_DATA, CHR_ADDR,
-CHR_DATA). No **new** register is needed to carry the buttons: `SCRATCH` (0x04)
-is a general-purpose RW register that is free after the boot-time link check, so
-the gamepad writes the NES byte into `SCRATCH[7:0]`. That write is real and
-read-back-verifiable over the existing AXI path.
+The gamepad writes a dedicated **`GAMEPAD` register at offset 0x20**, not
+`SCRATCH`. `SCRATCH` (0x04) belongs to the boot-time link check, which writes
+four patterns through it to prove the PS<->PL link; the gamepad writes a byte per
+report, so sharing one register would race the two. `GAMEPAD` is a plain RW word
+with per-byte WSTRB semantics like every other writable register. It is the ninth
+word, which is why the AXI address port widened from five bits to six; the
+existing eight words are unchanged.
 
-**Finding:** the register bank is sufficient to *carry* the byte, but it does
-**not** currently *deliver* it to the console. `nes_zynq_top.v` feeds
-`nes_system_v6.buttons1` from the touch panel only (`btn_sync_q`), and no AXI
-register reaches it; `build_ps.tcl` even notes *"the repo axi_lite_regs has no
-GPIO key output"*. Delivering the buttons needs a PL change -- sample
-`reg_scratch[7:0]` into `buttons1` (muxed with the touch panel) -- which means
-editing `rtl/`. That is forbidden by this task's constraints, so it was **not**
-done. Until it is, a gamepad write reaches `SCRATCH` but no button press reaches
-the NES. This is a one-wire change and is the whole remaining gap on the PL
-side.
+**The register now reaches the controller.** `axi_lite_regs` brings the low byte
+out as `pl_gamepad[7:0]`; `build_ps.tcl` connects it to `nes_zynq_top.ps_gamepad`;
+and `nes_zynq_top` ORs it with the touch panel's byte **in the `sys_clk` domain**
+and crosses the sum into the core domain through the same two-flop synchroniser
+the touch buttons already used (`btn_meta_q`/`btn_sync_q`). Combining in the
+source domain and crossing once is deliberate: both sources are `sys_clk`, so
+crossing them separately and ORing in the core could sample two different
+reports.
+
+**The rule is OR, not override.** The touch panel and the on-board TPAD are
+proven inputs that work on hardware today; a gamepad must be able to play
+alongside them, not silently disable them whenever a pad reports. Override would
+mean that plugging in a gamepad (or a stray HID report) drops the panel. The OR
+also matches what a user expects from two attached input devices. The gamepad
+register's launch arc is a new `sys_clk -> mmcm_core_clk` crossing, so it gets
+its own bounded `set_max_delay -datapath_only 20.000` in the derived XDC (the
+source XDC already bounds the touch half).
+
+**Coverage.** `tb/platform/tb_nes_zynq_top.v` instantiates the real
+`axi_lite_regs` slave (exactly as the block design does), performs a real AXI
+write into 0x20, and requires the value at `nes_system_v6.buttons1`; it then
+holds the gamepad and the touch keys active together and requires the OR
+(`touch 0x03 | gamepad 0x0C == 0x0F`). Removing the PL connection makes that
+assertion fail (`GP_BTN_AT_CORE`, `GP_OR_ARBITRATION`), so it is not vacuous.
+`tb/platform/tb_axi_lite_regs.v` additionally pins the register's WSTRB lanes and
+its `pl_gamepad` output.
 
 ## 9. What is verified, and what is not
 
@@ -202,13 +223,21 @@ side.
   counters above;
 * the three application sources compile cleanly with the ARM toolchain
   (`-Wall -Wextra`);
+* the PL delivery path is simulated: a real AXI write into `GAMEPAD` (0x20)
+  appears at `nes_system_v6.buttons1`, and the gamepad/touch combination is the
+  OR (section 8). This assertion fails against RTL without the connection, so it
+  is not vacuous;
+* the full simulation gate passes (`sim_all.ps1 -Mode all`, 73/73);
 * the PS flow still builds end to end (block design, bitstream, FSBL,
   application, `BOOT.bin`); see section 10.
 
 **Not verified -- and cannot be, here:**
 
 * **Nothing has run on hardware.** No USB device has ever been attached, no
-  enumeration has ever run, and no button press has ever reached the NES.
+  enumeration has ever run, and no button press has ever reached the NES. What
+  is now proven is only that a byte written to `GAMEPAD` *can* reach the
+  console's controller input; nothing proves that byte was ever produced by a
+  real device.
 * Host-mode entry, root-port power, connect detection and port reset.
 * Every control transfer and the driver's host-side device-address bookkeeping
   (`xusbps` has no host-mode address API; see section 3).
@@ -216,23 +245,30 @@ side.
 * The real descriptor and report layout of any device.
 * That `SET_IDLE`, `SET_ADDRESS`, `SET_CONFIGURATION` are accepted by any
   device.
-* Whether `SCRATCH` is ever wired to `buttons1` (section 8 -- not done).
+* The gamepad register's `sys_clk -> core_clk` crossing has not been routed and
+  timing-closed yet in isolation; the derived-XDC bound is in place, and the
+  routed build is checked against it (section 10).
 
 ## 10. Build result
 
 Rebuilt with this change through the existing scripts (`run_build.ps1 -Mode
-full`, then `run_sdk.ps1`):
+full`, then `run_sdk.ps1`), now including the PL delivery path:
 
 | Artefact | Value |
 | --- | --- |
 | Block design | validates; synthesis/implementation 0 errors |
-| Bitstream `ps_nes.bit` | 4,045,674 bytes (unchanged -- no `rtl/` change) |
-| Routed utilisation | 42,055 LUT / 40,378 FF / 82 BRAM (unchanged) |
+| Routed timing | **WNS +2.626 ns, 0 failing setup endpoints** (of 85,915); WHS +0.065, 0 hold; all user constraints met |
+| Routed utilisation | 42,073 LUT / 40,411 FF / **82 Block RAM Tile / RAMB18 = 0** |
+| CHR/PRG arrays | still in block RAM: `u_prg_rom` RAMB36 = 16, `u_cart_chr` RAMB36 = 2, RAMB18 = 0 for both |
+| Bitstream `ps_nes.bit` | 4,045,674 bytes |
 | FSBL `fsbl.elf` | 537,276 bytes |
-| Application `loader_app.elf` | 492,112 bytes (grew: now carries `usb_hid.c`, `usb_gamepad.c`, xusbps) |
-| `BOOT.bin` | **4,215,424 bytes**, SHA256 `CD4F682A1180EC80C23D67B279B84977D85EB35026EEC83635EDEEEE41A5B39D` |
+| Application `loader_app.elf` | 492,156 bytes |
+| `BOOT.bin` | **4,215,424 bytes**, SHA256 `0A560ED84682B22EA331D4AD4CD06583E3E47B4EFE5BCFBD760262F93785310F` |
 
 `BOOT.bin` is the same three-partition image (FSBL + application + PL bitstream)
-the SD boot flow consumes. The PL is byte-for-byte the previous build because
-`rtl/` was not touched, so the bitstream and utilisation figures are unchanged;
-only the application grew.
+the SD boot flow consumes. The gamepad register crossing adds one
+`sys_clk -> mmcm_core_clk` path set, bounded in the derived XDC (see section 8);
+with that bound the routed design has 0 failing endpoints. The first attempt
+left the bound inside an `if`, which the XDC language silently rejects
+(`Designutils 20-1307`), and those eight `reg_gamepad_reg -> btn_meta_q_reg`
+endpoints failed at WNS -2.429 ns until the `if` was removed.

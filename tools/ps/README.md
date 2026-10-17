@@ -108,9 +108,9 @@ iNES header, short read on PRG, short read on CHR.
 
 After the console is released the application brings USB0 up in **host** mode,
 enumerates one HID gamepad over the BSP `xusbps` driver, and polls its interrupt
-IN endpoint, mapping each report to the NES button byte and writing it into
-`SCRATCH[7:0]`. The loader runs first and is unchanged; the gamepad only starts
-once the console is running. Full detail is in
+IN endpoint, mapping each report to the NES button byte and writing it into the
+dedicated `GAMEPAD` register (0x20). The loader runs first and is unchanged; the
+gamepad only starts once the console is running. Full detail is in
 [`docs/modules/ps-usb-gamepad.md`](../../docs/modules/ps-usb-gamepad.md).
 
 * The pure logic (configuration-descriptor walk, HID report descriptor,
@@ -120,14 +120,15 @@ once the console is running. Full detail is in
 * **P4 "OTG SW" jumper.** The four Type-A host ports are only live in host mode,
   which the P4 jumper selects. A user who has not set P4 for host routing will
   see no device and no enumeration -- there is no software workaround.
-* **Finding -- the buttons do not yet reach the NES.** The register bank is
-  sufficient to *carry* the byte in `SCRATCH`, and the write is real and
-  read-back-verifiable, but `nes_zynq_top.v` feeds `buttons1` from the touch
-  panel only; no AXI register reaches it. Delivering the buttons needs a
-  one-wire PL change (`reg_scratch[7:0]` -> `buttons1`, muxed with the touch
-  pad), which means editing `rtl/`. This task must not edit `rtl/`, so it was
-  not made. Until it is, a gamepad write reaches `SCRATCH` but no button press
-  reaches the NES.
+* **The buttons now reach the NES.** `GAMEPAD` (0x20) is brought out of the
+  slave as `pl_gamepad[7:0]`, connected in `build_ps.tcl` to `nes_zynq_top`, and
+  ORed there with the touch panel's byte (OR, not override: the panel and TPAD
+  are proven inputs and must keep working) before the sum crosses into the core
+  domain and drives `nes_system_v6.buttons1`. The zynq-top bench writes 0x20
+  through a real AXI transaction and requires the value at the console's
+  controller input, and fails against RTL without the connection. What is still
+  unverified is hardware: no USB device has been attached and no enumeration has
+  run.
 
 ## Boot mode
 

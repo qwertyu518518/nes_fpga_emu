@@ -148,7 +148,10 @@ module tb_nes_audio_lane;
         .ps_ld_data      (8'h00),
         .ps_ld_ready     (),
         .ps_load_enable  (1'b0),
-        .ps_console_hold (1'b0)
+        .ps_console_hold (1'b0),
+        // No AXI gamepad slave in this bench; the audio lane does not read
+        // buttons1, so the gamepad byte is tied idle.
+        .ps_gamepad      (8'h00)
     );
 
     pullup pu_touch_sda (touch_sda);

@@ -23,6 +23,7 @@
  *   0x14 PRG_DATA  WO  one word, byte lanes selected by WSTRB
  *   0x18 CHR_ADDR  RW  byte address, auto-increments by 4 per data word
  *   0x1C CHR_DATA  WO  one word, byte lanes selected by WSTRB
+ *   0x20 GAMEPAD   RW  USB gamepad NES button byte (low 8 bits)
  *
  * FAILURE POLICY
  *   Each failure is reported distinctly over UART0 and the console is NOT
@@ -33,19 +34,18 @@
  * USB GAMEPAD (added after the loader is unchanged)
  *   When the console has been released this app brings USB0 up in host mode,
  *   enumerates one HID gamepad, and polls its interrupt IN endpoint, mapping
- *   each report to the NES button byte and writing it into the low byte of the
- *   existing SCRATCH register (0x04).  The loader runs FIRST and completes
- *   before any USB work starts, so nothing in the load path changes and the
- *   SCRATCH link check is never raced.  See usb_gamepad.c and the "USB gamepad"
- *   section of tools/ps/README.md.
+ *   each report to the NES button byte and writing it into the GAMEPAD
+ *   register (0x20).  The loader runs FIRST and completes before any USB work
+ *   starts, so nothing in the load path changes and the SCRATCH link check is
+ *   never raced.  See usb_gamepad.c and the "USB gamepad" section of
+ *   tools/ps/README.md.
  *
- *   NOTE ON THE REGISTER: the register bank is used to CARRY the buttons, but
- *   it does not yet deliver them to the controller -- nes_zynq_top.v feeds
- *   nes_system_v6.buttons1 from the touch panel only, and no AXI register
- *   reaches it.  Writing SCRATCH is real and read-back-verifiable, but a
- *   one-wire PL change (sample reg_scratch[7:0] into buttons1) is required
- *   before a button press can reach the NES.  That change is deliberately NOT
- *   made: this task must not edit rtl/.  See the finding in tools/ps/README.md.
+ *   NOTE ON THE REGISTER: GAMEPAD is a dedicated register, not a reuse of
+ *   SCRATCH -- the link check owns SCRATCH.  In the PL, nes_zynq_top ORs
+ *   pl_gamepad[7:0] with the touch panel's button byte and crosses the sum into
+ *   the core domain, so a write here now reaches nes_system_v6.buttons1.  The
+ *   rule is OR: a gamepad plays alongside the touch panel and TPAD rather than
+ *   replacing them.  See docs/modules/ps-usb-gamepad.md.
  */
 
 #include <string.h>
@@ -67,6 +67,7 @@
 #define REG_PRG_DATA   (AXI_REG_BASE + 0x14u)
 #define REG_CHR_ADDR   (AXI_REG_BASE + 0x18u)
 #define REG_CHR_DATA   (AXI_REG_BASE + 0x1Cu)
+#define REG_GAMEPAD    (AXI_REG_BASE + 0x20u)
 
 #define AXI_REG_ID_EXPECTED  0x4E455301u
 
@@ -161,9 +162,10 @@ static u32 read_region(u32 n, u32 data_reg)
 }
 
 /* Bring up the USB gamepad and then poll it forever, writing the mapped NES
- * button byte into SCRATCH[7:0].  Called only after the console has been
- * released, so the loader has already finished and SCRATCH is free.  Every
- * failure below prints a stage name; there is no silent stall. */
+ * button byte into GAMEPAD[7:0] (0x20).  The loader runs first, so SCRATCH is
+ * left to its link check and is never written here.  Called only after the
+ * console has been released.  Every failure below prints a stage name; there is
+ * no silent stall. */
 static void run_gamepad(void)
 {
     int st;
@@ -193,8 +195,8 @@ static void run_gamepad(void)
                    (unsigned)info.max_packet_size, (unsigned)info.interval,
                    (unsigned)info.report_bytes, info.is_gamepad);
     }
-    xil_printf("PAD: polling; buttons -> SCRATCH[7:0] @ 0x%08x\r\n",
-               (unsigned)REG_SCRATCH);
+    xil_printf("PAD: polling; buttons -> GAMEPAD[7:0] @ 0x%08x\r\n",
+               (unsigned)REG_GAMEPAD);
 
     for (;;) {
         st = usb_gamepad_poll(&buttons);
@@ -205,7 +207,7 @@ static void run_gamepad(void)
             continue;
         }
         if (buttons != prev) {
-            Xil_Out32(REG_SCRATCH, (u32)buttons);
+            Xil_Out32(REG_GAMEPAD, (u32)buttons);
             prev = buttons;
         }
     }

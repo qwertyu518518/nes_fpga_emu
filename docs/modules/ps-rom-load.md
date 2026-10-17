@@ -21,7 +21,7 @@ that is a primitive instantiated in the block design, not vendor reference code.
 
 ## Register map
 
-Base address 0x4120_0000, 32-bit words, offset = `addr[4:2]`.
+Base address 0x4120_0000, 32-bit words, offset = `addr[5:2]`.
 
 | Offset | Register | Access | Meaning |
 | --- | --- | --- | --- |
@@ -33,6 +33,19 @@ Base address 0x4120_0000, 32-bit words, offset = `addr[4:2]`.
 | 0x14 | PRG_DATA | WO | one word of PRG bytes, WSTRB per lane |
 | 0x18 | CHR_ADDR | RW | byte address into CHR |
 | 0x1C | CHR_DATA | WO | one word of CHR bytes, WSTRB per lane |
+| 0x20 | GAMEPAD | RW | USB gamepad NES button byte on `pl_gamepad[7:0]`, WSTRB per lane |
+
+The eight load-path words are unchanged. `GAMEPAD` is an **addition** above them
+at 0x20, which is why the address port widened from five bits (0x00..0x1C) to
+six (0x00..0x3C) and the map is now sixteen words; the four low words and the
+decode of 0x00..0x1C behave exactly as before. `GAMEPAD` is deliberately **not**
+a reuse of `SCRATCH`: the application's link check writes four patterns through
+`SCRATCH`, and the gamepad writes a byte per report, so overloading one register
+would race the two. In the top, `pl_gamepad[7:0]` is ORed with the touch panel's
+button byte in the `sys_clk` domain and the sum crosses into the core domain
+through the existing button synchroniser, reaching `nes_system_v6.buttons1`. See
+`ps-usb-gamepad.md` §8 for the arbitration rule and why it is OR.
+
 
 ## The load path, and why the arrays stay byte-wide
 
@@ -55,7 +68,7 @@ synchronised enable is high; and the cartridge only writes while its load enable
 high. With LOAD_EN clear a `PRG_DATA`/`CHR_DATA` write is acknowledged and dropped --
 nothing reaches either array. Every pre-existing instance leaves the load ports
 unconnected, and an unconnected input is `z`, which the load gate reads as "not
-selected", so the 69-target gate passes with the RTL unmodified.
+selected", so the 73-target gate passes with the RTL unmodified.
 
 `pl_console_hold = ctrl[1] | ctrl[0]`: LOAD_EN implies HOLD, so the same bit that
 lets bytes reach the arrays also holds the CPU and PPU in reset for the whole load.
@@ -107,7 +120,7 @@ it.
 | id | what | group | Run |
 | --- | --- | --- | --- |
 | `axi-lite-regs-core` | `axi_lite_regs` elaboration | platform | no |
-| `axi-lite-regs-tb` | five-channel handshake, WSTRB, OKAY responses, load transactions, inert gate | platform | yes |
+| `axi-lite-regs-tb` | five-channel handshake, WSTRB, OKAY responses, load transactions, inert gate, GAMEPAD register RW/WSTRB | platform | yes |
 | `cart-load-core` | `nes_cart_load_bridge` elaboration | cart | no |
 | `cart-rom-load-tb` | AXI -> bridge -> PRG/CHR arrays; core executes the loaded image | cart | yes |
 

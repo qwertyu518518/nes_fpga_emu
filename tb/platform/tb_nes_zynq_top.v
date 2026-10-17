@@ -31,6 +31,15 @@
 //      answers the status and coordinate register reads; the bus is then watched
 //      for the whole run so a push-pull driver cannot hide in a quiet window.
 //
+//   6. The USB gamepad lane, end to end.  The bench instantiates the real
+//      axi_lite_regs slave (as the block design does) and drives it with real
+//      AXI transactions; a write to GAMEPAD (0x20) must appear at
+//      nes_system_v6.buttons1.  It also holds the gamepad and the touch panel
+//      active together and requires the OR of the two, which pins the
+//      arbitration rule and not just the wiring.  Before the PL connection
+//      existed this assertion fails (the register was written but reached
+//      nothing) -- that failure is the evidence it is not vacuous.
+//
 // ANTI-CIRCULARITY ON THE PALETTE
 //   The expected values are built from a SECOND, independent transcription of
 //   .slim/clonedeps/repos/caseif__cNES/src/ppu.c:94-111 as RGB888 triples,
@@ -137,6 +146,11 @@ module tb_nes_zynq_top;
     reg core_frame_d_r;
     reg lcd_frame_p_r;
 
+    // USB gamepad test state.
+    integer gp_guard;
+    reg [7:0]  gp_pattern;
+    reg [31:0] gp_rd;
+
     // touch_scl and touch_sda are the open-drain side of the panel I2C bus.  The
     // bench models the panel side pull-up on BOTH lines so neither is ever Z:
     // nes_zynq_top.xdc constrains the two pins with no PULLUP anywhere, so the
@@ -175,7 +189,72 @@ module tb_nes_zynq_top;
         .ps_ld_data      (8'h00),
         .ps_ld_ready     (),
         .ps_load_enable  (1'b0),
-        .ps_console_hold (1'b0)
+        .ps_console_hold (1'b0),
+        // USB gamepad byte, driven below through a real AXI4-Lite slave.  This
+        // is the block-design boundary reproduced in the bench: axi_lite_regs is
+        // not inside nes_zynq_top, so to test the real path the slave has to be
+        // instantiated here, exactly as build_ps.tcl instantiates it.
+        .ps_gamepad      (gp_buttons)
+    );
+
+    // -------------------------------------------------------------------------
+    // The AXI4-Lite register bank that owns GAMEPAD (0x20), on the same clock
+    // and reset the block design gives it.  The gamepad test writes it with a
+    // real AXI transaction and then observes the console's controller port, so
+    // nothing on the path under test is a forced internal.
+    // -------------------------------------------------------------------------
+    reg  [5:0]  gp_awaddr;
+    reg         gp_awvalid;
+    reg  [2:0]  gp_awprot;
+    reg  [31:0] gp_wdata;
+    reg  [3:0]  gp_wstrb;
+    reg         gp_wvalid;
+    reg         gp_bready;
+    reg  [5:0]  gp_araddr;
+    reg         gp_arvalid;
+    reg  [2:0]  gp_arprot;
+    reg         gp_rready;
+    wire        gp_awready;
+    wire        gp_wready;
+    wire [1:0]  gp_bresp;
+    wire        gp_bvalid;
+    wire        gp_arready;
+    wire [31:0] gp_rdata;
+    wire [1:0]  gp_rresp;
+    wire        gp_rvalid;
+    wire [7:0]  gp_buttons;
+
+    axi_lite_regs u_gp_regs (
+        .s_axi_aclk      (sys_clk),
+        .s_axi_aresetn   (sys_rst_n),
+        .s_axi_awaddr    (gp_awaddr),
+        .s_axi_awprot    (gp_awprot),
+        .s_axi_awvalid   (gp_awvalid),
+        .s_axi_awready   (gp_awready),
+        .s_axi_wdata     (gp_wdata),
+        .s_axi_wstrb     (gp_wstrb),
+        .s_axi_wvalid    (gp_wvalid),
+        .s_axi_wready    (gp_wready),
+        .s_axi_bresp     (gp_bresp),
+        .s_axi_bvalid    (gp_bvalid),
+        .s_axi_bready    (gp_bready),
+        .s_axi_araddr    (gp_araddr),
+        .s_axi_arprot    (gp_arprot),
+        .s_axi_arvalid   (gp_arvalid),
+        .s_axi_arready   (gp_arready),
+        .s_axi_rdata     (gp_rdata),
+        .s_axi_rresp     (gp_rresp),
+        .s_axi_rvalid    (gp_rvalid),
+        .s_axi_rready    (gp_rready),
+        .pl_console_hold (),
+        .pl_load_enable  (),
+        .pl_ld_valid     (),
+        .pl_ld_target    (),
+        .pl_ld_addr      (),
+        .pl_ld_data      (),
+        .pl_ld_ready     (1'b1),
+        .pl_status_in    (8'h00),
+        .pl_gamepad      (gp_buttons)
     );
 
     task err;
@@ -186,6 +265,46 @@ module tb_nes_zynq_top;
             errors = errors + 1;
             if (errors <= 30)
                 $display("VIOLATION %0s a=%0d b=%0d t=%0t", code, a, b, $time);
+        end
+    endtask
+
+    // One AXI4-Lite write to the gamepad slave (AW and W presented together, as
+    // the block design's single-outstanding master does).  Returns after BVALID.
+    task gp_write;
+        input [5:0]  a;
+        input [31:0] d;
+        input [3:0]  s;
+        begin
+            @(negedge sys_clk);
+            gp_awaddr = a; gp_awvalid = 1'b1; gp_awprot = 3'b000;
+            gp_wdata = d; gp_wstrb = s; gp_wvalid = 1'b1;
+            gp_bready = 1'b0;
+            @(posedge sys_clk);
+            while (!gp_bvalid) @(posedge sys_clk);
+            if (gp_bresp !== 2'b00) err("GP_BRESP", gp_bresp, 0);
+            @(negedge sys_clk);
+            gp_awvalid = 1'b0; gp_wvalid = 1'b0; gp_bready = 1'b1;
+            @(posedge sys_clk);
+            @(negedge sys_clk);
+            gp_bready = 1'b0;
+        end
+    endtask
+
+    task gp_read;
+        input  [5:0]  a;
+        output [31:0] d;
+        begin
+            @(negedge sys_clk);
+            gp_araddr = a; gp_arvalid = 1'b1; gp_arprot = 3'b000; gp_rready = 1'b0;
+            @(posedge sys_clk);
+            while (!gp_rvalid) @(posedge sys_clk);
+            d = gp_rdata;
+            if (gp_rresp !== 2'b00) err("GP_RRESP", gp_rresp, 0);
+            @(negedge sys_clk);
+            gp_arvalid = 1'b0; gp_rready = 1'b1;
+            @(posedge sys_clk);
+            @(negedge sys_clk);
+            gp_rready = 1'b0;
         end
     endtask
 
@@ -622,6 +741,10 @@ module tb_nes_zynq_top;
         z_seen = 0; de_seen = 0;
         core_frame_d_r = 1'b0; lcd_frame_p_r = 1'b0; locked_r = 1'b0;
         pal_drv = 8'h00; exp_drv = 16'h0000; btn_drv = 8'h00; de_drv = 1'b0;
+        gp_awaddr = 6'd0; gp_awvalid = 1'b0; gp_awprot = 3'b000;
+        gp_wdata = 32'h0; gp_wstrb = 4'h0; gp_wvalid = 1'b0; gp_bready = 1'b0;
+        gp_araddr = 6'd0; gp_arvalid = 1'b0; gp_arprot = 3'b000; gp_rready = 1'b0;
+        gp_guard = 0; gp_pattern = 8'h00; gp_rd = 32'h0;
 
         // Icarus evaluates a force RHS once, at the time the force executes, so
         // every force here targets a net this bench drives afterwards.  Forcing
@@ -1107,6 +1230,64 @@ module tb_nes_zynq_top;
         if (dut.u_touch.touch_valid !== 1'b0) err("TOUCH_REPORT_NEVER_RELEASED", touch_guard, 0);
         if (dut.touch_buttons[7:4] !== 4'b0000) err("TOUCH_DPAD_STUCK", dut.touch_buttons[7:4], 0);
 
+        // ------------------------------------------- USB gamepad -> buttons1
+        // The whole gap this test exists for: a real AXI write into the GAMEPAD
+        // register (0x20) must appear at the console's controller input port,
+        // nes_system_v6.buttons1.  The write goes through the real axi_lite_regs
+        // instance above; the observation is u_core's own port, not a top
+        // internal.  At this point the touch path is idle (keys and TPAD
+        // released, no latched report), so touch_buttons is 8'h00.
+        gp_pattern = 8'h30;                 // dpad Up + Down; no touch source
+        gp_write(6'h20, {24'b0, gp_pattern}, 4'hF);
+        gp_read (6'h20, gp_rd);
+        if (gp_rd[7:0] !== gp_pattern)
+            err("GP_REG_READBACK", gp_rd[7:0], gp_pattern);
+        if (dut.touch_buttons !== 8'h00)
+            err("GP_TOUCH_NOT_IDLE", dut.touch_buttons, 8'h00);
+        repeat (8) @(posedge dut.mmcm_core_clk);
+        if (dut.u_core.buttons1 !== gp_pattern)
+            err("GP_BTN_AT_CORE", dut.u_core.buttons1, gp_pattern);
+        $display("GPU gamepad reg 0x20 = %02h reached u_core.buttons1 = %02h",
+                 gp_pattern, dut.u_core.buttons1);
+
+        // Both sources active at once, and the combination is the OR.  Both keys
+        // are pressed (touch path -> A|B = 0x03) while the gamepad holds Select
+        // + Start (0x0C), which shares no bit with the touch value.  OR gives
+        // 0x0F; override would give the gamepad's 0x0C.  This is the check that
+        // pins the arbitration rule itself, not just the wiring.
+        @(negedge sys_clk);
+        key = 2'b00;
+        gp_guard = 0;
+        while (dut.touch_buttons[1:0] !== 2'b11 && gp_guard < 40000) begin
+            @(posedge sys_clk);
+            gp_guard = gp_guard + 1;
+        end
+        if (dut.touch_buttons !== 8'h03)
+            err("GP_TOUCH_NOT_ACTIVE", dut.touch_buttons, 8'h03);
+        gp_pattern = 8'h0C;                 // Select + Start from the gamepad
+        gp_write(6'h20, {24'b0, gp_pattern}, 4'hF);
+        repeat (8) @(posedge dut.mmcm_core_clk);
+        if (dut.u_core.buttons1 !== 8'h0F)
+            err("GP_OR_ARBITRATION", dut.u_core.buttons1, 8'h0F);
+        $display("GPU both active: touch=%02h gamepad=%02h buttons1=%02h (OR, not override)",
+                 dut.touch_buttons, gp_pattern, dut.u_core.buttons1);
+
+        // Clear the gamepad and release the keys: the touch path alone must be
+        // back to idle, proving the gamepad never latched a bit or disabled the
+        // panel.
+        gp_write(6'h20, 32'h00000000, 4'hF);
+        @(negedge sys_clk);
+        key = 2'b11;
+        gp_guard = 0;
+        while (dut.touch_buttons[1:0] !== 2'b00 && gp_guard < 40000) begin
+            @(posedge sys_clk);
+            gp_guard = gp_guard + 1;
+        end
+        repeat (8) @(posedge dut.mmcm_core_clk);
+        if (dut.u_core.buttons1 !== 8'h00)
+            err("GP_CLEAR_LEFT_BITS", dut.u_core.buttons1, 8'h00);
+        $display("GPU cleared: touch idle, u_core.buttons1=%02h", dut.u_core.buttons1);
+
         // The open drain contract over the whole run, not just the probe window.
         if (bus_xcl != 0) err("TOUCH_SCL_CONTENDED", bus_xcl, 0);
         if (bus_xsda != 0) err("TOUCH_SDA_CONTENDED", bus_xsda, 0);
@@ -1120,7 +1301,7 @@ module tb_nes_zynq_top;
         end
 
         $display("HDMI tmds_clk_p toggled %0d times, second MMCM locked", tmds_clk_edges);
-        $display("PASS nes_zynq_top four clock domains, reset gated on locked, 64-entry palette, RGB888 expansion, open drain touch bus, HDMI tmds live");
+        $display("PASS nes_zynq_top four clock domains, reset gated on locked, 64-entry palette, RGB888 expansion, open drain touch bus, HDMI tmds live, USB gamepad reg reaches buttons1 (OR with touch)");
         $finish;
     end
 

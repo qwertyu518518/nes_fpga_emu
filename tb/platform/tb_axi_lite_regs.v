@@ -13,6 +13,8 @@
 //   * read-back of a written value, on two different values, with the two
 //     read-backs compared against each other as well as against what was written
 //   * ID reads the exact constant, STATUS returns pl_status_in
+//   * the GAMEPAD register (0x20) writes, reads back, honours WSTRB per lane, and
+//     drives pl_gamepad from its low byte
 //   * a write to a RO register is acknowledged and does not change it
 //   * the LOAD_EN gate: with LOAD_EN set a PRG_DATA/CHR_DATA word becomes up to
 //     four byte loads (one per WSTRB lane) at consecutive addresses, the address
@@ -41,14 +43,14 @@ module tb_axi_lite_regs;
 
     reg         clk;
     reg         rst_n;
-    reg  [4:0]  awaddr;
+    reg  [5:0]  awaddr;
     reg         awvalid;
     reg  [2:0]  awprot;
     reg  [31:0] wdata;
     reg  [3:0]  wstrb;
     reg         wvalid;
     reg         bready;
-    reg  [4:0]  araddr;
+    reg  [5:0]  araddr;
     reg         arvalid;
     reg  [2:0]  arprot;
     reg         rready;
@@ -69,6 +71,7 @@ module tb_axi_lite_regs;
     wire        ld_target;
     wire [ADDR_W-1:0] ld_addr;
     wire [7:0]  ld_data;
+    wire [7:0]  gamepad;
 
     integer checks;
     integer errors;
@@ -85,7 +88,7 @@ module tb_axi_lite_regs;
 
     axi_lite_regs #(
         .C_S_AXI_DATA_WIDTH(32),
-        .C_S_AXI_ADDR_WIDTH(5),
+        .C_S_AXI_ADDR_WIDTH(6),
         .PRG_ADDR_BITS(17),
         .CHR_ADDR_BITS(13),
         .ADDR_W(ADDR_W)
@@ -118,7 +121,8 @@ module tb_axi_lite_regs;
         .pl_ld_addr(ld_addr),
         .pl_ld_data(ld_data),
         .pl_ld_ready(ld_ready),
-        .pl_status_in(status_in)
+        .pl_status_in(status_in),
+        .pl_gamepad(gamepad)
     );
 
     always #10 clk = ~clk;
@@ -183,7 +187,7 @@ module tb_axi_lite_regs;
     // AW and W together.  Holds both valids until BVALID, then a single response
     // is checked and acknowledged.
     task axi_write;
-        input [4:0]  a;
+        input [5:0]  a;
         input [31:0] d;
         input [3:0]  s;
         input [1:0]  exp;
@@ -207,7 +211,7 @@ module tb_axi_lite_regs;
 
     // AW first, then W a few cycles later.  Proves the slave holds AW.
     task axi_write_aw_first;
-        input [4:0]  a;
+        input [5:0]  a;
         input [31:0] d;
         input [3:0]  s;
         begin
@@ -230,7 +234,7 @@ module tb_axi_lite_regs;
 
     // W first, then AW.  Proves the slave holds W.
     task axi_write_w_first;
-        input [4:0]  a;
+        input [5:0]  a;
         input [31:0] d;
         input [3:0]  s;
         begin
@@ -252,7 +256,7 @@ module tb_axi_lite_regs;
     endtask
 
     task axi_read;
-        input  [4:0]  a;
+        input  [5:0]  a;
         output [31:0] d;
         begin
             @(negedge clk);
@@ -276,14 +280,14 @@ module tb_axi_lite_regs;
     initial begin
         clk       = 1'b0;
         rst_n     = 1'b0;
-        awaddr    = 5'd0;
+        awaddr    = 6'd0;
         awvalid   = 1'b0;
         awprot    = 3'b000;
         wdata     = 32'h0;
         wstrb     = 4'h0;
         wvalid    = 1'b0;
         bready    = 1'b0;
-        araddr    = 5'd0;
+        araddr    = 6'd0;
         arvalid   = 1'b0;
         arprot    = 3'b000;
         rready    = 1'b0;
@@ -310,6 +314,7 @@ module tb_axi_lite_regs;
         if (bvalid       !== 1'b0) err("RESET_BVALID",  bvalid, 0, 0);
         if (rvalid       !== 1'b0) err("RESET_RVALID",  rvalid, 0, 0);
         if (awready !== 1'b1)      err("RESET_AWREADY", awready, 0, 0);
+        if (gamepad !== 8'h00)     err("RESET_GAMEPAD", gamepad, 0, 0);
 
         // ------------------------------------------------ ID and STATUS
         status_in = 8'hA5;
@@ -342,6 +347,23 @@ module tb_axi_lite_regs;
         axi_read (5'h04, rd);
         checks = checks + 1;
         if (rd !== 32'hFF00FF00) err("WSTRB_BYTE3", rd, 32'hFF00FF00, 0);
+
+        // ------------------------------------------------ GAMEPAD (0x20)
+        // The gamepad register is a dedicated RW word at 0x20, byte-lane
+        // semantics like the other writable registers, and its low byte is the
+        // live pl_gamepad output the top consumes.  It sits above the eight
+        // load-path words, which is why the map is six bits wide.
+        axi_write(6'h20, 32'h00000000, 4'hF, 2'b00);
+        axi_write(6'h20, 32'hFFFFFFFF, 4'h2, 2'b00);   // byte 1 only
+        axi_read (6'h20, rd);
+        checks = checks + 2;
+        if (rd !== 32'h0000FF00) err("GAMEPAD_WSTRB_BYTE1", rd, 32'h0000FF00, 0);
+        if (gamepad !== 8'h00)   err("GAMEPAD_OUT_BYTE1", gamepad, 8'h00, 0);
+        axi_write(6'h20, 32'hFFFFFFFF, 4'h1, 2'b00);   // byte 0 only
+        axi_read (6'h20, rd);
+        checks = checks + 2;
+        if (rd !== 32'h0000FFFF) err("GAMEPAD_WSTRB_BYTE0", rd, 32'h0000FFFF, 0);
+        if (gamepad !== 8'hFF)   err("GAMEPAD_OUT_BYTE0", gamepad, 8'hFF, 0);
 
         // ------------------------------------------------ AW-first / W-first
         axi_write_aw_first(5'h04, 32'hCAFEF00D, 4'hF);

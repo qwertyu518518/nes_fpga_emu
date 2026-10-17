@@ -177,6 +177,26 @@ set _ps_ld_core_regs [get_cells -quiet -hierarchical -filter {
     NAME =~ *ps_hold_core_q0_reg*}]
 set_max_delay -datapath_only 20.000 -from $_ps_ld_host_regs -to $_ps_ld_core_regs
 set_max_delay -datapath_only 20.000 -from [get_cells -quiet -hierarchical -filter {NAME =~ *u_ps_load_bridge/ack_toggle_r_reg*}] -to [get_cells -quiet -hierarchical -filter {NAME =~ *u_ps_load_bridge/ack_sync1_reg*}]
+#
+# USB GAMEPAD BUTTON CDC BOUND
+#
+# The gamepad byte is reg_gamepad in axi_lite_regs (clk_fpga_0).  In the top it
+# is ORed with touch_buttons in the sys_clk domain and the sum is sampled by
+# btn_meta_q in mmcm_core_clk.  The touch half of that input is already bounded
+# by the source XDC (u_touch/* -> btn_meta_q_reg).  The gamepad half launches
+# from a register that exists ONLY in this block design, so it gets the same
+# bounded-delay treatment, not a false path: 20.000 ns, the tighter (source)
+# period, keeping the first stage adjacent to what launches it.  The destination
+# scope is the same first-stage flops, so btn_meta_q -> btn_sync_q stays a
+# normal intra-core_clk check.
+#
+# These are written as plain set_max_delay statements, NOT inside an if: the XDC
+# language does not support if/else, and an if here is silently rejected with a
+# critical warning (Designutils 20-1307), which leaves the crossing entirely
+# unconstrained and the eight reg_gamepad_reg -> btn_meta_q_reg paths failing.
+set _ps_gp_host_regs [get_cells -quiet -hierarchical -filter {NAME =~ *axi_lite_regs_0/*reg_gamepad_reg*}]
+set _ps_gp_core_regs [get_cells -quiet -hierarchical -filter {NAME =~ *btn_meta_q_reg[*]}]
+set_max_delay -datapath_only 20.000 -from $_ps_gp_host_regs -to $_ps_gp_core_regs
 }
 
 set fh [open $ps_xdc w]
@@ -281,6 +301,11 @@ connect_bd_net [get_bd_pins axi_lite_regs_0/pl_ld_target]    [get_bd_pins nes_zy
 connect_bd_net [get_bd_pins axi_lite_regs_0/pl_ld_addr]      [get_bd_pins nes_zynq_top_0/ps_ld_addr]
 connect_bd_net [get_bd_pins axi_lite_regs_0/pl_ld_data]      [get_bd_pins nes_zynq_top_0/ps_ld_data]
 connect_bd_net [get_bd_pins nes_zynq_top_0/ps_ld_ready]      [get_bd_pins axi_lite_regs_0/pl_ld_ready]
+
+# ---- the USB gamepad button register: slave -> top ---------------------------
+# One sys_clk level, ORed with the touch byte inside nes_zynq_top and crossed by
+# the existing button synchroniser.  Not a load port and not part of the hold.
+connect_bd_net [get_bd_pins axi_lite_regs_0/pl_gamepad] [get_bd_pins nes_zynq_top_0/ps_gamepad]
 
 # STATUS is documented as {24'b0, pl_status_in[7:0]}.  This design has no PL
 # status bit worth publishing, so it is tied to 8'h00 rather than to a single
