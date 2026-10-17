@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="780" viewBox="0 0 1220 780" role="img" aria-label="nes_controller：电平 strobe 快照与 8 次移位读取（$4016/$4017）">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1220" height="780" fill="var(--bg)"/>
+<text x="610" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">标准手柄：并联快照 + 电平 strobe + 8 次移位读取</text>
+<text x="610" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/nes_core/controller/nes_controller.v · 位序 A,B,Select,Start,Up,Down,Left,Right</text>
+<rect x="40" y="110" width="250" height="92" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="165" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">buttons / buttons2（并联）</text>
+<text x="52" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">0 A · 1 B · 2 Select · 3 Start</text>
+<text x="52" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">4 Up · 5 Down · 6 Left · 7 Right</text>
+<rect x="340" y="100" width="280" height="112" rx="6" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.6"/>
+<text x="480" y="121" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">电平装载（latch_strobe）</text>
+<text x="352" y="141" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">为 1：每 clk 重装 sr = buttons</text>
+<text x="352" y="156" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">同时 cnt = 0</text>
+<text x="352" y="171" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">data_bit 组合跟随 buttons[0]</text>
+<text x="352" y="186" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">为 0：冻结在最后快照</text>
+<rect x="340" y="250" width="270" height="112" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="475" y="271" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">两路移位寄存器 sr1_q / sr2_q</text>
+<text x="352" y="291" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">读 $4016 移 sr1；读 $4017 移 sr2</text>
+<text x="352" y="306" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">每读一拍：sr &lt;= {fill_one, sr[7:1]}</text>
+<text x="352" y="321" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">cnt 4 bit，饱和于 9</text>
+<rect x="660" y="100" width="250" height="150" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="785" y="121" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">EXTRA_READ（第 9 次起）</text>
+<text x="672" y="141" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">0 / 3：恒 1（8'hFF）默认</text>
+<text x="672" y="156" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">1：保持最后一位（快照 bit7）</text>
+<text x="672" y="171" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">2：移进 0</text>
+<text x="672" y="186" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">前 8 次三模式逐位相同</text>
+<rect x="660" y="300" width="250" height="96" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="785" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">读选通 read_select</text>
+<text x="672" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">0 = $4016 (1P)；1 = $4017 (2P)</text>
+<text x="672" y="356" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">只选 mux，无任何副作用</text>
+<rect x="960" y="150" width="230" height="110" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="1075" y="171" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">输出</text>
+<text x="972" y="191" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">data_bit（高 = 按下）</text>
+<text x="972" y="206" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">data_out = {7'b0, data_bit}</text>
+<text x="972" y="221" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">dbg_sr / latch / cnt / past8</text>
+<path d="M 290 156 L 338 156" fill="none" stroke="var(--blue)" stroke-width="1.4" marker-end="url(#arw-blue)"/>
+<path d="M 480 212 L 480 248" fill="none" stroke="var(--orange)" stroke-width="1.4" marker-end="url(#arw-orange)"/>
+<path d="M 620 306 L 658 306" fill="none" stroke="var(--green)" stroke-width="1.4" marker-end="url(#arw-green)"/>
+<path d="M 610 156 L 658 175" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<path d="M 910 205 L 958 205" fill="none" stroke="var(--blue)" stroke-width="1.4" marker-end="url(#arw-blue)"/>
+<text x="60" y="458" font-size="12.5" fill="var(--text)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">一次完整轮询 = 10 个 CPU 周期：2 次写（strobe 高、低）+ 8 次读</text>
+<rect x="60" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--red)" stroke-width="1.4"/>
+<text x="112" y="492" font-size="11" fill="var(--red)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">W</text>
+<text x="112" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">strobe</text>
+<text x="112" y="524" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">=1</text>
+<rect x="172" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--orange)" stroke-width="1.4"/>
+<text x="224" y="492" font-size="11" fill="var(--orange)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">W</text>
+<text x="224" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">strobe</text>
+<text x="224" y="524" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">=0</text>
+<rect x="284" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="336" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="336" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">A</text>
+<rect x="396" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="448" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="448" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">B</text>
+<rect x="508" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="560" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="560" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Sel</text>
+<rect x="620" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="672" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="672" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">St</text>
+<rect x="732" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="784" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="784" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Up</text>
+<rect x="844" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="896" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="896" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Dn</text>
+<rect x="956" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="1008" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="1008" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Lt</text>
+<rect x="1068" y="470" width="104" height="62" rx="5" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="1120" y="492" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">R</text>
+<text x="1120" y="510" font-size="11" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">Rt</text>
+<text x="60" y="562" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">装载在 strobe=1 的每个 clk 沿发生；快照在 strobe 变 0 后冻结；此后每读一位，bit0 先出。</text>
+<rect x="60" y="592" width="1060" height="116" rx="6" fill="var(--panel)" stroke="var(--muted)" stroke-width="1.6"/>
+<text x="590" y="613" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">为什么这是电平而不是边沿（三种情况都必须成立）</text>
+<text x="72" y="633" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">strobe 保持 1 且按钮中途变化 → 每 clk 重装，data_bit 组合跟随当前 buttons[0]</text>
+<text x="72" y="648" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">strobe 为 1 时读 → 返回当前 buttons[0]，移位寄存器与计数器都不动</text>
+<text x="72" y="663" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">strobe 由 1 变 0 → 停止装载，停在最后一个时钟沿看到的快照上</text>
+<rect x="60" y="728" width="334" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="72" y="748" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<rect x="106" y="736" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="132" y="748" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">寄存 / 逻辑</text>
+<rect x="200" y="736" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="226" y="748" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">策略 / 边界</text>
+<path d="M 294 743 L 316 743" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="320" y="748" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">数据 / 控制</text>
+</svg>

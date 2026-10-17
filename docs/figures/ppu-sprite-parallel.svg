@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="760" viewBox="0 0 1240 760" role="img" aria-label="nes_ppu_sprite：64 路并行比较 + 8 路优先级编码 + 优先选择链">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1240" height="760" fill="var(--bg)"/>
+<text x="620" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">PPU 精灵：并行的 64 比较器 + 8 槽选取 + 优先选择链</text>
+<text x="620" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/nes_core/ppu/nes_ppu_sprite.v · 纯组合，无时钟、无次 OAM</text>
+<rect x="40" y="110" width="220" height="130" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="150" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">primary OAM（端口）</text>
+<text x="52" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">2048 bit 扁平总线</text>
+<text x="52" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">项 si：Y=oam[si*32 +: 8]</text>
+<text x="52" y="181" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">tile +8 · attr +16 · X +24</text>
+<text x="52" y="196" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">本模块只读，无时钟</text>
+<rect x="310" y="110" width="250" height="130" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="435" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">64 路范围比较</text>
+<text x="322" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">scan_row = scanline - Y（10 bit）</text>
+<text x="322" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">scan_hit = scan_row &lt; height</text>
+<text x="322" y="181" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">低位回绕 → '不在范围'</text>
+<text x="322" y="196" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">height = ctrl[5] ? 16 : 8</text>
+<rect x="310" y="280" width="250" height="96" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="435" y="301" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">in_range[63:0]</text>
+<text x="322" y="321" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">64 路 scan_hit 并行成向量</text>
+<rect x="620" y="110" width="270" height="150" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="755" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">8 × nth_set 优先级编码</text>
+<text x="632" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nth_set(in_range, g), g = 0..7</text>
+<text x="632" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">返回第 g 个置位的位置</text>
+<text x="632" y="181" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">SLOT_U8 &lt; range_count 判定槽存在</text>
+<rect x="620" y="300" width="270" height="130" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="755" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">8 个 slot 地址</text>
+<text x="632" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">s_table / s_tile / s_fine</text>
+<text x="632" y="356" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">xoff = dot - slot_x（10 bit）</text>
+<text x="632" y="371" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">xbit = hflip ? xoff[2:0] : 7-xoff[2:0]</text>
+<rect x="950" y="110" width="260" height="150" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="1080" y="131" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">CHR 取数</text>
+<text x="962" y="151" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">paddr = {s_pat_addr, 3'b000}（字节址）</text>
+<text x="962" y="166" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">plane_lo = chr[paddr]</text>
+<text x="962" y="181" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">plane_hi = chr[paddr + 64]</text>
+<text x="962" y="196" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">s_pat = {hi[xbit], lo[xbit]}</text>
+<rect x="950" y="300" width="260" height="130" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="1080" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">8 路优先选择链</text>
+<text x="962" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">j = 0..7，!found &amp;&amp; slot_opaque[j]</text>
+<text x="962" y="356" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">先到先得 = OAM 下标小者赢</text>
+<text x="962" y="371" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">sprite_pixel = {attr[1:0], pat[1:0]}</text>
+<text x="962" y="386" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">sprite_priority = {4{attr[5]}}</text>
+<path d="M 260 170 L 308 170" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<path d="M 435 240 L 435 278" fill="none" stroke="var(--blue)" stroke-width="1.4" marker-end="url(#arw-blue)"/>
+<path d="M 560 328 L 618 300" fill="none" stroke="var(--green)" stroke-width="1.4" marker-end="url(#arw-green)"/>
+<path d="M 755 260 L 755 298" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<path d="M 890 190 L 948 190" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<path d="M 890 360 L 948 360" fill="none" stroke="var(--green)" stroke-width="1.4" marker-end="url(#arw-green)"/>
+<rect x="40" y="470" width="580" height="150" rx="6" fill="var(--panel)" stroke="var(--muted)" stroke-width="1.6"/>
+<text x="330" y="491" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">为什么没有次 OAM / 评估窗口 / 移位寄存器</text>
+<text x="52" y="511" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">真实硬件是 64 路并行比较器 + 优先级编码器，一级组合逻辑</text>
+<text x="52" y="526" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">软件模拟器必须用状态机把 64 项在 192 dot 里串行筛成 8 项</text>
+<text x="52" y="541" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">本模块直接照抄并行结构 → 每个 dot 重算一次整条通路</text>
+<text x="52" y="556" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">代价：一片组合逻辑；功能等价但时序上不是最终形态</text>
+<rect x="660" y="470" width="550" height="150" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="935" y="491" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">两个标志</text>
+<text x="672" y="511" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">sprite0_hit = pixel_active &amp;&amp; slot_opaque[0]</text>
+<text x="672" y="526" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">                 &amp;&amp; bg_pixel != 0（slot 0 不是 OAM 项 0）</text>
+<text x="672" y="541" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">sprite_overflow = frame_active &amp;&amp; range_count &gt; 8</text>
+<text x="672" y="556" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">（计数语义，不复现硬件的 m 递增 bug）</text>
+<rect x="40" y="664" width="315" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="52" y="684" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<rect x="86" y="672" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="112" y="684" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">组合逻辑</text>
+<rect x="161" y="672" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="187" y="684" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">边界 / 标志</text>
+<path d="M 255 679 L 277 679" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="281" y="684" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">地址 / 字节</text>
+</svg>

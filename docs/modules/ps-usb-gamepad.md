@@ -205,6 +205,10 @@ register's launch arc is a new `sys_clk -> mmcm_core_clk` crossing, so it gets
 its own bounded `set_max_delay -datapath_only 20.000` in the derived XDC (the
 source XDC already bounds the touch half).
 
+![图 1：USB 手柄通路与证据](../figures/ps-usb-gamepad.svg)
+
+**图 1** · 从板级 Type-A 口到 `nes_system_v6.buttons1` 的三段：板级接线（ULPI PHY / hub / Type-A，含 P4 "OTG SW" 跳线）、PS 软件（host 模式、枚举、host-tested 纯解析、中断轮询）、PL 送达路径（`GAMEPAD` 0x20 → `OR` → 2FF → `buttons1`）。绿标 = 有仿真或 host test 证据，红标 = **从未运行**，黄标 = 板级事实（非 RTL/源码事实）。事实来源 [`usb_gamepad.c`](../../tools/ps/app/usb_gamepad.c)、[`usb_hid.h`](../../tools/ps/app/usb_hid.h)、[`main.c`](../../tools/ps/app/main.c)、[`build_ps.tcl`](../../tools/ps/build_ps.tcl)、[`nes_zynq_top.v`](../../rtl/platform/zynq/nes_zynq_top.v)。生成图，勿手改。
+
 **Coverage.** `tb/platform/tb_nes_zynq_top.v` instantiates the real
 `axi_lite_regs` slave (exactly as the block design does), performs a real AXI
 write into 0x20, and requires the value at `nes_system_v6.buttons1`; it then

@@ -157,6 +157,10 @@ The design assumes the board boots from the **SD card**:
 loader still runs first and is unchanged. See
 [`ps-usb-gamepad.md`](ps-usb-gamepad.md).)
 
+![图 1：PS 启动链（序列）](../figures/ps-rom-load-software.svg)
+
+**图 1** · 启动链是一个**顺序**，不是一个拓扑：BootROM → FSBL → PL 编程 → loader → link check → SD 读 → iNES 解析 → `LOAD_EN` 流送 → 释放 console，每段右侧的圆角标签是证据标记（红 = 从未运行，绿 = 仿真已验）。启动链**整体从未执行**。事实来源 [`tools/ps/boot.bif`](../../tools/ps/boot.bif)、[`build_ps.tcl`](../../tools/ps/build_ps.tcl)、[`sdk_flow.tcl`](../../tools/ps/sdk_flow.tcl)、[`app/main.c`](../../tools/ps/app/main.c)、[`nes_zynq_top.v`](../../rtl/platform/zynq/nes_zynq_top.v)。生成图，勿手改。
+
 `BOOT.bin` carries three partitions: the FSBL, the loader application, and the
 PL bitstream (verified by measuring `bootgen` output with and without the
 bitstream partition: the delta is 4,045,624 bytes, the bitstream's payload).

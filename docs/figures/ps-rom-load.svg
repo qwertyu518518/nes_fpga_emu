@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="900" viewBox="0 0 1240 900" role="img" aria-label="PS 运行时卡带加载：AXI 从机、跨时钟域桥与卡带写入端口">
+<defs><style>
+:root{--bg:#ffffff;--panel:#f6f8fa;--panel2:#eaeef2;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--blue:#0969da;--green:#1a7f37;--orange:#bc4c00;--purple:#8250df;--red:#cf222e;--yellow:#9a6700;}@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--border:#30363d;--text:#e6edf3;--muted:#9198a1;--blue:#58a6ff;--green:#3fb950;--orange:#db6d28;--purple:#a371f7;--red:#ff7b72;--yellow:#d29922;}}text{font-family:Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif}
+</style>
+<marker id="arw-blue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--blue)"/></marker>
+<marker id="arw-green" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--green)"/></marker>
+<marker id="arw-orange" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--orange)"/></marker>
+<marker id="arw-purple" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--purple)"/></marker>
+<marker id="arw-red" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--red)"/></marker>
+<marker id="arw-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--muted)"/></marker>
+<marker id="arw-text" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--text)"/></marker>
+<marker id="arw-yellow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0.5 L7.5,4 L0,7.5 z" fill="var(--yellow)"/></marker>
+</defs>
+<rect x="0" y="0" width="1240" height="900" fill="var(--bg)"/>
+<text x="620" y="32" font-size="17" fill="var(--text)" text-anchor="middle" font-weight="700" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">PS 运行时卡带加载：AXI 从机 → 跨域桥 → 卡带数组</text>
+<text x="620" y="53" font-size="12.5" fill="var(--muted)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">rtl/platform/zynq/axi_lite_regs.v + rtl/nes_core/cart/nes_cart_load_bridge.v + nes_cart_rom.v + nes_zynq_top.v</text>
+<rect x="28" y="92" width="468" height="750" rx="10" fill="none" stroke="var(--blue)" stroke-width="1.3" stroke-dasharray="6 4"/>
+<text x="262" y="110" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">FCLK_CLK0 / sys_clk 50 MHz · PS / AXI 域</text>
+<rect x="744" y="92" width="468" height="750" rx="10" fill="none" stroke="var(--green)" stroke-width="1.3" stroke-dasharray="6 4"/>
+<text x="978" y="110" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">mmcm_core_clk 21.477272727 MHz · 核域</text>
+<rect x="46" y="126" width="432" height="58" rx="6" fill="var(--panel)" stroke="var(--blue)" stroke-width="1.6"/>
+<text x="262" y="147" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">PS7 M_AXI_GP0（AXI3，0x4120_0000）</text>
+<text x="58" y="167" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">块设计连接；地址段 0x4120_0000 / 0x10000</text>
+<rect x="46" y="196" width="432" height="56" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="262" y="217" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">axi_protocol_converter</text>
+<text x="58" y="237" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">AXI3 → AXI4-Lite（块设计原语，非仓库代码）</text>
+<rect x="46" y="266" width="432" height="214" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="262" y="287" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">axi_lite_regs（16 字，offset = addr[5:2]）</text>
+<text x="58" y="307" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">0x00 CTRL  bit0 LOAD_EN  bit1 HOLD</text>
+<text x="58" y="322" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">0x14 PRG_DATA  0x1C CHR_DATA（WO）</text>
+<text x="58" y="337" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">0x20 GAMEPAD（USB，见 ps-usb-gamepad 图）</text>
+<text x="58" y="352" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">WSTRB 逐字节 → 每拍 1 字节，最多 4 拍</text>
+<text x="58" y="367" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">pl_ld_valid / target / addr[16:0] / data[7:0]</text>
+<text x="58" y="382" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">pl_ld_ready ← 桥</text>
+<text x="58" y="397" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">pl_console_hold = ctrl[1] | ctrl[0]</text>
+<text x="58" y="412" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">最后一个字节后 ADDR += 4</text>
+<rect x="46" y="494" width="432" height="122" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="262" y="515" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">三重惰性门（LOAD_EN 关闭即全丢）</text>
+<text x="58" y="535" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">① 从机：仅 LOAD_EN=1 才把 DATA 写变成请求</text>
+<text x="58" y="550" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">② 桥：仅同步后的 enable 高才转发</text>
+<text x="58" y="565" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">③ 数纽：仅 ld_en 高才写入数组</text>
+<text x="58" y="580" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">LOAD_EN=0 → 写被 ACK 并丢弃；未接端口 = z</text>
+<rect x="46" y="628" width="432" height="86" rx="6" fill="var(--panel)" stroke="var(--muted)" stroke-width="1.6"/>
+<text x="262" y="649" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">本设计的绑定值</text>
+<text x="58" y="669" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">pl_status_in = 8'h00（本设计无 PL 状态位）</text>
+<text x="58" y="684" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">prg_addr_reg[16:0] / chr_addr_reg[12:0]</text>
+<rect x="762" y="126" width="432" height="150" rx="6" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"/>
+<text x="978" y="147" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_cart_load_bridge</text>
+<text x="774" y="167" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">bundled-data toggle 握手（非逐位同步）</text>
+<text x="774" y="182" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">host 侧：锁存 target/addr/data，翻转 req_toggle</text>
+<text x="774" y="197" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">core 侧：req_sync1/2/3，边沿触发</text>
+<text x="774" y="212" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">输出 prg_ld_en/addr/data/we + chr_ld_*</text>
+<text x="774" y="227" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">core_reset = rst_core（域复位，非 console hold）</text>
+<rect x="762" y="300" width="432" height="140" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="978" y="321" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_cart_rom · PRG 半（核内）</text>
+<text x="774" y="341" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_system_v6 u_prg_rom（PRG_ENABLE=1）</text>
+<text x="774" y="356" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">128 KiB · prg_ld_addr[16:0]</text>
+<text x="774" y="371" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">写口：prg_ld_en &amp;&amp; prg_ld_we</text>
+<text x="774" y="386" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">写不随 reset 门控（console 全程被按住）</text>
+<rect x="762" y="464" width="432" height="140" rx="6" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.6"/>
+<text x="978" y="485" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">nes_cart_rom · CHR 半（顶层）</text>
+<text x="774" y="505" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">nes_zynq_top u_cart_chr（CHR_ENABLE=1）</text>
+<text x="774" y="520" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">8 KiB · chr_ld_addr[12:0]</text>
+<text x="774" y="535" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">与 mapper 的 $2007 写共用一个写口</text>
+<text x="774" y="550" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">共用写口的形状见 cart-rom 图</text>
+<rect x="762" y="628" width="432" height="150" rx="6" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"/>
+<text x="978" y="649" font-size="15" fill="var(--text)" text-anchor="center" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">console hold 同步</text>
+<text x="774" y="669" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">ps_console_hold → ps_hold_core_q0/q1（2FF）</text>
+<text x="774" y="684" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">core_domain_reset = rst_core | ps_hold_core_q1</text>
+<text x="774" y="699" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">只并入 CPU/PPU 复位与 CHR 数纽复位</text>
+<text x="774" y="714" font-size="11.5" fill="var(--muted)" text-anchor="start" font-weight="normal" font-family="Cascadia Code, Consolas, Menlo, 'DejaVu Sans Mono', monospace">绝不并入桥的 core_reset（否则加载死锁）</text>
+<path d="M 262 184 L 262 194" fill="none" stroke="var(--blue)" stroke-width="1.4" marker-end="url(#arw-blue)"/>
+<path d="M 262 252 L 262 264" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<path d="M 478 330 L 760 206" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="600" y="250" font-size="11" fill="var(--blue)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">pl_ld_valid / target / addr / data</text>
+<path d="M 760 246 L 478 372" fill="none" stroke="var(--green)" stroke-width="1.6" marker-end="url(#arw-green)"/>
+<text x="606" y="300" font-size="11" fill="var(--green)" text-anchor="middle" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">pl_ld_ready</text>
+<path d="M 978 276 L 978 298" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<path d="M 1030 276 L 1090 462" fill="none" stroke="var(--purple)" stroke-width="1.4" marker-end="url(#arw-purple)"/>
+<text x="1114" y="380" font-size="11" fill="var(--purple)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">chr_ld_*</text>
+<path d="M 790 626 L 790 606" fill="none" stroke="var(--red)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arw-red)"/>
+<text x="800" y="622" font-size="11" fill="var(--red)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">hold → 域复位</text>
+<rect x="46" y="856" width="413" height="30" rx="6" fill="var(--panel2)" stroke="var(--border)" stroke-width="1.2"/>
+<text x="58" y="876" font-size="11" fill="var(--muted)" text-anchor="start" font-weight="600" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">图例</text>
+<rect x="92" y="864" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--green)" stroke-width="1.4"/>
+<text x="118" y="876" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">PL 逻辑</text>
+<rect x="174" y="864" width="22" height="14" rx="3" fill="var(--panel)" stroke="var(--purple)" stroke-width="1.4"/>
+<text x="200" y="876" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">卡带存储</text>
+<path d="M 249 871 L 271 871" fill="none" stroke="var(--blue)" stroke-width="1.6" marker-end="url(#arw-blue)"/>
+<text x="275" y="876" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">AXI / 数据</text>
+<path d="M 350 871 L 372 871" fill="none" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#arw-orange)"/>
+<text x="376" y="876" font-size="11" fill="var(--text)" text-anchor="start" font-weight="normal" font-family="Segoe UI, Microsoft YaHei, system-ui, -apple-system, sans-serif">跨时钟域 / 复位</text>
+</svg>

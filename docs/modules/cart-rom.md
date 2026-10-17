@@ -75,6 +75,10 @@ module nes_cart_rom #(
 
 注意：`chr_rdata` 是核的**输入**，`chr_req`/`chr_addr`（=`chr_final_addr`）/`chr_waddr`/`chr_we`/`chr_wdata` 是核的**输出**。上层把核的输出接进本模块、把本模块的 `chr_rdata` 接回核的输入即可，**`nes_system_v6` 一行都不用改**。这条总线是**单主多路复用**的：谁赢了 `chr_req`，谁就是那一拍把地址放上 `chr_addr` 的人，本模块没有仲裁要做。
 
+![图 1：卡带数组与唯一写口](../figures/cart-rom.svg)
+
+**图 1** · 两个字节宽数组的 `$readmemh` 初始化、PRG/CHR 各自的读通路，以及最关键的一处：CHR 的 $2007（mapper）写与 PS 加载端口**共用唯一一个 muxed 写语句**（`chr_wenable`/`chr_wsel`/`chr_wdat`）。写成 if/else 命名数组两次会被 Vivado 读成两个写口，静默落入 distributed RAM（实测 2 → 0 BRAM、LUTRAM 2 → 3074），见第 9 节与 `docs/modules/ps-rom-load.md`。事实来源 [`nes_cart_rom.v`](../../rtl/nes_core/cart/nes_cart_rom.v)。生成图，勿手改。
+
 ---
 
 ## 4. BRAM 初始化惯用法：`$readmemh` + `initial`，以及为什么不能复位数组

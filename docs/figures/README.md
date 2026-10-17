@@ -29,6 +29,12 @@ python tools/gen_figures.py --check   # 校验已是最新
 | [`mapper-dispatch.svg`](mapper-dispatch.svg) | mapper_select 分发到五个并存的子模块、各自与 select_* 的写门，经组合 mux 到 bank offset / mirroring / IRQ 输出。 | `rtl/nes_core/mapper/nes_mapper.v` | [`modules/mappers.md`](../modules/mappers.md) 图 1 |
 | [`cdc-fifo-pointers.svg`](cdc-fifo-pointers.svg) | 二进制指针本地寻址、格雷码指针跨域、两级同步器与满/空判据，以及指针为何多一位。 | `rtl/nes_core/peripheral/nes_cdc_fifo.v` | [`modules/cdc-fifo.md`](../modules/cdc-fifo.md) 图 1 |
 | [`oam-dma-path.svg`](oam-dma-path.svg) | start 锁存、四态状态机、513/514 周期账、总线握手与 OAMADDR 两种接法。 | `rtl/nes_core/ppu/nes_oam_dma.v` | [`modules/oam-dma.md`](../modules/oam-dma.md) 图 1 |
+| [`ps-rom-load.svg`](ps-rom-load.svg) | AXI 从机与 50 MHz PS 域、bundled-data 跨域桥、核内 PRG 与顶层 CHR 的加载端口、LOAD_EN 三重惰性门与 console hold 同步。 | `rtl/platform/zynq/axi_lite_regs.v + rtl/nes_core/cart/nes_cart_load_bridge.v + rtl/nes_core/cart/nes_cart_rom.v + rtl/platform/zynq/nes_zynq_top.v` | [`modules/ps-rom-load.md`](../modules/ps-rom-load.md) 图 1 |
+| [`ps-rom-load-software.svg`](ps-rom-load-software.svg) | BootROM → FSBL → PL 编程 → loader → link_check → SD 读 → iNES 解析 → LOAD_EN 流送 → 释放 console，逐段带仿真/从未运行证据标记。 | `tools/ps/boot.bif + tools/ps/build_ps.tcl + tools/ps/sdk_flow.tcl + tools/ps/app/main.c + rtl/platform/zynq/nes_zynq_top.v` | [`modules/ps-rom-load-software.md`](../modules/ps-rom-load-software.md) 图 1 |
+| [`ps-usb-gamepad.svg`](ps-usb-gamepad.svg) | 板级 ULPI PHY / hub / Type-A 与 P4 跳线、PS host 模式与枚举、host-tested 纯解析、GAMEPAD 0x20 → OR → 2FF → buttons1，逐段标出从未运行与板级事实。 | `tools/ps/app/usb_gamepad.c + tools/ps/app/usb_hid.h + tools/ps/app/main.c + tools/ps/build_ps.tcl + rtl/platform/zynq/nes_zynq_top.v` | [`modules/ps-usb-gamepad.md`](../modules/ps-usb-gamepad.md) 图 1 |
+| [`cart-rom.svg`](cart-rom.svg) | 两个字节宽数组的 $readmemh 初始化、PRG/CHR 读通路，以及 mapper $2007 与 PS 加载共享的单一 muxed 写语句（if/else 会静默落入 distributed RAM）。 | `rtl/nes_core/cart/nes_cart_rom.v` | [`modules/cart-rom.md`](../modules/cart-rom.md) 图 1 |
+| [`controller-poll.svg`](controller-poll.svg) | 并联输入、电平敏感 strobe 快照、两路移位寄存器与 8 次读取的位序，EXTRA_READ 的第 9 次策略与 10 周期轮询。 | `rtl/nes_core/controller/nes_controller.v` | [`modules/controller.md`](../modules/controller.md) 图 1 |
+| [`ppu-sprite-parallel.svg`](ppu-sprite-parallel.svg) | 64 路并行范围比较、8× nth_set 优先级编码、CHR 取数与 8 路优先选择链，以及为何没有次 OAM / 评估窗口 / 移位寄存器。 | `rtl/nes_core/ppu/nes_ppu_sprite.v` | [`modules/ppu-sprites.md`](../modules/ppu-sprites.md) 图 1 |
 
 ## 视觉约定
 
@@ -37,4 +43,7 @@ python tools/gen_figures.py --check   # 校验已是最新
   紫色 = 存储器/地址翻译，红色 = 复位/冻结/危险，黄色 = 例外。
 - 实线箭头 = 同域数据；虚线箭头 = 跨时钟域或非阻塞关系。
 - 圆角框 = 模块；虚线竖线 = 时钟域边界；图例在每张图底部。
+- 两类图形：圆角框 + 箭头 = **拓扑**（谁连到谁）；编号阶段 = **顺序**（启动链一类）。
+- 顺序图阶段右侧的圆角证据标签：绿色 = 仿真或 host test 已验，
+  红色 = 从未运行，黄色 = 板级事实。
 - 字体：正文用无衬线，信号名/位宽用等宽。

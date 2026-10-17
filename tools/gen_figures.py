@@ -252,9 +252,61 @@ def legend(c, x, y, entries, title="图例"):
             c.rect(cx, y + 8, 22, 14, fill="panel", stroke="green", rx=3, sw=1.4)
         elif kind == "mem":
             c.rect(cx, y + 8, 22, 14, fill="panel", stroke="purple", rx=3, sw=1.4)
+        elif kind == "never":
+            c.rect(cx, y + 8, 22, 14, fill="red", stroke="red", rx=3, sw=1.4)
+        elif kind == "sim":
+            c.rect(cx, y + 8, 22, 14, fill="green", stroke="green", rx=3, sw=1.4)
         cx += 22
         c.text(cx + 4, y + 20, label, size=FS_S, anchor="start", fill="text")
         cx += 4 + int(len(label) * 6.4) + 24
+
+
+# ---------------------------------------------------------------------------
+# Sequence / flow form -- the second figure kind
+# ---------------------------------------------------------------------------
+# The block figures above draw topology: what connects to what.  A boot chain is
+# not topology, it is an ORDER, and forcing it into boxes draws the wrong thing.
+# A stage is one numbered step in that order: a title, one detail line, and an
+# evidence badge.  Like the block primitives it registers a box so --lint still
+# checks its geometry.  Badges use the bring-up runbook's evidence vocabulary:
+# red 从未运行 (never executed), green 仿真已验 (simulation/host-test only),
+# yellow exception/board fact.
+_EV_COLOR = {"从未运行": "red", "仿真已验": "green", "host-tested": "green",
+             "板级事实": "yellow", "块设计": "purple"}
+
+
+def _pill_w(text, size=FS_S):
+    w = 0
+    for ch in text:
+        w += size if ord(ch) > 0x2E00 else size * 0.6
+    return int(w) + 20
+
+
+def badge(c, x, y, text, color):
+    w = _pill_w(text)
+    c.rect(x, y, w, 20, fill=color, stroke=color, rx=10, sw=1.2)
+    c.text(x + w / 2, y + 14, text, size=FS_S, weight="600", fill="bg")
+    return w
+
+
+def stage(c, x, y, w, n, title, detail, tag=None, tagcolor=None, accent="border",
+          h=62):
+    c.rect(x, y, w, h, fill="panel", stroke=accent, rx=6)
+    c.circle(x + 26, y + h / 2, 14, fill=accent, stroke=accent)
+    c.text(x + 26, y + h / 2 + 5, str(n), size=FS_N, weight="700", fill="bg")
+    c.text(x + 52, y + 23, title, size=FS_T, weight="600", anchor="start")
+    if detail:
+        c.text(x + 52, y + 43, detail, size=FS_L, fill="muted", anchor="start",
+               family=MONO)
+    if tag:
+        col = tagcolor or _EV_COLOR.get(tag, "muted")
+        tw = _pill_w(tag)
+        bx = x + w - tw - 14
+        c.rect(bx, y + (h - 20) / 2, tw, 20, fill=col, stroke=col, rx=10, sw=1.2)
+        c.text(bx + tw / 2, y + (h - 20) / 2 + 14, tag, size=FS_S, weight="600",
+               fill="bg")
+    c.boxes.append((x, y, w, h, title, [detail] if detail else [], FS_L, FS_T))
+    return y + h
 
 
 # ---------------------------------------------------------------------------
@@ -1403,6 +1455,481 @@ def fig_oam_dma_path():
 
 
 # ---------------------------------------------------------------------------
+# Figure 14 -- PS runtime cartridge load, topology
+# ---------------------------------------------------------------------------
+def fig_ps_rom_load():
+    c = Svg(1240, 900, "PS 运行时卡带加载：AXI 从机、跨时钟域桥与卡带写入端口")
+    title_block(c, "PS 运行时卡带加载：AXI 从机 → 跨域桥 → 卡带数组",
+                "rtl/platform/zynq/axi_lite_regs.v + rtl/nes_core/cart/"
+                "nes_cart_load_bridge.v + nes_cart_rom.v + nes_zynq_top.v")
+
+    c.rect(28, 92, 468, 750, fill="none", stroke="blue", rx=10, sw=1.3, dash="6 4")
+    c.text(262, 110, "FCLK_CLK0 / sys_clk 50 MHz · PS / AXI 域", size=FS_S,
+           fill="blue")
+    c.rect(744, 92, 468, 750, fill="none", stroke="green", rx=10, sw=1.3,
+           dash="6 4")
+    c.text(978, 110, "mmcm_core_clk 21.477272727 MHz · 核域", size=FS_S,
+           fill="green")
+
+    c.node(46, 126, 432, 58, "PS7 M_AXI_GP0（AXI3，0x4120_0000）", [
+        "块设计连接；地址段 0x4120_0000 / 0x10000",
+    ], accent="blue")
+    c.node(46, 196, 432, 56, "axi_protocol_converter", [
+        "AXI3 → AXI4-Lite（块设计原语，非仓库代码）",
+    ], accent="purple")
+    c.node(46, 266, 432, 214, "axi_lite_regs（16 字，offset = addr[5:2]）", [
+        "0x00 CTRL  bit0 LOAD_EN  bit1 HOLD",
+        "0x14 PRG_DATA  0x1C CHR_DATA（WO）",
+        "0x20 GAMEPAD（USB，见 ps-usb-gamepad 图）",
+        "WSTRB 逐字节 → 每拍 1 字节，最多 4 拍",
+        "pl_ld_valid / target / addr[16:0] / data[7:0]",
+        "pl_ld_ready ← 桥",
+        "pl_console_hold = ctrl[1] | ctrl[0]",
+        "最后一个字节后 ADDR += 4",
+    ], accent="purple")
+    c.node(46, 494, 432, 122, "三重惰性门（LOAD_EN 关闭即全丢）", [
+        "① 从机：仅 LOAD_EN=1 才把 DATA 写变成请求",
+        "② 桥：仅同步后的 enable 高才转发",
+        "③ 数纽：仅 ld_en 高才写入数组",
+        "LOAD_EN=0 → 写被 ACK 并丢弃；未接端口 = z",
+    ], accent="red")
+    c.node(46, 628, 432, 86, "本设计的绑定值", [
+        "pl_status_in = 8'h00（本设计无 PL 状态位）",
+        "prg_addr_reg[16:0] / chr_addr_reg[12:0]",
+    ], accent="muted")
+
+    c.node(762, 126, 432, 150, "nes_cart_load_bridge", [
+        "bundled-data toggle 握手（非逐位同步）",
+        "host 侧：锁存 target/addr/data，翻转 req_toggle",
+        "core 侧：req_sync1/2/3，边沿触发",
+        "输出 prg_ld_en/addr/data/we + chr_ld_*",
+        "core_reset = rst_core（域复位，非 console hold）",
+    ], accent="green")
+    c.node(762, 300, 432, 140, "nes_cart_rom · PRG 半（核内）", [
+        "nes_system_v6 u_prg_rom（PRG_ENABLE=1）",
+        "128 KiB · prg_ld_addr[16:0]",
+        "写口：prg_ld_en && prg_ld_we",
+        "写不随 reset 门控（console 全程被按住）",
+    ], accent="purple")
+    c.node(762, 464, 432, 140, "nes_cart_rom · CHR 半（顶层）", [
+        "nes_zynq_top u_cart_chr（CHR_ENABLE=1）",
+        "8 KiB · chr_ld_addr[12:0]",
+        "与 mapper 的 $2007 写共用一个写口",
+        "共用写口的形状见 cart-rom 图",
+    ], accent="purple")
+    c.node(762, 628, 432, 150, "console hold 同步", [
+        "ps_console_hold → ps_hold_core_q0/q1（2FF）",
+        "core_domain_reset = rst_core | ps_hold_core_q1",
+        "只并入 CPU/PPU 复位与 CHR 数纽复位",
+        "绝不并入桥的 core_reset（否则加载死锁）",
+    ], accent="red")
+
+    c.flow([(262, 184), (262, 194)], color="blue", sw=1.4)
+    c.flow([(262, 252), (262, 264)], color="purple", sw=1.4)
+    c.flow([(478, 330), (760, 206)], color="blue")
+    c.text(600, 250, "pl_ld_valid / target / addr / data", size=FS_S, fill="blue")
+    c.flow([(760, 246), (478, 372)], color="green")
+    c.text(606, 300, "pl_ld_ready", size=FS_S, fill="green")
+    c.flow([(978, 276), (978, 298)], color="purple", sw=1.4)
+    c.flow([(1030, 276), (1090, 462)], color="purple", sw=1.4)
+    c.text(1114, 380, "chr_ld_*", size=FS_S, fill="purple", anchor="start")
+    c.flow([(790, 626), (790, 606)], color="red", dash="4 3", sw=1.2)
+    c.text(800, 622, "hold → 域复位", size=FS_S, fill="red", anchor="start")
+
+    legend(c, 46, 856, [
+        ("box", "PL 逻辑"), ("mem", "卡带存储"), ("arrow", "AXI / 数据"),
+        ("dash", "跨时钟域 / 复位"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 15 -- PS boot chain, sequence form
+# ---------------------------------------------------------------------------
+def fig_ps_rom_load_software():
+    c = Svg(1240, 1030, "PS 启动链：BootROM → FSBL → PL 编程 → loader → SD 读 → AXI 流送 → LOAD_EN 释放")
+    title_block(c, "PS 运行时卡带加载：启动链（序列，非拓扑）",
+                "tools/ps/{boot.bif, build_ps.tcl, sdk_flow.tcl} + "
+                "tools/ps/app/main.c + rtl/platform/zynq/nes_zynq_top.v")
+
+    x, w, h, gap = 60, 1120, 62, 12
+    y = 96
+    steps = [
+        (1, "BootROM（片内只读）", "SD 启动模式 → 读 BOOT.bin 分区表", "从未运行", "blue"),
+        (2, "FSBL（BOOT.bin part 1）", "初始化 DDR 与时钟", "从未运行", "blue"),
+        (3, "PL 编程（part 3 bitstream）", "ps_nes.bit → fabric（否则寄存器不存在）", "从未运行", "purple"),
+        (4, "loader_app（part 2）", "UART0 115200 8N1（MIO 14/15）", "从未运行", "green"),
+        (5, "link_check", "SCRATCH 四图案往返 + ID == 0x4E455301", "仿真已验", "green"),
+        (6, "挂载 SD / 打开文件", "FatFs(xsdps, SD0 MIO40..45) → 0:/game.nes", "从未运行", "green"),
+        (7, "iNES 头解析", "16 B：magic 4E 45 53 1A / PRG·CHR 块数 / trainer", "从未运行", "green"),
+        (8, "CTRL = LOAD_EN（蕴含 HOLD）", "PRG_ADDR = 0, CHR_ADDR = 0；CPU/PPU 被按住", "仿真已验", "red"),
+        (9, "流送 PRG → CHR", "PRG_DATA / CHR_DATA，LE 通道序，地址自动 +4", "仿真已验", "purple"),
+        (10, "CTRL = 0 释放 console", "RESULT: PASS (cartridge loaded)", "从未运行", "red"),
+        (11, "run_gamepad()", "USB0 host 模式枚举（见 ps-usb-gamepad 图）", "从未运行", "blue"),
+    ]
+    for n, title, detail, tag, acol in steps:
+        stage(c, x, y, w, n, title, detail, tag=tag, accent=acol, h=h)
+        if n != len(steps):
+            c.flow([(x + 26, y + h), (x + 26, y + h + gap)], color=acol, sw=1.4)
+        y += h + gap
+
+    y += 6
+    c.node(60, y, 560, 86, "BOOT.bin（bootgen，4,215,424 B）三分区", [
+        "part 1  fsbl.elf（[bootloader]）",
+        "part 2  loader_app.elf（loader，先跑）",
+        "part 3  ps_nes.bit（PL 编程用）",
+    ], accent="purple")
+    c.node(640, y, 540, 86, "失败策略：console 永不释放", [
+        "link check / 无卡 / 文件不存在 / iNES 非法 / 短读",
+        "任一失败停在原地，LOAD_EN 保持 → 半加载不能执行",
+    ], accent="red")
+
+    legend(c, 60, 990, [
+        ("sim", "仿真已验"), ("never", "从未运行"), ("box", "启动阶段"),
+        ("mem", "产物 / 策略"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 16 -- USB gamepad path, with evidence tags
+# ---------------------------------------------------------------------------
+def fig_ps_usb_gamepad():
+    c = Svg(1260, 900, "USB 手柄通路：ULPI PHY → hub → Type-A → PS USB0 → 枚举 → GAMEPAD → OR → buttons1")
+    title_block(c, "USB HID 手柄：从 Type-A 口到 nes_system_v6.buttons1",
+                "tools/ps/app/{usb_gamepad.c, usb_hid.h, main.c} + "
+                "tools/ps/build_ps.tcl + rtl/platform/zynq/nes_zynq_top.v")
+
+    # ---- board wiring band -------------------------------------------------
+    c.rect(28, 84, 1204, 150, fill="none", stroke="yellow", rx=10, sw=1.3,
+           dash="6 4")
+    c.text(44, 102, "板级接线（板级事实，非仓库源码事实）", size=FS_S,
+           fill="yellow", anchor="start")
+    badge(c, 420, 90, "板级事实", "yellow")
+    c.node(44, 116, 200, 96, "PS USB0", [
+        "MIO 28..39",
+        "xusbps（usbps_v2_4）",
+    ], accent="blue")
+    c.node(300, 116, 220, 96, "USB3320 ULPI PHY", [
+        "板级器件",
+    ], accent="yellow")
+    c.node(576, 116, 220, 96, "GL850G hub", [
+        "板级器件",
+    ], accent="yellow")
+    c.node(852, 116, 330, 96, "4 × USB Type-A host 口", [
+        "只在 host 模式下带电（P4 决定路由）",
+    ], accent="yellow")
+    c.flow([(244, 164), (298, 164)], color="yellow", sw=1.4)
+    c.flow([(520, 164), (574, 164)], color="yellow", sw=1.4)
+    c.flow([(796, 164), (850, 164)], color="yellow", sw=1.4)
+    c.text(300, 250, "P4 \"OTG SW\" 跳线：选择 host 路由。未置 host → 四个口全死，无软件绕过。",
+           size=FS_N, fill="red", anchor="start", weight="600")
+
+    # ---- PS software band --------------------------------------------------
+    c.rect(28, 272, 1204, 330, fill="none", stroke="green", rx=10, sw=1.3,
+           dash="6 4")
+    c.text(44, 290, "PS 软件（tools/ps/app/*.c）", size=FS_S, fill="green",
+           anchor="start")
+    badge(c, 320, 278, "从未运行", "red")
+    c.node(44, 306, 220, 150, "xusbps 驱动", [
+        "device-mode 库",
+        "无 XUsbPs_ConfigureHost",
+        "EP0 DMA/QH 内存",
+        "XUsbPs_ConfigureDevice",
+    ], accent="blue")
+    c.node(288, 306, 220, 150, "进入 host 模式", [
+        "直接写寄存器（硬件要求）",
+        "MODE = 0x3（CM_HOST）",
+        "PORTSCR PP 供电",
+        "不调用 SetDeviceAddress",
+    ], accent="red")
+    c.node(532, 306, 260, 150, "枚举（EP0 控制传输）", [
+        "wait CCS → bus reset PR",
+        "GET_DESCRIPTOR(DEVICE)",
+        "SET_ADDRESS",
+        "GET_DESCRIPTOR(CONFIG)",
+        "SET_CONFIGURATION / SET_IDLE",
+    ], accent="red")
+    c.node(816, 306, 210, 150, "纯解析（host-tested）", [
+        "usb_parse_config_descriptor",
+        "hid_parse_report_descriptor",
+        "nes_buttons_from_report",
+        "60 checks · 0 失败",
+    ], accent="green")
+    c.node(1050, 306, 170, 150, "中断 IN 轮询", [
+        "EpEnable IN",
+        "EpBufferReceive",
+        "→ buttons 字节",
+    ], accent="red")
+    c.flow([(264, 380), (286, 380)], color="blue", sw=1.4)
+    c.flow([(508, 380), (530, 380)], color="red", sw=1.4)
+    c.flow([(792, 380), (814, 380)], color="red", sw=1.4)
+    c.flow([(1026, 380), (1048, 380)], color="green", sw=1.4)
+    c.node(44, 470, 1176, 118, "失败阶段（每个 USBGP_ERR_* 一个名字，main.c 打印）", [
+        "controller lookup / controller init / endpoint-DMA config / no device attached (port reset failed)",
+        "device descriptor / SET_ADDRESS / configuration descriptor / no HID interface / no interrupt IN endpoint",
+        "SET_CONFIGURATION / SET_IDLE / report descriptor / not a gamepad / interrupt endpoint poll",
+    ], accent="muted")
+
+    # ---- PL delivery band --------------------------------------------------
+    c.rect(28, 626, 1204, 196, fill="none", stroke="green", rx=10, sw=1.3,
+           dash="6 4")
+    c.text(44, 644, "PL 送达路径（RTL，仿真已验）", size=FS_S, fill="green",
+           anchor="start")
+    badge(c, 340, 632, "仿真已验", "green")
+    c.node(44, 660, 260, 140, "GAMEPAD 0x20", [
+        "axi_lite_regs reg_gamepad[7:0]",
+        "pl_gamepad[7:0]",
+        "WSTRB 逐字节",
+    ], accent="purple")
+    c.node(360, 660, 300, 140, "OR（sys_clk 域内）", [
+        "btn_meta_q <= touch_buttons | ps_gamepad",
+        "先在源域合成，只跨一次",
+        "规则是 OR，不是覆盖",
+    ], accent="blue")
+    c.node(716, 660, 300, 140, "两级同步（2FF）", [
+        "btn_meta_q / btn_sync_q",
+        "ASYNC_REG；XDC 有界 CDC",
+        "→ nes_system_v6.buttons1",
+    ], accent="orange")
+    c.node(1072, 660, 148, 140, "console", [
+        "$4016",
+        "buttons1",
+    ], accent="green")
+    c.flow([(304, 730), (358, 730)], color="purple", sw=1.4)
+    c.flow([(660, 730), (714, 730)], color="blue", sw=1.4)
+    c.flow([(1016, 730), (1070, 730)], color="orange", sw=1.4)
+
+    legend(c, 44, 856, [
+        ("arrow", "数据 / 请求"), ("sim", "仿真或 host test 已验"),
+        ("never", "从未运行"), ("mem", "板级事实 / 寄存器"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 17 -- cartridge arrays and the single shared write port
+# ---------------------------------------------------------------------------
+def fig_cart_rom():
+    c = Svg(1220, 840, "nes_cart_rom：两个字节宽数组、$readmemh 初始化、读通路与唯一写口")
+    title_block(c, "卡带 ROM：$readmemh 内容、读通路与唯一的共用写口",
+                "rtl/nes_core/cart/nes_cart_rom.v · PRG 在核内、CHR 在平台顶层")
+
+    c.node(40, 92, 1140, 66, "$readmemh 初始化（elaboration 期 → bitstream）", [
+        "prg_rom[0:131071] ← $readmemh(PRG_INIT_FILE)   ·   chr_rom[0:8191] ← $readmemh(CHR_INIT_FILE)",
+        "文件缺失或长度不符 → Vivado 静默优化掉数组（Block RAM Tile 计数随之下降，见 nes_zynq_top.v 头注释）",
+    ], accent="muted", align="left")
+
+    # PRG row
+    c.node(40, 194, 340, 126, "PRG 读口（CPU 侧）", [
+        "prg_addr[16:0] ← mapper_prg_bank_offset",
+        "prg_en 门控（低 = 保持，不返回 0）",
+        "prg_rdata 一 clk 寄存读",
+        "地址稳定 12 clk（div_phase 1..11 + 0）",
+    ], accent="blue")
+    c.node(430, 194, 350, 126, "prg_rom [0:131071][7:0]", [
+        "PRG_ENABLE=1（nes_system_v6 内）",
+        "读口：prg_addr → prg_rdata",
+        "写口：prg_ld_en && prg_ld_we",
+    ], accent="purple")
+    c.node(840, 194, 340, 126, "PRG 加载端口（PS）", [
+        "prg_ld_en / prg_ld_addr[16:0]",
+        "prg_ld_data[7:0] / prg_ld_we",
+        "唯一写口，不随 reset 门控",
+    ], accent="orange")
+    c.flow([(380, 240), (428, 240)], color="blue")
+    c.flow([(428, 274), (380, 274)], color="purple", head=True)
+    c.flow([(838, 257), (782, 257)], color="orange")
+
+    # CHR row
+    c.node(40, 344, 340, 150, "CHR 读口（PPU 侧）", [
+        "chr_addr[16:0] ← chr_final_addr",
+        "ce_ppu && chr_req 唯一门控",
+        "chr_rdata 在 ce_ppu 沿寄存",
+        "零余量：插一级寄存器会静默返回上一字节",
+    ], accent="blue")
+    c.node(430, 344, 350, 150, "chr_rom [0:8191][7:0]", [
+        "CHR_ENABLE=1（nes_zynq_top 内）",
+        "读口：chr_addr[12:0] → chr_rdata",
+        "写口：唯一 muxed 写语句（下方）",
+        "索引只用 [12:0]，高位 bank 折叠",
+    ], accent="purple")
+    c.node(840, 330, 340, 78, "$2007 mapper 写臂", [
+        "chr_ram_enable && chr_we",
+        "chr_waddr[13:0] → chr_windex[12:0]",
+    ], accent="red")
+    c.node(840, 420, 340, 78, "PS 加载端口", [
+        "chr_ld_en / chr_ld_addr[12:0]",
+        "chr_ld_data / chr_ld_we",
+    ], accent="orange")
+    c.flow([(380, 400), (428, 400)], color="blue")
+    c.flow([(428, 440), (380, 440)], color="purple")
+    c.flow([(838, 369), (700, 538)], color="red")
+    c.flow([(838, 459), (740, 538)], color="orange")
+
+    c.node(300, 540, 880, 140, "CHR 唯一写口：一个 muxed 写语句（不是一个 if/else）", [
+        "chr_ld_wr   = (chr_ld_en === 1'b1) && (chr_ld_we === 1'b1)",
+        "chr_wenable = chr_ld_wr | (chr_ram_enable && chr_we)     ← 一个 if",
+        "chr_wsel    = chr_ld_wr ? chr_lindex : chr_windex",
+        "chr_wdat    = chr_ld_wr ? chr_ld_data : chr_wdata",
+        "if/else 命名数组两次 = 两个写口 → Vivado 静默落入 distributed RAM（实测 2 → 0 BRAM，LUTRAM 2 → 3074）",
+    ], accent="red")
+    c.flow([(740, 538), (680, 520)], color="red", sw=1.4)
+    c.text(300, 708, "PRG 只多一个写口（仅 PS 加载）；CHR 的写口由 mapper $2007 与 PS 加载共用。",
+           size=FS_N, fill="muted", anchor="start")
+
+    legend(c, 44, 786, [
+        ("box", "端口 / 逻辑"), ("mem", "数组"), ("arrow", "地址 / 数据"),
+        ("dash", "共用写口"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 18 -- controller poll: level strobe snapshot + 8-read shift
+# ---------------------------------------------------------------------------
+def fig_controller():
+    c = Svg(1220, 780, "nes_controller：电平 strobe 快照与 8 次移位读取（$4016/$4017）")
+    title_block(c, "标准手柄：并联快照 + 电平 strobe + 8 次移位读取",
+                "rtl/nes_core/controller/nes_controller.v · 位序 A,B,Select,Start,Up,Down,Left,Right")
+
+    c.node(40, 110, 250, 92, "buttons / buttons2（并联）", [
+        "0 A · 1 B · 2 Select · 3 Start",
+        "4 Up · 5 Down · 6 Left · 7 Right",
+    ], accent="blue")
+    c.node(340, 100, 280, 112, "电平装载（latch_strobe）", [
+        "为 1：每 clk 重装 sr = buttons",
+        "同时 cnt = 0",
+        "data_bit 组合跟随 buttons[0]",
+        "为 0：冻结在最后快照",
+    ], accent="orange")
+    c.node(340, 250, 270, 112, "两路移位寄存器 sr1_q / sr2_q", [
+        "读 $4016 移 sr1；读 $4017 移 sr2",
+        "每读一拍：sr <= {fill_one, sr[7:1]}",
+        "cnt 4 bit，饱和于 9",
+    ], accent="green")
+    c.node(660, 100, 250, 150, "EXTRA_READ（第 9 次起）", [
+        "0 / 3：恒 1（8'hFF）默认",
+        "1：保持最后一位（快照 bit7）",
+        "2：移进 0",
+        "前 8 次三模式逐位相同",
+    ], accent="purple")
+    c.node(660, 300, 250, 96, "读选通 read_select", [
+        "0 = $4016 (1P)；1 = $4017 (2P)",
+        "只选 mux，无任何副作用",
+    ], accent="green")
+    c.node(960, 150, 230, 110, "输出", [
+        "data_bit（高 = 按下）",
+        "data_out = {7'b0, data_bit}",
+        "dbg_sr / latch / cnt / past8",
+    ], accent="blue")
+
+    c.flow([(290, 156), (338, 156)], color="blue", sw=1.4)
+    c.flow([(480, 212), (480, 248)], color="orange", sw=1.4)
+    c.flow([(620, 306), (658, 306)], color="green", sw=1.4)
+    c.flow([(610, 156), (658, 175)], color="purple", sw=1.4)
+    c.flow([(910, 205), (958, 205)], color="blue", sw=1.4)
+
+    # 10-cycle poll strip
+    y = 470
+    c.text(60, y - 12, "一次完整轮询 = 10 个 CPU 周期：2 次写（strobe 高、低）+ 8 次读", size=FS_N,
+           anchor="start", weight="600")
+    labels = [("W", "strobe\n=1", "red"), ("W", "strobe\n=0", "orange"),
+              ("R", "A", "green"), ("R", "B", "green"), ("R", "Sel", "green"),
+              ("R", "St", "green"), ("R", "Up", "green"), ("R", "Dn", "green"),
+              ("R", "Lt", "green"), ("R", "Rt", "green")]
+    for i, (kind, lab, col) in enumerate(labels):
+        x = 60 + i * 112
+        c.rect(x, y, 104, 62, fill="panel", stroke=col, rx=5, sw=1.4)
+        c.text(x + 52, y + 22, kind, size=FS_S, weight="700", fill=col)
+        for j, ln in enumerate(lab.split("\n")):
+            c.text(x + 52, y + 40 + 14 * j, ln, size=FS_S, fill="muted")
+    c.text(60, y + 92, "装载在 strobe=1 的每个 clk 沿发生；快照在 strobe 变 0 后冻结；"
+           "此后每读一位，bit0 先出。", size=FS_S, fill="muted", anchor="start")
+
+    c.node(60, 592, 1060, 116, "为什么这是电平而不是边沿（三种情况都必须成立）", [
+        "strobe 保持 1 且按钮中途变化 → 每 clk 重装，data_bit 组合跟随当前 buttons[0]",
+        "strobe 为 1 时读 → 返回当前 buttons[0]，移位寄存器与计数器都不动",
+        "strobe 由 1 变 0 → 停止装载，停在最后一个时钟沿看到的快照上",
+    ], accent="muted")
+    legend(c, 60, 728, [
+        ("box", "寄存 / 逻辑"), ("mem", "策略 / 边界"), ("arrow", "数据 / 控制"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
+# Figure 19 -- PPU sprites: the parallel structure
+# ---------------------------------------------------------------------------
+def fig_ppu_sprite():
+    c = Svg(1240, 760, "nes_ppu_sprite：64 路并行比较 + 8 路优先级编码 + 优先选择链")
+    title_block(c, "PPU 精灵：并行的 64 比较器 + 8 槽选取 + 优先选择链",
+                "rtl/nes_core/ppu/nes_ppu_sprite.v · 纯组合，无时钟、无次 OAM")
+
+    c.node(40, 110, 220, 130, "primary OAM（端口）", [
+        "2048 bit 扁平总线",
+        "项 si：Y=oam[si*32 +: 8]",
+        "tile +8 · attr +16 · X +24",
+        "本模块只读，无时钟",
+    ], accent="purple")
+    c.node(310, 110, 250, 130, "64 路范围比较", [
+        "scan_row = scanline - Y（10 bit）",
+        "scan_hit = scan_row < height",
+        "低位回绕 → '不在范围'",
+        "height = ctrl[5] ? 16 : 8",
+    ], accent="blue")
+    c.node(310, 280, 250, 96, "in_range[63:0]", [
+        "64 路 scan_hit 并行成向量",
+    ], accent="green")
+    c.node(620, 110, 270, 150, "8 × nth_set 优先级编码", [
+        "nth_set(in_range, g), g = 0..7",
+        "返回第 g 个置位的位置",
+        "SLOT_U8 < range_count 判定槽存在",
+    ], accent="purple")
+    c.node(620, 300, 270, 130, "8 个 slot 地址", [
+        "s_table / s_tile / s_fine",
+        "xoff = dot - slot_x（10 bit）",
+        "xbit = hflip ? xoff[2:0] : 7-xoff[2:0]",
+    ], accent="green")
+    c.node(950, 110, 260, 150, "CHR 取数", [
+        "paddr = {s_pat_addr, 3'b000}（字节址）",
+        "plane_lo = chr[paddr]",
+        "plane_hi = chr[paddr + 64]",
+        "s_pat = {hi[xbit], lo[xbit]}",
+    ], accent="purple")
+    c.node(950, 300, 260, 130, "8 路优先选择链", [
+        "j = 0..7，!found && slot_opaque[j]",
+        "先到先得 = OAM 下标小者赢",
+        "sprite_pixel = {attr[1:0], pat[1:0]}",
+        "sprite_priority = {4{attr[5]}}",
+    ], accent="red")
+
+    c.flow([(260, 170), (308, 170)], color="purple", sw=1.4)
+    c.flow([(435, 240), (435, 278)], color="blue", sw=1.4)
+    c.flow([(560, 328), (618, 300)], color="green", sw=1.4)
+    c.flow([(755, 260), (755, 298)], color="purple", sw=1.4)
+    c.flow([(890, 190), (948, 190)], color="purple", sw=1.4)
+    c.flow([(890, 360), (948, 360)], color="green", sw=1.4)
+
+    c.node(40, 470, 580, 150, "为什么没有次 OAM / 评估窗口 / 移位寄存器", [
+        "真实硬件是 64 路并行比较器 + 优先级编码器，一级组合逻辑",
+        "软件模拟器必须用状态机把 64 项在 192 dot 里串行筛成 8 项",
+        "本模块直接照抄并行结构 → 每个 dot 重算一次整条通路",
+        "代价：一片组合逻辑；功能等价但时序上不是最终形态",
+    ], accent="muted")
+    c.node(660, 470, 550, 150, "两个标志", [
+        "sprite0_hit = pixel_active && slot_opaque[0]",
+        "                 && bg_pixel != 0（slot 0 不是 OAM 项 0）",
+        "sprite_overflow = frame_active && range_count > 8",
+        "（计数语义，不复现硬件的 m 递增 bug）",
+    ], accent="blue")
+    legend(c, 40, 664, [
+        ("box", "组合逻辑"), ("mem", "边界 / 标志"), ("arrow", "地址 / 字节"),
+    ])
+    return c
+
+
+# ---------------------------------------------------------------------------
 # Catalogue
 # ---------------------------------------------------------------------------
 FIGURES = [
@@ -1530,6 +2057,72 @@ FIGURES = [
         num=1,
         desc="start 锁存、四态状态机、513/514 周期账、总线握手与 OAMADDR 两种接法。",
     ),
+    dict(
+        fn=fig_ps_rom_load,
+        file="ps-rom-load.svg",
+        title="PS 运行时卡带加载拓扑",
+        source=("rtl/platform/zynq/axi_lite_regs.v + "
+                "rtl/nes_core/cart/nes_cart_load_bridge.v + "
+                "rtl/nes_core/cart/nes_cart_rom.v + "
+                "rtl/platform/zynq/nes_zynq_top.v"),
+        host="docs/modules/ps-rom-load.md",
+        num=1,
+        desc="AXI 从机与 50 MHz PS 域、bundled-data 跨域桥、核内 PRG 与顶层 CHR 的加载端口、"
+             "LOAD_EN 三重惰性门与 console hold 同步。",
+    ),
+    dict(
+        fn=fig_ps_rom_load_software,
+        file="ps-rom-load-software.svg",
+        title="PS 启动链（序列）",
+        source=("tools/ps/boot.bif + tools/ps/build_ps.tcl + tools/ps/sdk_flow.tcl + "
+                "tools/ps/app/main.c + rtl/platform/zynq/nes_zynq_top.v"),
+        host="docs/modules/ps-rom-load-software.md",
+        num=1,
+        desc="BootROM → FSBL → PL 编程 → loader → link_check → SD 读 → iNES 解析 → "
+             "LOAD_EN 流送 → 释放 console，逐段带仿真/从未运行证据标记。",
+    ),
+    dict(
+        fn=fig_ps_usb_gamepad,
+        file="ps-usb-gamepad.svg",
+        title="USB 手柄通路与证据",
+        source=("tools/ps/app/usb_gamepad.c + tools/ps/app/usb_hid.h + "
+                "tools/ps/app/main.c + tools/ps/build_ps.tcl + "
+                "rtl/platform/zynq/nes_zynq_top.v"),
+        host="docs/modules/ps-usb-gamepad.md",
+        num=1,
+        desc="板级 ULPI PHY / hub / Type-A 与 P4 跳线、PS host 模式与枚举、host-tested 纯解析、"
+             "GAMEPAD 0x20 → OR → 2FF → buttons1，逐段标出从未运行与板级事实。",
+    ),
+    dict(
+        fn=fig_cart_rom,
+        file="cart-rom.svg",
+        title="卡带数组与唯一写口",
+        source="rtl/nes_core/cart/nes_cart_rom.v",
+        host="docs/modules/cart-rom.md",
+        num=1,
+        desc="两个字节宽数组的 $readmemh 初始化、PRG/CHR 读通路，以及 mapper $2007 与 PS 加载"
+             "共享的单一 muxed 写语句（if/else 会静默落入 distributed RAM）。",
+    ),
+    dict(
+        fn=fig_controller,
+        file="controller-poll.svg",
+        title="手柄轮询：电平快照与 8 次移位",
+        source="rtl/nes_core/controller/nes_controller.v",
+        host="docs/modules/controller.md",
+        num=1,
+        desc="并联输入、电平敏感 strobe 快照、两路移位寄存器与 8 次读取的位序，"
+             "EXTRA_READ 的第 9 次策略与 10 周期轮询。",
+    ),
+    dict(
+        fn=fig_ppu_sprite,
+        file="ppu-sprite-parallel.svg",
+        title="精灵并行结构",
+        source="rtl/nes_core/ppu/nes_ppu_sprite.v",
+        host="docs/modules/ppu-sprites.md",
+        num=1,
+        desc="64 路并行范围比较、8× nth_set 优先级编码、CHR 取数与 8 路优先选择链，"
+             "以及为何没有次 OAM / 评估窗口 / 移位寄存器。",
+    ),
 ]
 
 
@@ -1566,6 +2159,10 @@ def build_readme():
     lines.append("  紫色 = 存储器/地址翻译，红色 = 复位/冻结/危险，黄色 = 例外。")
     lines.append("- 实线箭头 = 同域数据；虚线箭头 = 跨时钟域或非阻塞关系。")
     lines.append("- 圆角框 = 模块；虚线竖线 = 时钟域边界；图例在每张图底部。")
+    lines.append("- 两类图形：圆角框 + 箭头 = **拓扑**（谁连到谁）；编号阶段 = "
+                 "**顺序**（启动链一类）。")
+    lines.append("- 顺序图阶段右侧的圆角证据标签：绿色 = 仿真或 host test 已验，")
+    lines.append("  红色 = 从未运行，黄色 = 板级事实。")
     lines.append("- 字体：正文用无衬线，信号名/位宽用等宽。")
     lines.append("")
     return "\n".join(lines)

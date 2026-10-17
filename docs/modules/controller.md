@@ -298,6 +298,10 @@ buttons = 8'b1010_0101   (A=1 B=0 Select=1 Start=0 Up=0 Down=1 Left=0 Right=1)
 - 读 `$4016` 只移位 `sr1_q`，读 `$4017` 只移位 `sr2_q`。两个计数器互相独立。
 - `read_select` 本身没有任何副作用：不改变状态，只选 mux。testbench 专门用 20 拍只翻 `read_select` 而不发读选通来钉住这一点。
 
+![图 1：手柄轮询——电平快照与 8 次移位](../figures/controller-poll.svg)
+
+**图 1** · 8 根并联输入 → 电平敏感 strobe 快照 → 两路移位寄存器与 8 次读取的位序（bit0 = A 先出），以及 `EXTRA_READ` 决定的第 9 次行为；底部是"2 写 + 8 读"的 10 周期轮询。事实来源 [`nes_controller.v`](../../rtl/nes_core/controller/nes_controller.v)。生成图，勿手改。
+
 ---
 
 ## 4. 第 9 次及以后的读取：三种策略

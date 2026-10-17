@@ -46,6 +46,10 @@ button byte in the `sys_clk` domain and the sum crosses into the core domain
 through the existing button synchroniser, reaching `nes_system_v6.buttons1`. See
 `ps-usb-gamepad.md` §8 for the arbitration rule and why it is OR.
 
+![图 1：PS 运行时卡带加载拓扑](../figures/ps-rom-load.svg)
+
+**图 1** · AXI4-Lite 从机（`FCLK_CLK0` 50 MHz 域）与核时钟域（`mmcm_core_clk` 21.477272727 MHz）之间的 bundled-data 桥：`LOAD_EN` 的三重惰性门、一个 AXI 写展开成逐字节的加载、核内 PRG 与顶层 CHR 各自的加载端口，以及刻意不并入桥的 console hold 同步。事实来源 [`axi_lite_regs.v`](../../rtl/platform/zynq/axi_lite_regs.v)、[`nes_cart_load_bridge.v`](../../rtl/nes_core/cart/nes_cart_load_bridge.v)、[`nes_cart_rom.v`](../../rtl/nes_core/cart/nes_cart_rom.v)、[`nes_zynq_top.v`](../../rtl/platform/zynq/nes_zynq_top.v)。生成图，勿手改。
+
 
 ## The load path, and why the arrays stay byte-wide
 
