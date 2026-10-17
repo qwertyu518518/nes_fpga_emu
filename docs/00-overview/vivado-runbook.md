@@ -102,6 +102,17 @@ echo EXITCODE=%ERRORLEVEL% >> real_stdout.log
 
 四条流程的关系：**A 只回答"多大"，B 回答"多大 + 快不快"，C 在不重跑的前提下回答"快不快"，D 才产出比特流。** 选哪一条由"这次要回答什么问题"决定，不由"哪一条跑得快"决定。
 
+### 3.0 要产出比特流，先分清两条可复现的构建流程
+
+A–D 是**探针**流程，用来回答面积 / 时序问题。**真正产出比特流、并且已经进仓库、由启动器驱动的构建流程只有两条**：
+
+| 构建流程 | 位置 | 顶层 | 干什么 | 什么时候用 |
+|---|---|---|---|---|
+| **仅 PL（主构建）** | [`tools/pl/`](../../tools/pl/README.md) | `nes_zynq_pl_top`（对 `nes_zynq_top` 的 PL-only 绑定） | 整个控制台都在 PL 上，卡带在**综合时**烧进 BRAM，产出独立 `.bit` | **默认。** 除非你要下面的 PS 功能 |
+| **PS 流程（附加）** | [`tools/ps/`](../../tools/ps/README.md) | 块设计（PS7 + `axi_lite_regs` + `nes_zynq_top`） | PS 上的裸机加载程序从 TF 卡**运行时**读 `.nes`，经 AXI4-Lite 灌进同一块 BRAM，外加 USB 手柄；产出 `BOOT.bin`（不是独立 `.bit`） | 想不重新综合就换卡带时 |
+
+两条流程互相独立，都建 `nes_zynq_top`；仅 PL 那条通过 `nes_zynq_pl_top` 把它绑成 53 个端口。**下面第 3.4 节的流程 D 就是"仅 PL"那一条**：它原先只存在于仓库外的 `D:\vivadoProject\zynq_bitstream_vN\`，现在已进仓库。
+
 ### 3.1 流程 A —— 综合探针（只有面积）
 
 **干什么**：拿到一个 top 在 `xc7z020clg400-2` 上的 **post-synthesis 面积上界**，不带任何时序。
@@ -248,11 +259,16 @@ exit
 
 【风险提示】**`-nworst 1` 只在"端点"粒度上完备，在"起点"粒度上不完备。** 一个端点可以有很多个起点。`enum2.tcl:36-38` 因此专门跑了一遍 `-nworst 40 -max_paths 3000` 来统计"到达同一端点的不同起点个数"。**所以：`-nworst 1` 的条数 = 端点数，不等于路径总数。**
 
-### 3.4 流程 D —— 全量非 OOC → 比特流（拆成 `build.tcl` / `finish.tcl`）
+### 3.4 流程 D —— 全量非 OOC → 比特流（仓库内：[`tools/pl/`](../../tools/pl/README.md)）
 
-**干什么**：整个设计（核 + 平台适配层 + 真卡带）跑到 `route_design`，然后出 `.bit`。
-**代价**：本机实测（`D:\vivadoProject\zynq_bitstream_v5\build_stdout.log`）`synth_design` `elapsed = 00:03:26`、`opt_design` `00:00:30`、`place_design` `00:01:46`、`phys_opt_design` `00:00:06`、`route_design` `00:02:53`、`report_timing_summary` `00:00:08`，工具自报合计约 **529 s**。
-【风险提示】**这是本仓库唯一一条跑到比特流的流程，而它的面积 / 时序数字没有登记在 `toolchains.md` 或 `risk-register.md` 里。** 所以**不要从本文件引用它的面积或时序结果** —— 要引用就去把那次运行登记进 `risk-register.md`，或者直接引它的报告文件并把登记缺失这件事一起写出来。
+**干什么**：整个设计（核 + 平台适配层 + 真卡带）跑到 `route_design`，然后出 `.bit`。**这是本项目的主比特流流程** —— 历史上每一个 `zynq_bitstream_vN` 都由它产出，包括上板手册让人先烧的那一个。
+
+**它现在在仓库里。** 脚本是 [`tools/pl/build.tcl`](../../tools/pl/build.tcl) / [`tools/pl/finish.tcl`](../../tools/pl/finish.tcl)，外加出处对照用的 [`tools/pl/ph_build.tcl`](../../tools/pl/ph_build.tcl)、PL-only 绑定 [`tools/pl/nes_zynq_pl_top.v`](../../tools/pl/nes_zynq_pl_top.v) 和启动器 [`tools/pl/run_pl.ps1`](../../tools/pl/run_pl.ps1)。**它原先只存在于仓库外的 `D:\vivadoProject\zynq_bitstream_vN\`**，所以一个克隆既能建 PS 那一版、又建不了 PL 这一版，而旧文档给出的命令指向仓库里不存在的路径。
+
+顶层是 `nes_zynq_pl_top`，不是 `nes_zynq_top` 本身：`nes_zynq_top` 现在带八个 `ps_*` 输入，PL-only 构建没有 PS 去驱动它们，所以用 `nes_zynq_pl_top` 把这八个口绑死（与两个板级无关 testbench 的做法一致：`ps_ld_valid`/`ps_ld_target`/`ps_ld_addr`/`ps_ld_data`/`ps_load_enable`/`ps_console_hold`/`ps_gamepad` 接 0、`ps_ld_ready` 悬空），端口数仍是 53，控制台不会被悬空的 `ps_console_hold` 拉进复位。**RTL 未被改动。**
+
+**代价**：本机实测（**历史版本** `D:\vivadoProject\zynq_bitstream_v5\build_stdout.log`，早于 HDMI，仅作耗时参考）`synth_design` `elapsed = 00:03:26`、`opt_design` `00:00:30`、`place_design` `00:01:46`、`phys_opt_design` `00:00:06`、`route_design` `00:02:53`、`report_timing_summary` `00:00:08`，工具自报合计约 **529 s**。加 HDMI 后会更长。
+【风险提示】面积 / 时序数字要引用时，按第 7 节的模板带上五个槽位，并点明它来自哪一份 `rep_*.rpt`；不要只引一个 WNS。
 
 #### 为什么拆成两段（这是本节唯一的要点）
 
@@ -284,7 +300,7 @@ foreach {hex want} [list $prg_rel 393216 $chr_rel 24576] {
 read_verilog $rtl_files
 read_xdc rtl/platform/zynq/nes_zynq_top.xdc
 
-synth_design -top nes_zynq_top -part xc7z020clg400-2      # <== 注意：没有 -mode
+synth_design -top nes_zynq_pl_top -part xc7z020clg400-2   # <== PL-only 绑定，且没有 -mode
 write_checkpoint -force out_synth.dcp
 report_utilization            -file rep_util_synth.rpt
 report_utilization -hierarchical -file rep_util_synth_hier.rpt
@@ -318,7 +334,7 @@ open_checkpoint out_route.dcp
 set rambs [get_cells -quiet -hierarchical -filter {REF_NAME == RAMB36E1 || REF_NAME == RAMB18E1}]
 # ... 断言：BRAM tile 数、LUT as Memory 数、setup WNS / hold WHS、
 #            setup/hold 失败端点数、TNS/THS、路由错误数、DRC error 数、
-#            44 个端口全部有 PACKAGE_PIN、四个 create_clock 的周期、
+#            53 个端口全部有 PACKAGE_PIN、四个 create_clock 的周期、
 #            每个 [get_ports] 都真的匹配到一个端口、组合环为 0 ...
 # TNS 不从 get_timing_paths 读：-nworst 0 被拒，改读 report_timing_summary 的 Design Timing Summary 行
 write_bitstream -force <top>.bit
@@ -476,7 +492,7 @@ create_clock -name sys_clk -period 20.000 [get_ports clk]
 
 【风险提示】**所以这样量出来的 WNS 只描述器件内部逻辑，不含任何 pad。** 它不是板级约束集的结果，**不能当作"这块板能跑多快"来引用**。`toolchains.md` 第 3.2 节与第 5 节已经逐条写明这一点。
 
-**对照：全量非 OOC 那一跑（流程 D）确实是有引脚约束的** —— `finish.tcl:302-312` 断言 44 个端口全部拿到 `PACKAGE_PIN`，`finish.tcl:336-370` 断言 XDC 里每个 `[get_ports]` 目标都真的匹配到一个真实端口。**两者的 WNS 口径因此完全不同，不可互相引用。**
+**对照：全量非 OOC 那一跑（流程 D）确实是有引脚约束的** —— `tools/pl/finish.tcl` 断言 53 个端口全部拿到 `PACKAGE_PIN`，并断言 XDC 里每个 `[get_ports]` 目标都真的匹配到一个真实端口。**两者的 WNS 口径因此完全不同，不可互相引用。**
 
 ### 6.2 两个例外，都在实测文件里
 
@@ -711,7 +727,7 @@ bootgen -image boot.bif -arch zynq -o BOOT.bin -w on
 
 ## 附：本文件引用的全部源文件
 
-**全部在 `D:\vivadoProject\` 下，仓库外。** 本文件不修改其中任何一个。
+**除流程 D 的仓库内实现（`tools/pl/`）外，下表全部在 `D:\vivadoProject\` 下，仓库外。** 本文件不修改其中任何一个。
 
 | 用途 | 路径 |
 |---|---|
@@ -721,7 +737,8 @@ bootgen -image boot.bif -arch zynq -o BOOT.bin -w on
 | 流程 B 参考实现 | `ppu_zynq\impl2.tcl`、`divide_probe\divide.tcl` |
 | 流程 B 实测耗时 | `divide_probe\out\divide_summary.txt`、`constraint_probe\out\p80_summary.txt`、`ppu_zynq\out\impl2_summary.txt` |
 | 流程 C 参考实现 | `timing_enum\sweep.tcl`、`timing_enum\enum.tcl`、`timing_enum\enum2.tcl`、`timing_enum\margins.tcl`、`core_pal_probe\dcp_facts.tcl` |
-| 流程 D 参考实现 | `zynq_bitstream_v5\build.tcl`、`zynq_bitstream_v5\finish.tcl`、`zynq_bitstream_v5\build_stdout.log`、`zynq_bitstream_v5\finish_stdout.log`、`zynq_bitstream_v5\rep_util_synth.rpt` |
+| 流程 D（仅 PL）参考实现，**仓库内** | [`tools/pl/build.tcl`](../../tools/pl/build.tcl)、[`tools/pl/finish.tcl`](../../tools/pl/finish.tcl)、[`tools/pl/ph_build.tcl`](../../tools/pl/ph_build.tcl)、[`tools/pl/nes_zynq_pl_top.v`](../../tools/pl/nes_zynq_pl_top.v)、[`tools/pl/run_pl.ps1`](../../tools/pl/run_pl.ps1) |
+| 流程 D 历史版本（3.4 节耗时数字的来源） | `zynq_bitstream_v5\build.tcl`、`zynq_bitstream_v5\finish.tcl`、`zynq_bitstream_v5\build_stdout.log`、`zynq_bitstream_v5\finish_stdout.log`、`zynq_bitstream_v5\rep_util_synth.rpt` |
 | IO 放置不可行 | `ppu_zynq\out\impl_ext_stock.impl.log` |
 | 2018.3 陷阱 | `ppu_zynq\out\impl2_summary.txt`、`ppu_zynq\out\impl_summary.txt`、`ppu_zynq\out\impl_ext_ooc_np.check_timing.rpt`、`core_pal_probe\real_stdout.log`、`core_zynq\out\m4.synth.log`、`core_zynq\out\m0.synth.log` |
 | 负对照三顶层 | `rom_probe\impl.tcl`、`rom_probe\out\impl_summary.txt`、`rom_probe\out\{real,neg,null}.facts.txt`、`rom_probe\constr\rom_clk.xdc` |
