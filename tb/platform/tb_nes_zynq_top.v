@@ -1220,12 +1220,20 @@ module tb_nes_zynq_top;
         key = 2'b11;
         $display("TPAD released: buttons=%02h, A/B restored", dut.touch_buttons);
 
-        // Release it and let the flag clear consume the report.
+        // Release it the way the panel does: a READY report with zero points
+        // (16'h814E = 8'h80), which the driver's three-way decode treats as the
+        // lift.  The driver's own flag clear zeroes this model's status byte, so
+        // the release is re-armed every sys_clk until it is consumed.  Relying
+        // instead on the driver's 500 ms silence-timeout would push the run past
+        // this bench's global timeout and would test nothing this bench is for
+        // (the timeout is covered by tb_nes_touch_input).
         @(negedge sys_clk);
         touch_int = 1'b1;
+        sl_status = 8'h80;
         touch_guard = 0;
         while (dut.u_touch.touch_valid !== 1'b0 && touch_guard < 8000000) begin
             @(posedge sys_clk);
+            sl_status = 8'h80;
             touch_guard = touch_guard + 1;
         end
         if (dut.u_touch.touch_valid !== 1'b0) err("TOUCH_REPORT_NEVER_RELEASED", touch_guard, 0);

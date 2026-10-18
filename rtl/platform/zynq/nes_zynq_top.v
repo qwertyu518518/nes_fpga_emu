@@ -343,7 +343,36 @@ module nes_zynq_top #(
     // for the X2Y flag itself, so the frame and the axis order are known to the
     // design and published on touch_x_max / touch_y_max / touch_x2y instead of being
     // inferred from whatever coordinate read happened to be pointed at.
-    parameter  [15:0] CT_COORD_REG        = 16'h8150
+    parameter  [15:0] CT_COORD_REG        = 16'h8150,
+    // TEMPORARY TOUCH DIAGNOSTIC MARKER.  Defaults to 1 (on) on purpose: it is
+    // the whole point of this build, and it is what makes a still-broken touch
+    // path diagnosable in one flash instead of another inferential round.  Set
+    // it to 0 to disable the marker without editing anything else.
+    //
+    // WHERE AND WHAT: two 16x16 boxes are drawn on the video read side, at panel
+    // (4,4)..(19,19) and (24,4)..(39,19), by muxing the read-side RGB.  The left
+    // box is bright GREEN and is drawn only while `touch_valid` (the driver's
+    // decoded state) is high.  The right box is bright MAGENTA and is drawn only
+    // while `btn_sync_q[7:4]`, the button byte actually presented to the console
+    // by nes_system_v6.buttons1, is non-zero.
+    //
+    // WHAT IT IS FOR: it separates the two candidate fault locations.  If the
+    // green box is steady while the magenta box flickers, the fault is between
+    // the driver's state and the console (the region comparison or the CDC
+    // crossing).  If the green box itself flickers, the fault is inside the
+    // driver's own state machine.  Only ONE of the two boxes lit at once is
+    // itself informative: touch_valid asserted but no direction chosen means the
+    // region comparison came out of neither region.
+    //
+    // HOW TO REMOVE IT: delete the whole `generate` block tagged
+    // `TOUCH_DEBUG_MARKER` in the video-output section, and this parameter.  The
+    // base RGB conversion it wraps is left in place as `lcd_r8_base` etc.
+    //
+    // IT IS GATED BY THE SIGNAL IT DISPLAYS.  When the signal is low the box is
+    // NOT drawn and the pixel is ordinary video: a marker that is present
+    // regardless of its signal is exactly the defect the earlier raw-coordinate
+    // diagnostic had, where a crosshair sat in the corner from power-up.
+    parameter integer TOUCH_DEBUG_MARKER  = 1
 ) (
     input  wire        sys_clk,
     input  wire        sys_rst_n,
@@ -1065,9 +1094,46 @@ module nes_zynq_top #(
     // to mux on this word and has been removed, because the driver now calibrates
     // from the controller's own registers instead of measuring the symptom.  rgb565
     // goes to the pins exactly as nes_video_800x480 produced it.
-    wire [7:0] lcd_r8 = {vid_rgb565[15:11], vid_rgb565[15:13]};
-    wire [7:0] lcd_g8 = {vid_rgb565[10:5],  vid_rgb565[10:9]};
-    wire [7:0] lcd_b8 = {vid_rgb565[4:0],   vid_rgb565[4:2]};
+    wire [7:0] lcd_r8_base = {vid_rgb565[15:11], vid_rgb565[15:13]};
+    wire [7:0] lcd_g8_base = {vid_rgb565[10:5],  vid_rgb565[10:9]};
+    wire [7:0] lcd_b8_base = {vid_rgb565[4:0],   vid_rgb565[4:2]};
+
+    wire [7:0] lcd_r8;
+    wire [7:0] lcd_g8;
+    wire [7:0] lcd_b8;
+
+    // ==================================================================
+    // TEMPORARY TOUCH DIAGNOSTIC MARKER -- delete this whole generate block
+    // (and the TOUCH_DEBUG_MARKER parameter) to remove it.  See the parameter's
+    // comment in the port list for the full description, the box positions and
+    // the colours.  In one line: the GREEN box at panel x 4..19, y 4..19 shows
+    // `touch_valid` (the driver's decoded state), and the MAGENTA box at panel
+    // x 24..39, y 4..19 shows whether `btn_sync_q[7:4]` -- the byte presented to
+    // the console -- is non-zero.  Each box is drawn ONLY while its own signal
+    // is high; when the signal is low the pixel is ordinary video, so nothing
+    // appears from power-up.  The two signals are sampled combinationally from
+    // their own clock domains into the lcd_clk output mux, which is acceptable
+    // for a temporary diagnostic marker (the pins carry the raw raster); the
+    // marker is deleted before any build that would need that path timed.
+    // ==================================================================
+    generate
+    if (TOUCH_DEBUG_MARKER) begin : g_touch_debug_marker
+        wire in_mark_a = (vid_pixel_x >= 11'd4)  && (vid_pixel_x <= 11'd19) &&
+                         (vid_pixel_y >= 11'd4)  && (vid_pixel_y <= 11'd19);
+        wire in_mark_b = (vid_pixel_x >= 11'd24) && (vid_pixel_x <= 11'd39) &&
+                         (vid_pixel_y >= 11'd4)  && (vid_pixel_y <= 11'd19);
+        wire [23:0] mark_rgb = (in_mark_a && touch_valid)         ? 24'h00FF00 :
+                               (in_mark_b && |btn_sync_q[7:4])    ? 24'hFF00FF :
+                               {lcd_r8_base, lcd_g8_base, lcd_b8_base};
+        assign lcd_r8 = mark_rgb[23:16];
+        assign lcd_g8 = mark_rgb[15:8];
+        assign lcd_b8 = mark_rgb[7:0];
+    end else begin : g_no_touch_debug_marker
+        assign lcd_r8 = lcd_r8_base;
+        assign lcd_g8 = lcd_g8_base;
+        assign lcd_b8 = lcd_b8_base;
+    end
+    endgenerate
 
     // The bus is bidirectional: the vendor reads the panel ID back over these
     // pins, so it is released whenever the panel is not being driven.

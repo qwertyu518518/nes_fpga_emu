@@ -19,6 +19,16 @@
 //   status bit 7 = data ready, status[3:0] = number of touch points
 //   valid when status[7] is set and 1 <= status[3:0] <= 5
 //   the host clears the touch flag by writing 0x00 to 16'h814E
+//
+//   THREE STATES, NOT TWO.  The programming guide's note on 16'h814E (p.15) is
+//   explicit that bit 7 is "Buffer status: 1 means the coordinates (or key) are
+//   ready and the host may read; 0 means NOT ready, the data is invalid", and
+//   its polling procedure (section 5, p.23) says that on a 0 you "wait 1 ms and
+//   read again".  So a poll that reads bit 7 clear is "nothing new, ask again",
+//   NOT a finger lift; a report with bit 7 set and zero points is the lift; and
+//   a report with bit 7 set and 1..5 points is a live touch.  The old decode
+//   collapsed the first into the second and cleared the direction on every
+//   quiet poll.  See SQ_EVAL.
 //   reset: ct_rst_n low for 10 ms, released, then 50 ms before the first access
 // The GT family takes no configuration writes, so the vendor's FT-only
 // register table is not reproduced here.
@@ -128,12 +138,29 @@ module nes_touch_input #(
     parameter integer CT_RST_LOW_CYCLES  = 500_000,
     parameter integer CT_RST_WAIT_CYCLES = 2_500_000,
     parameter integer POLL_CYCLES        = 1_000_000,
-    // Consecutive polls that may find no new sample before the last valid report
-    // is treated as a release.  One poll is POLL_CYCLES = 1,000,000 clk = 20 ms
-    // at 50 MHz, so 4 polls is 80 ms: a real lift is reported within 80 ms, while
-    // a panel whose report rate is slower than the 20 ms poll (down to one report
-    // per 80 ms) cannot produce a false release.
-    parameter integer RELEASE_POLLS      = 4,
+    // Safety timeout, in milliseconds, for a panel that has gone completely
+    // quiet.  It is NOT the release detector.  A genuine lift is reported by the
+    // panel as a READY report with zero touch points and clears the state at
+    // once, and a poll that simply finds no new data leaves the state exactly as
+    // it is.  This timer exists only so that a LOST release report cannot leave a
+    // direction stuck on forever; it is reset by every report of any kind.
+    //
+    // WHY 500 ms AND NOT TENS OF MILLISECONDS.  The 80 ms counter it replaces
+    // was short enough to expire while a finger was still down on a panel that
+    // reports on change, which is what made the tank stutter, and a
+    // longer-but-same-shape counter only changes the stutter's rhythm.  The
+    // panel may legitimately send nothing for the whole time a finger is held
+    // still, so the backstop has to sit far above every normal reporting
+    // interval, not merely above the poll: the GT9147's fastest coordinate
+    // refresh is 7-10 ms and its Green-mode scan period is about 40 ms (datasheet
+    // p.12 and p.25), so 500 ms is more than twelve Green scans with no report at
+    // all.  It stays bounded, because a lost release must not strand the player
+    // for long: half a second is the worst case.
+    //
+    // One poll is POLL_CYCLES = 1,000,000 clk = 20 ms at 50 MHz, so the default
+    // is STALE_POLLS = 25 polls; the count is derived below from this parameter,
+    // CLK_HZ and POLL_CYCLES.
+    parameter integer STALE_TIMEOUT_MS   = 500,
     parameter integer USE_CT_INT         = 1
 ) (
     input  wire        clk,
@@ -215,9 +242,17 @@ module nes_touch_input #(
     localparam integer DB_CW  = (DB_RAW < 1) ? 1 : DB_RAW;
     localparam [DB_CW-1:0]  DB_M1 = DEBOUNCE_CYCLES - 1;
 
-    localparam integer REL_RAW = clog2(RELEASE_POLLS + 1);
-    localparam integer REL_CW  = (REL_RAW < 1) ? 1 : REL_RAW;
-    localparam [REL_CW-1:0] REL_M1 = RELEASE_POLLS - 1;
+    // STALE_TIMEOUT_MS -> a number of polls.  The multiplication is arranged as
+    // (ms * (CLK_HZ/1000)) / POLL_CYCLES rather than (ms * CLK_HZ) / (1000 *
+    // POLL_CYCLES) so the intermediate product stays inside 32 bits: with the
+    // defaults it is 500 * 50_000 = 25_000_000, whereas 500 * 50_000_000 =
+    // 25_000_000_000 overflows a 32-bit integer and would silently wrap.  The
+    // timeout is at least one poll even if the arithmetic rounds it to zero.
+    localparam integer STALE_POLLS_RAW = (STALE_TIMEOUT_MS * (CLK_HZ / 1000)) / POLL_CYCLES;
+    localparam integer STALE_POLLS = (STALE_POLLS_RAW < 1) ? 1 : STALE_POLLS_RAW;
+    localparam integer STALE_RAW = clog2(STALE_POLLS + 1);
+    localparam integer STALE_CW  = (STALE_RAW < 1) ? 1 : STALE_RAW;
+    localparam [STALE_CW-1:0] STALE_M1 = STALE_POLLS - 1;
 
     localparam [5:0]
         SQ_RST_LO   = 6'd0,
@@ -291,7 +326,7 @@ module nes_touch_input #(
 
     reg               ct_int_meta_q;
     reg               ct_int_sync_q;
-    reg  [REL_CW-1:0] empty_cnt_q;
+    reg  [STALE_CW-1:0] stale_cnt_q;
 
     reg        req_start;
     reg        req_rep;
@@ -406,7 +441,7 @@ module nes_touch_input #(
             x_left_edge_q  <= X_LEFT_EDGE;
             x_right_edge_q <= X_RIGHT_EDGE;
             y_mid_edge_q   <= Y_MID_EDGE;
-            empty_cnt_q    <= {REL_CW{1'b0}};
+            stale_cnt_q    <= {STALE_CW{1'b0}};
         end else begin
             poll_done_q <= 1'b0;
             case (seq_q)
@@ -454,26 +489,50 @@ module nes_touch_input #(
                             end
                 SQ_ST_STOP: if (stop_done) seq_q <= SQ_EVAL;
                 SQ_EVAL   : begin
-                    if (status_q[7] && (status_q[3:0] >= 4'd1) && (status_q[3:0] <= 4'd5)) begin
-                        touch_valid_q <= 1'b1;
-                        empty_cnt_q   <= {REL_CW{1'b0}};
-                        seq_q         <= SQ_CO_WR;
-                    end else begin
-                        // A poll that finds no new sample is NOT a finger lift.
-                        // The controller sets its data-ready flag only when it has
-                        // fresh data, so a panel reporting more slowly than the
-                        // poll leaves alternate (or several) polls empty while the
-                        // touch is still held.  Clearing touch_valid_q here dropped
-                        // the dpad for those polls and the console saw the
-                        // direction only intermittently on the board.  Hold the
-                        // last valid coordinates and the asserted state until the
-                        // controller has reported nothing for RELEASE_POLLS
-                        // consecutive polls; only then is it a release.
-                        if (empty_cnt_q >= REL_M1) begin
-                            touch_valid_q <= 1'b0;
-                            empty_cnt_q   <= REL_M1;
+                    if (status_q[7]) begin
+                        // A report arrived, so bit 7 (Buffer status) is set and
+                        // the byte says how many points are on the panel.
+                        if ((status_q[3:0] >= 4'd1) && (status_q[3:0] <= 4'd5)) begin
+                            // Points on the panel: fresh coordinates, and the
+                            // direction is asserted.  Every report resets the
+                            // backstop, so it only ever runs while the panel is
+                            // silent.
+                            touch_valid_q <= 1'b1;
+                            stale_cnt_q   <= {STALE_CW{1'b0}};
+                            seq_q         <= SQ_CO_WR;
                         end else begin
-                            empty_cnt_q   <= empty_cnt_q + 1'b1;
+                            // Bit 7 set with ZERO points is a genuine lift: the
+                            // panel reports the release as a ready report with
+                            // no points.  This is the one poll that may clear
+                            // the direction.  (Points above 5 never occur on a
+                            // conforming panel, whose maximum is 1..5, and are
+                            // treated the same way: no valid touch.)
+                            touch_valid_q <= 1'b0;
+                            stale_cnt_q   <= {STALE_CW{1'b0}};
+                            seq_q         <= SQ_CLR_WR;
+                        end
+                    end else begin
+                        // Bit 7 clear is NOT a lift.  The programming guide says
+                        // bit 7 = 0 means the data is not ready and the host
+                        // should wait and read again, and a panel that reports on
+                        // change rather than periodically produces exactly this
+                        // on every poll while a finger is held still.  Nothing
+                        // has changed, so the last state STANDS and the
+                        // direction is held; this is the branch the old decode
+                        // got wrong, and clearing it here is what made the tank
+                        // stutter in step with the poll.
+                        //
+                        // The hold is bounded by the safety timeout, not by the
+                        // poll: when no report of any kind has arrived for
+                        // STALE_TIMEOUT_MS polls the direction is cleared, so a
+                        // lost release cannot leave it stuck on.  The counter is
+                        // reset by every report above, so it measures silence,
+                        // not time since the last press.
+                        if (stale_cnt_q >= STALE_M1) begin
+                            touch_valid_q <= 1'b0;
+                            stale_cnt_q   <= STALE_M1;
+                        end else begin
+                            stale_cnt_q   <= stale_cnt_q + 1'b1;
                         end
                         seq_q <= SQ_CLR_WR;
                     end

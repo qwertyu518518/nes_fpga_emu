@@ -19,12 +19,19 @@
 // the same order the RTL built it in, so it was internally consistent and passed
 // while every direction was reversed on the board.
 //
-// AN EMPTY POLL IS CHECKED TOO.  The panel may report more slowly than the poll,
-// so a poll that finds status[7] clear is not a finger lift.  empty_poll_hold
-// stages a valid report, then exactly one no-new-sample poll, and requires the
-// buttons to survive it; a sustained absence must still release.  The old RTL
-// cleared on the first empty poll and a bench with no empty-poll arm could not see
-// it.
+// AN EMPTY POLL IS NOT A RELEASE, AND A ZERO-POINT REPORT IS.  The panel may
+// report more slowly than the poll, and a panel that reports on change sends
+// NOTHING at all while a finger is held still; so a poll that reads status[7]
+// clear means "no new sample yet", not "finger lifted".  empty_poll_hold stages
+// a valid report, then HOLD_POLLS consecutive no-new-sample polls, and requires
+// the buttons to survive every one of them; it then requires the millisecond
+// SAFETY timeout -- and not a poll counter -- to clear the state.  HOLD_POLLS is
+// chosen above the old RELEASE_POLLS = 4, because the old code survived one empty
+// poll and only dropped the direction on the fifth: a bench that stages a single
+// empty poll cannot see the defect that was on the board.  zero_point_release
+// covers the other side: a READY report with zero points is the panel reporting a
+// lift and must clear at once.  The old decode put "no report" and "report with
+// zero points" in the same branch, which is exactly the bug.
 //
 // THE CALIBRATION IS THE POINT OF THIS BENCH.  The driver now asks the controller
 // what frame it is reporting in instead of assuming 800x480, so the I2C model here
@@ -107,6 +114,17 @@ module tb_nes_touch_input;
     localparam integer RST_WAIT  = 2_500_000;
     localparam integer POLL      = 10_000;
 
+    // The driver's release detector is now a three-way decode with a millisecond
+    // safety timeout, not a poll counter.  At this bench's POLL = 10_000 clk the
+    // driver derives
+    //     STALE_POLLS = (STALE_MS * (CLK_HZ/1000)) / POLL = STALE_MS * 5
+    // so 2 ms is 10 polls: small enough to reach inside one run, and above the
+    // old 4-poll release bound that the hold assertion below has to beat.  The
+    // production default is 500 ms; only the simulation value is shortened.
+    localparam integer STALE_MS    = 2;
+    localparam integer STALE_POLLS = (STALE_MS * (CLK_HZ / 1000)) / POLL;   // 10
+    localparam integer HOLD_POLLS  = 6;   // > the old 4-poll bound, < STALE_POLLS
+
     localparam real CLK_NS  = 1000000000.0 / CLK_HZ;
     localparam real TBUF_NS = 4000.0;
 
@@ -175,6 +193,7 @@ module tb_nes_touch_input;
         .CT_RST_LOW_CYCLES (RST_LOW),
         .CT_RST_WAIT_CYCLES(RST_WAIT),
         .POLL_CYCLES       (POLL),
+        .STALE_TIMEOUT_MS  (STALE_MS),
         .USE_CT_INT        (1)
     ) dut (
         .clk         (clk),
@@ -764,22 +783,27 @@ module tb_nes_touch_input;
         end
     endtask
 
-    // ---- BUG 2 COVERAGE: an empty poll is not a release.
+    // ---- BUG 2 COVERAGE: an empty poll is not a release, and a report with
+    // zero points is.
     //
-    // A panel may report more slowly than a POLL_CYCLES poll, so a poll that finds
-    // status[7] clear means "no new sample yet", not "finger lifted".  This latches
-    // a valid report, then presents no new sample and lets the driver's own timer
-    // poll run: after exactly ONE empty poll the input must still be asserted, and
-    // only a sustained absence may clear it.  The old RTL cleared on the first
-    // empty poll, so the check right after the first poll is the one that sees the
-    // bug; a bench that never stages an empty poll cannot see it at all.
+    // Three states, three outcomes, and this task pins the two that the old
+    // decode collapsed:
+    //   * a report with bit7 set and 1..5 points asserts the direction;
+    //   * an empty poll (bit7 clear) HOLDS the direction, however many of them
+    //     arrive in a row, until the millisecond safety timeout clears it;
+    //   * a report with bit7 set and ZERO points is a lift and clears at once.
+    //
+    // The old RTL cleared after RELEASE_POLLS = 4 empty polls, so the check at
+    // empty poll 5 is the one that saw the defect; a bench that only stages one
+    // empty poll cannot see it at all, because one empty poll survived even the
+    // old code.
     task empty_poll_hold;
         input [15:0] px;
         input [15:0] py;
         input [7:0]  nes_byte;
         integer p0;
         integer bclr;
-        integer empty_seen;
+        integer k;
         begin
             // A valid report, so the direction is asserted.
             present_panel(px, py);
@@ -789,15 +813,14 @@ module tb_nes_touch_input;
 
             // Stop the INT-driven early wake now, while the report's own poll is
             // still in flight, so the polls from here come one per POLL_CYCLES and
-            // the first no-new-sample poll is a single, countable event rather than
-            // one of a back-to-back burst that could reach RELEASE_POLLS before the
-            // check below.
+            // each no-new-sample poll is a single, countable event rather than one
+            // of a back-to-back burst.
             status_val = 8'h00;
             int_drive  = 1'b1;
             ct_int     = 1'b1;
 
-            // Let this report's own poll finish (coordinate read and flag clear), so
-            // the empty poll below is a distinct, later cycle and not this one's clear.
+            // Let this report's own poll finish (coordinate read and flag clear),
+            // so the empty polls below are distinct, later cycles.
             p0 = poll_cnt;
             guard = 0;
             while (poll_cnt <= p0 && guard < 400000) begin
@@ -810,25 +833,31 @@ module tb_nes_touch_input;
                 $fatal(1, "s%d: the valid report did not hold after its own poll (tv=%b buttons=%b)",
                        scen, touch_valid, buttons);
 
-            // ONE empty poll, on the driver's own POLL_CYCLES timer.
-            bclr = clr_cnt;
-            guard = 0;
-            while (clr_cnt <= bclr && guard < 400000) begin
-                @(negedge clk);
-                guard = guard + 1;
+            // HOLD_POLLS empty polls, one at a time.  Every one must be survived,
+            // and empty poll 5 is the first the OLD code would have treated as a
+            // release.
+            for (k = 0; k < HOLD_POLLS; k = k + 1) begin
+                bclr = clr_cnt;
+                guard = 0;
+                while (clr_cnt <= bclr && guard < 400000) begin
+                    @(negedge clk);
+                    guard = guard + 1;
+                end
+                if (clr_cnt <= bclr)
+                    $fatal(1, "s%d: empty poll %0d never completed", scen, k + 1);
+                if (touch_valid !== 1'b1)
+                    $fatal(1, "s%d: empty poll %0d was treated as a release, touch_valid dropped",
+                           scen, k + 1);
+                if (buttons[7:4] !== nes_byte[7:4])
+                    $fatal(1, "s%d: empty poll %0d dropped the buttons, [7:4]=%b, %b expected",
+                           scen, k + 1, buttons[7:4], nes_byte[7:4]);
             end
-            if (clr_cnt <= bclr)
-                $fatal(1, "s%d: no empty poll completed", scen);
+            $display("  s%d empty-poll hold: survived %0d consecutive empty polls (>%0d, the old bound)",
+                     scen, HOLD_POLLS, 4);
 
-            // THE ASSERTION: one empty poll must NOT be treated as a release.
-            if (touch_valid !== 1'b1)
-                $fatal(1, "s%d: an empty poll was treated as a release, touch_valid dropped", scen);
-            if (buttons[7:4] !== nes_byte[7:4])
-                $fatal(1, "s%d: an empty poll dropped the buttons, [7:4]=%b, %b expected",
-                       scen, buttons[7:4], nes_byte[7:4]);
-
-            // A SUSTAINED absence must still release.
-            empty_seen = 1;
+            // Silence continues.  The SAFETY timeout, and nothing else, must
+            // eventually clear it; a stuck direction is the failure this guards.
+            k = HOLD_POLLS;
             bclr = clr_cnt;
             guard = 0;
             while (touch_valid !== 1'b0 && guard < 400000) begin
@@ -836,16 +865,71 @@ module tb_nes_touch_input;
                 guard = guard + 1;
                 if (clr_cnt > bclr) begin
                     bclr = clr_cnt;
-                    empty_seen = empty_seen + 1;
+                    k = k + 1;
                 end
             end
             if (touch_valid !== 1'b0)
-                $fatal(1, "s%d: a sustained absence of %0d empty polls never released the touch",
-                       scen, empty_seen);
+                $fatal(1, "s%d: the safety timeout never cleared the touch after %0d empty polls", scen, k);
             if (buttons[7:4] !== 4'b0000)
-                $fatal(1, "s%d: a sustained absence left buttons[7:4]=%b", scen, buttons[7:4]);
-            $display("  s%d empty-poll hold: held through 1 empty poll, released after %0d",
-                     scen, empty_seen);
+                $fatal(1, "s%d: the safety timeout left buttons[7:4]=%b", scen, buttons[7:4]);
+            // The release has to come from the TIMEOUT; if it arrived at or below
+            // the old bound the timeout is not the thing that released it.
+            if (k <= 4)
+                $fatal(1, "s%d: released after only %0d empty polls, the timeout is not in force",
+                       scen, k);
+            $display("  s%d empty-poll hold: safety timeout cleared it after %0d empty polls (STALE_POLLS=%0d)",
+                     scen, k, STALE_POLLS);
+            wait_quiet();
+        end
+    endtask
+
+    // ---- a report with bit 7 set and ZERO points is the panel reporting a lift.
+    // It must clear the direction after exactly one such poll: no counter, no
+    // timeout.  This is the branch the old decode shared with "no report", so
+    // the old RTL leaves the direction asserted here.
+    task zero_point_release;
+        input [15:0] px;
+        input [15:0] py;
+        input [7:0]  nes_byte;
+        integer p0;
+        integer bclr;
+        begin
+            present_panel(px, py);
+            if (buttons[7:4] !== nes_byte[7:4])
+                $fatal(1, "s%d: zero-point setup: buttons[7:4]=%b, %b expected",
+                       scen, buttons[7:4], nes_byte[7:4]);
+            // Let the live report's own poll finish first, so its flag clear (which
+            // zeroes the model's status byte) cannot wipe the release we stage.
+            p0 = poll_cnt;
+            guard = 0;
+            while (poll_cnt <= p0 && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+            end
+            if (poll_cnt <= p0)
+                $fatal(1, "s%d: the live report's own poll never completed", scen);
+            if (touch_valid !== 1'b1)
+                $fatal(1, "s%d: the live report did not hold before the release report", scen);
+
+            // Buffer status set, ZERO points: the documented lift report.
+            status_val = 8'h80;
+            int_drive  = 1'b1;
+            ct_int     = 1'b1;
+            bclr = clr_cnt;
+            guard = 0;
+            while (clr_cnt <= bclr && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+            end
+            if (clr_cnt <= bclr)
+                $fatal(1, "s%d: the zero-point release report was never polled", scen);
+            // THE ASSERTION: one zero-point report, one release.
+            if (touch_valid !== 1'b0)
+                $fatal(1, "s%d: a zero-point report (8'h80) did not release after one poll", scen);
+            if (buttons[7:4] !== 4'b0000)
+                $fatal(1, "s%d: a zero-point report left buttons[7:4]=%b, 0000 expected",
+                       scen, buttons[7:4]);
+            $display("  s%d zero-point release: 8'h80 cleared the direction after one poll", scen);
             wait_quiet();
         end
     endtask
@@ -1184,6 +1268,8 @@ module tb_nes_touch_input;
         // BUG 2: the same left region held across empty polls.  (exp_xl, 0) is the
         // first middle-band pixel, i.e. the up region for this scenario's cuts.
         empty_poll_hold(exp_xl, 16'd0, NES_BTN_UP);
+        // And the documented lift report, a ready report with zero points.
+        zero_point_release(exp_xl, 16'd0, NES_BTN_UP);
 
         expect_touch_invalid(8'h86);
         expect_touch_invalid(8'h05);
