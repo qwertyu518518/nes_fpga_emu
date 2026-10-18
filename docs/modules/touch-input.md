@@ -29,24 +29,28 @@
 `controller.md` 3.1 把 `nes_controller.v` 的 `buttons` 定义成"1P 按钮位图，bit0..bit7 = A, B, Select, Start, Up, Down, Left, Right"，bit0 就是 `$4016` 第一次读出的那一位；它是一根**并联输入总线**，`nes_controller` 只负责串行化。`nes_touch_input.v` 的产物正是这根线：
 
 ```verilog
+wire [3:0] touch_dpad = {touch_valid_q & region_right,
+                         touch_valid_q & region_left,
+                         touch_valid_q & region_middle & ~region_upper,
+                         touch_valid_q & region_middle &  region_upper};
 assign buttons = {touch_dpad, key_start, key_select, btn_b, btn_a};
-assign dpad    = touch_dpad;              // touch_dpad[3:0] = {Up, Down, Left, Right}
+assign dpad    = touch_dpad;              // touch_dpad[3:0] = {Right, Left, Down, Up}
 ```
 
 所以"触摸屏 -> 手柄"只需把一次触摸归到某方向、把两个物理键归到某两个按钮，其余交给已有的 `nes_controller`；对 `$4016` 而言，屏幕上的手和插着的手柄不可区分。
 
-位序合同（RTL 字面连线）：
+位序合同（RTL 字面连线）。**`buttons[7:4]` 的次序必须与 `$4016` 一致，即从低位到高位 Up、Down、Left、Right**——这是已在真板上确认过的合同，不是可调项：
 
 | `buttons` 位 | 来源 | `$4016` 对应位 |
 | --- | --- | --- |
 | bit0 / bit1 | `btn_a` / `btn_b`（TPAD 未按时 = `key0` / `key1`） | A / B |
 | bit2 / bit3 | `key_select` / `key_start`（TPAD 未按时恒 0） | Select / Start |
-| bit4 | `touch_dpad[0]` = Right | Up |
-| bit5 | `touch_dpad[1]` = Left | Down |
-| bit6 | `touch_dpad[2]` = Down | Left |
-| bit7 | `touch_dpad[3]` = Up | Right |
+| bit4 | `touch_dpad[0]` = Up | Up |
+| bit5 | `touch_dpad[1]` = Down | Down |
+| bit6 | `touch_dpad[2]` = Left | Left |
+| bit7 | `touch_dpad[3]` = Right | Right |
 
-A/B/Select/Start 的次序与 `$4016` 一致。`[RTL 建议]` 四个方向位则不然：按上面的拼接式，`buttons[7:4]` 从高到低是 `{Up, Down, Left, Right}`，而 `$4016` 合同是 bit4=Up … bit7=Right，即高半字节相对 `$4016` 是**反的**。现有两个 tb 都用 dpad 自己的字面量比对（Left 判 `buttons[7:4]==4'b0010`），没有测试把这根线穿过 `nes_controller` 再按串行位反查，所以这条次序差异不会被门禁照出来；接真实游戏前必须先确认这一点。
+A/B/Select/Start 与四个方向位的次序都与 `$4016` 一致。**这个次序曾经反过**：早期 RTL 把 `touch_dpad` 拼成 `{Up, Down, Left, Right}`（高半字节相对 `$4016` 是反的），于是 `buttons[4]=Right`、`[5]=Left`、`[6]=Down`、`[7]=Up`，四个方向全部落错位，真板上表现为按上却向右、按右却向上、按左却向下、按下却向左。修复只改了拼接式（`{right, left, down, up}`），`buttons[3:0]` 未动。**为什么门禁没抓到**：当时的 `touch-input-tb` 用 `dpad` **自己的字面量**比对（Left 判 `buttons[7:4]==4'b0010`），而期望与 RTL 按同一种约定写成，所以它只证明模块内部自洽，看不到这个约定在**消费者边界**（`nes_controller.v` 的 `$4016` 移出顺序）上是错的。现在 tb 改用**字面量 NES 方向字节**（Up `0x10`、Down `0x20`、Left `0x40`、Right `0x80`）当期望，反向拼接会被直接判死；完整记录见第 11 节。
 
 ---
 
@@ -87,7 +91,7 @@ assign touch_sda_i = touch_sda;
 
 ### 3.3 一次正常 poll 与复位
 
-顶层按固定顺序走一笔主事务加两笔子事务：**读状态**（START，`addr+W`，指针高/低，重复 START，`addr+R`，读 1 字节，STOP）→ **判定**（有效则 `touch_valid<=1` 并转坐标，否则 `touch_valid<=0` 直接清标志）→ **读坐标**（同样起停，连读 4 字节，前 3 ACK、末 NACK）→ **清标志**（START，`addr+W`，写 `16'h814E` 指针，写 `0x00`，STOP），然后 `poll_done<=1` 回等待态。I2C 位级时序在 `nes_touch_i2c` 内，每字节拆 4 个 quarter（`QTR = CLK_HZ/(4*I2C_HZ) = 50` 拍），SCL 高相位采 `sda_i`。
+顶层按固定顺序走一笔主事务加两笔子事务：**读状态**（START，`addr+W`，指针高/低，重复 START，`addr+R`，读 1 字节，STOP）→ **判定**（有效则 `touch_valid<=1` 并转坐标；无效**不**立刻清 `touch_valid_q`，而是累加连续空 poll 计数 `empty_cnt_q`，只有连续 `RELEASE_POLLS` 次都无新样本才判为抬手——面板报告率慢于 poll 时那是"暂时没新样本"而不是"抬手"，见第 11.2 节）→ **读坐标**（同样起停，连读 4 字节，前 3 ACK、末 NACK）→ **清标志**（START，`addr+W`，写 `16'h814E` 指针，写 `0x00`，STOP），然后 `poll_done<=1` 回等待态。I2C 位级时序在 `nes_touch_i2c` 内，每字节拆 4 个 quarter（`QTR = CLK_HZ/(4*I2C_HZ) = 50` 拍），SCL 高相位采 `sda_i`。
 
 复位：`SQ_RST_LO` 把 `ct_rst_n` 保持 0 共 `CT_RST_LOW_CYCLES`（默认 500_000 拍 = 10 ms）；`SQ_RST_HI` 释放后再等 `CT_RST_WAIT_CYCLES`（2_500_000 = 50 ms），到点置 `init_done<=1`。之后**不**立刻 poll，而是先进自校准（第 4 节）；所以 `init_done` 的含义是"复位与 50 ms 等待结束、总线马上要被使用"，而不是"已读过面板数据"。
 
@@ -97,7 +101,7 @@ assign touch_sda_i = touch_sda;
 
 ### 4.1 为什么不能假设
 
-文件头原写"GT 坐标按原样使用，不做轴交换"，这是从板厂的 GT 分支（本身是 pass-through）抄来的假设。但"板厂原样透传"**不能证明**总线上的帧就是代码假定的帧：板厂唯一的 FPGA 例子把两个数当数字打印，对一串数字来说转置的帧看起来完全正常。现场症状是：一块其他都正确的板子上，**屏幕触摸产生的 d-pad 四个方向全反**，而区域图几何上是对的——正是"坐标所在的帧和硬编码的帧不同"的签名。
+文件头原写"GT 坐标按原样使用，不做轴交换"，这是从板厂的 GT 分支（本身是 pass-through）抄来的假设。但"板厂原样透传"**不能证明**总线上的帧就是代码假定的帧：板厂唯一的 FPGA 例子把两个数当数字打印，对一串数字来说转置的帧看起来完全正常，所以坐标帧值得**问出来而不是假定**。**但要注意：一度把"d-pad 四方向全错"归到"坐标帧与硬编码不同"是错的。** 后来一个只读诊断构建证明**原始坐标和屏上标记一直是对的**，四个方向全错位其实来自第 1 节那个反向的位序向量（见第 11 节）。自校准仍然保留，因为它让面板尺寸与轴向成为读出来的而不是选出来的（H1/H2）；它当时只是**不是**那个坏 d-pad 的原因。
 
 ### 4.2 怎么问、怎么回退
 
@@ -124,10 +128,10 @@ wire region_left   = (touch_x_q <  x_left_edge_q);
 wire region_right  = (touch_x_q >= x_right_edge_q);
 wire region_middle = ~region_left & ~region_right;
 wire region_upper  = (touch_y_q <  y_mid_edge_q);
-wire [3:0] touch_dpad = {touch_valid_q & region_middle &  region_upper,  // Up
-                         touch_valid_q & region_middle & ~region_upper,  // Down
-                         touch_valid_q & region_left,                    // Left
-                         touch_valid_q & region_right};                  // Right
+wire [3:0] touch_dpad = {touch_valid_q & region_right,                     // Right -> touch_dpad[3]
+                         touch_valid_q & region_left,                      // Left  -> touch_dpad[2]
+                         touch_valid_q & region_middle & ~region_upper,    // Down  -> touch_dpad[1]
+                         touch_valid_q & region_middle &  region_upper};   // Up    -> touch_dpad[0]
 ```
 
 边界归属被钉死，tb 逐点断言：
@@ -166,11 +170,11 @@ wire btn_b      = ~ab_substituted & ~key_stable_q[1];
 | `ct_int` / `ct_rst_n` | in / out | GT9147 中断，**低有效**，`USE_CT_INT` 非零时可在一次成功 poll 后提前唤醒；面板复位，低有效（时序见 3.3）。 |
 | `scl_o` / `sda_o` / `sda_oe` / `sda_i` | out / in | 开漏 I2C 四件套（约定见 3.1）。 |
 | `key0` / `key1` / `touch_key` | in | 两个 PL 键（低有效）与板载 TPAD（高有效）。 |
-| `buttons[7:0]` / `dpad[3:0]` | out | 喂 `nes_controller` 的位图（位序见第 1 节）与触摸方向 `{Up,Down,Left,Right}`。 |
+| `buttons[7:0]` / `dpad[3:0]` | out | 喂 `nes_controller` 的位图（位序见第 1 节：`buttons[4]=Up`、`[5]=Down`、`[6]=Left`、`[7]=Right`）与触摸方向向量 `touch_dpad[3:0] = {Right, Left, Down, Up}`（bit3=Right、bit2=Left、bit1=Down、bit0=Up）。 |
 | `touch_valid` / `touch_x` / `touch_y` / `init_done` / `touch_error` / `bus_busy` / `poll_done` | out | 最近有效报点与坐标 / 复位等待结束 / 出错后保持 / I2C 忙 / 一拍 poll 完成脉冲。 |
 | `touch_x_max` / `touch_y_max` / `touch_x2y` / `touch_x_left_edge` / `touch_x_right_edge` / `touch_y_mid_edge` / `touch_calib_ok` | out | 自校准只读诊断结果（见 4.2）。 |
 
-关键参数（默认）：`CLK_HZ=50_000_000`、`I2C_HZ=250_000`、`DEV_ADDR=7'h14`、`CT_STATUS_REG=16'h814E`、`CT_COORD_REG=16'h8150`、`PANEL_W=800`、`PANEL_H=480`、`EDGE_L=1/4`、`EDGE_R=3/4`、`MID=1/2`、`DEBOUNCE_CYCLES=800`、`CT_RST_LOW_CYCLES=500_000`、`CT_RST_WAIT_CYCLES=2_500_000`、`POLL_CYCLES=1_000_000`、`USE_CT_INT=1`。`CT_COORD_REG` 是"点 1 坐标在哪个寄存器"的诊断旋钮，默认 `16'h8150`，未来可重指向 `16'h8158`（见第 10 节）。
+关键参数（默认）：`CLK_HZ=50_000_000`、`I2C_HZ=250_000`、`DEV_ADDR=7'h14`、`CT_STATUS_REG=16'h814E`、`CT_COORD_REG=16'h8150`、`PANEL_W=800`、`PANEL_H=480`、`EDGE_L=1/4`、`EDGE_R=3/4`、`MID=1/2`、`DEBOUNCE_CYCLES=800`、`CT_RST_LOW_CYCLES=500_000`、`CT_RST_WAIT_CYCLES=2_500_000`、`POLL_CYCLES=1_000_000`、`RELEASE_POLLS=4`、`USE_CT_INT=1`。`CT_COORD_REG` 是"点 1 坐标在哪个寄存器"的诊断旋钮，默认 `16'h8150`，未来可重指向 `16'h8158`（见第 10 节）。
 
 ---
 
@@ -183,6 +187,7 @@ wire btn_b      = ~ab_substituted & ~key_stable_q[1];
 | 复位后等待 `CT_RST_WAIT_CYCLES` | 2_500_000 clk | 50 ms | 释放到首次访问之间 |
 | 消抖 `DEBOUNCE_CYCLES` | 800 clk | 16 µs | 三级共用一个窗口 |
 | 轮询周期 `POLL_CYCLES` | 1_000_000 clk | 20 ms | 约 50 次/秒；`ct_int` 可提前唤醒 |
+| 释放判定 `RELEASE_POLLS` | 4 次空 poll | 80 ms | 连续 4 次 poll 无新样本才判为抬手；面板报告率慢于 20 ms（低到每 80 ms 一次）也不会误判释放 |
 
 一次 poll 的长度 = 状态读（+ 可能的坐标读）+ 清标志三笔事务的字节数与起停开销之和。tb 把 `POLL_CYCLES` 覆盖成 `10_000`（200 µs）加快仿真，不改变协议形状。**消抖**：`key_sync_q` 与候选不等就累加 `key_cnt_q`，达到阈值才提升为新的稳定值；窗口短于 `DEBOUNCE` 的脉冲**既不**产生 A/B/Start/Select，也**不**被锁存，tb 对 `key0` 和 TPAD 都断言了这一点。
 
@@ -206,15 +211,48 @@ always @(posedge mmcm_core_clk or negedge sys_rst_n)
 ## 10. 明确未实现 / 未建模
 
 - **只在 Zynq 平台存在**：EP4CE10 开拓者板没有 GT9147，本模块在该平台**没有被例化**，也没有综合/时序证据；它只有仿真门禁（`tools/sim_all.ps1` 目标 `touch-input-tb`，顶层 `tb_nes_touch_input`，标准 2001）。
-- **点 1 地址假设**：`16'h8150` 是固件 1030 以前的点 1，1030+ 上点 1 可能在 `16'h8158`。本模块**没有**处理这个假设，取数固定在 `CT_COORD_REG`，只能靠把该 parameter 重指向来适配（平台顶层已把它透传成诊断旋钮）。这是自校准**不覆盖**的那条关于坏 d-pad 的假设。
+- **点 1 地址假设**：`16'h8150` 是固件 1030 以前的点 1，1030+ 上点 1 可能在 `16'h8158`。本模块**没有**处理这个假设，取数固定在 `CT_COORD_REG`，只能靠把该 parameter 重指向来适配（平台顶层已把它透传成诊断旋钮）。本板上一个只读诊断构建证明**取数寄存器指向的坐标与手指位置一致**，即默认 `16'h8150` 在本板成立；`16'h8158` 的分支从未被测过。**注意**：一度把坏 d-pad 归到这条地址假设是错的，坏 d-pad 的真因是第 1 节的位序向量（见第 11 节）。
 - **多点 / 手势 / 滑动未建模**：状态允许点数到 5，但只读点 1 的四字节；多点、手势、滑动、长按，以及"整帧转置"以外的帧畸变（镜翻转、斜置）一律不处理。
 - **`ct_int` 唤醒语义**：早唤醒要求此前至少完成过一次成功 poll（`poll_ok_q`）且 `ct_int` 低有效；中断极性、去毛刺不深究，只做 2 级同步。
 - **开漏电气只靠约定**：模块只保证 `sda_oe` 只在发 0 时为 1、从不灌高；上拉、总线电容、速率裕量属于板级。
-- **高半字节位序未被门禁照到**：见第 1 节的观察——四个方向位相对 `$4016` 的次序差异没有任何测试端到端验证过；**也没有用真实 `nes_cpu_bus` 驱动、没有和 PPU 的 sprite 0 hit 联通、平台里没有任何消费者**。
+- **高半字节位序曾在板上出错、现已修复**：见第 1 节与第 11 节——早期 RTL 把四个方向位拼成 `{Up,Down,Left,Right}` 接到 `buttons[7:4]`，真板上四个方向全部错位，而靠"期望与 RTL 用同一种约定写"的 tb 照不出来。修复后 tb 改用字面量 NES 方向字节（`0x10/0x20/0x40/0x80`）断言。**仍未覆盖**：没有把这条线穿过真实 `nes_controller`/`nes_cpu_bus` 驱动、没有和 PPU 的 sprite 0 hit 联通，`buttons` 到 `nes_system_v6.buttons1` 只经过平台里的 2 级同步器这一级消费者。因此这次修复的证据只到**【仿真已验】**——故障在真板上**已观测**，但**修复后的上板结果用户尚未回报**。
+
+---
+
+## 11. 上板发现并已修的两个真实缺陷
+
+这两条都是**先在真板上观察到、之后定位并修复**的：仿真门禁当时是 `PASS (74 of 74)`，一个只读诊断构建也已经证明**原始触摸坐标和屏上标记一直是对的**，故障仍然存在。它们值得单独记，因为它们说明门禁绿灯能被什么蒙过去（对照 `docs/00-overview/verification-plan.md` 第 7.2 节同类条目与 `docs/hardware/14-zynq-bringup-runbook.md` 第 9 节第 3 行）。
+
+### 11.1 dpad 向量位序反了，四个方向全部错位
+
+- **现象（真板上）**：四个方向全部落错位——按**上**坦克向右、按**右**向上、按**左**向下、按**下**向左；恰好是旧拼接顺序的一个循环错位。
+
+| 触摸 | 落在 | 应为 | 板上表现 |
+| --- | --- | --- | --- |
+| up | `buttons[7]` = Right | `buttons[4]` = Up | 坦克向右 |
+| right | `buttons[4]` = Up | `buttons[7]` = Right | 坦克向上 |
+| left | `buttons[5]` = Down | `buttons[6]` = Left | 坦克向下 |
+| down | `buttons[6]` = Left | `buttons[5]` = Down | 坦克向左 |
+
+- **根因**：`nes_touch_input.v` 把向量拼成 `{up_region, down_region, left_region, right_region}`，于是 **Up 落在 `buttons[7]`**；`$4016` 合同要求 `buttons[4]=Up, [5]=Down, [6]=Left, [7]=Right`。同一文件的头注释在 line 93 写对这个次序，**紧接的 line 94 却写成 `buttons[7:4] = {Up, Down, Left, Right}`，与上一行自相矛盾**——修复同时改了拼接式和这句注释，两者现在一致。
+- **为什么门禁没抓到**：`tb_nes_touch_input.v` 用**模块自己的 `dpad` 输出**对照**按同一种约定写下的期望**。它验证的是内部自洽，从来没有把 `buttons[7:4]` 拿到**消费者**的定义（`nes_controller.v` 的 `$4016` 移出顺序）上核对，所以位序反了它照样全绿。
+- **修复与证据**：拼接改为 `{right, left, down, up}`，`buttons[3:0]` 未动。tb 改为传入**字面量 NES 方向字节**（Up `0x10`、Down `0x20`、Left `0x40`、Right `0x80`）并从该字节的高半字节取期望，旧的反向拼接会被直接 `$fatal` 判死（非空洞）。提交 `73ad2e2`。
+- **先前有过两个自信的错诊断**：一次归到"校准没生效、退回编译期常量"，一次归到"坐标帧与硬编码不同（转置）"。诊断构建把两者都证伪——原始坐标与屏上标记一直是对的——而两个错诊断各自都会产出一个"看起来合理"的改动。这正是把位序检查放在第 9 节症状表第 3 行最前面的原因。
+
+### 11.2 空 poll 被当成抬手，输入断续
+
+- **现象（真板上）**：**玩家的坦克**移动一跳一跳（断续），而**敌人**移动正常。敌人由 CPU AI 驱动、玩家由输入驱动，这个对比把故障**隔离到输入路径**，而不是 CPU。
+- **根因**：`SQ_EVAL` 在 poll 没找到新样本时清 `touch_valid_q`，而 dpad 位由它门控。驱动每 `POLL_CYCLES = 1,000,000 clk` = **20 ms** poll 一次，控制器只在有**新**数据时才置数据就绪位；面板报告率慢于 20 ms 时，交替的 poll 什么都读不到，`touch_valid_q` 被清掉，console 只有一部分时间看到方向。
+- **修复与 80 ms 上界**：用 `RELEASE_POLLS = 4`——连续 **4** 次 poll（4 × 20 ms = **80 ms**）都没有新样本才判为抬手。真实抬手仍在 80 ms 内报告；报告率低到每 80 ms 一次的慢面板也不会产生假释放。清标志与读坐标的相对顺序未动。
+- **修复与证据**：tb 新增一条空 poll 分支：先建立一次有效报点，再恰好一次无新样本 poll，要求按钮**扛过**它；只有持续缺失才允许释放。旧 RTL 的"首次空 poll 即清"会在这条断言上失败（非空洞）。提交 `73ad2e2`。
+
+### 11.3 证据边界
+
+两条**故障本身是【上板已验】**（真板上逐方向观察到错位、并观察到断续的玩家移动）。它们对应的**修复只在仿真里验证过（【仿真已验】）并被烧写**，但**用户尚未回报修复后的上板结果**——所以不得把修复写成【上板已验】。两个 tb（`tb/peripheral/tb_nes_touch_input.v` 与 `tb/platform/tb_nes_zynq_top.v`）的断言已随修复更新，且**没有删除任何断言**（提交 `73ad2e2`）。
 
 ---
 
 ## 证据
 
-- `tb/peripheral/tb_nes_touch_input.v`：行为级 GT9147 I2C 从机模型，逐字节跑同一取数路径；断言含器件地址 `7'h14`、`16'h814E` 清标志写 `0x00`、`16'h8150` 的 4 字节坐标读、五场景自校准（799×479 X2Y 清 / 1023×639 X2Y 置证坐标对调 / 479×271 = ATK-4342 / 校准读全 NACK / 全 1 卡高）、三个自检寄存器的地址/方向/字节数（各恰好一次）、区域映射三条切口的逐点归属、按键与 TPAD 消抖及 Start/Select 替换回归、复位 `ct_rst_n` 低 10 ms 且 50 ms 内不起事务、开漏物理层（无人灌高、SDA 只在 SCL 低时变、tBUF 满足）。结尾的**非空断言**要求至少一个场景的切口不同于编译期常量（否则分不清"校准生效"和"回退"），并要求五场景共 12 次成功校准读。
+- `tb/peripheral/tb_nes_touch_input.v`：行为级 GT9147 I2C 从机模型，逐字节跑同一取数路径；断言含器件地址 `7'h14`、`16'h814E` 清标志写 `0x00`、`16'h8150` 的 4 字节坐标读、五场景自校准（799×479 X2Y 清 / 1023×639 X2Y 置证坐标对调 / 479×271 = ATK-4342 / 校准读全 NACK / 全 1 卡高）、三个自检寄存器的地址/方向/字节数（各恰好一次）、区域映射三条切口的逐点归属、按键与 TPAD 消抖及 Start/Select 替换回归、复位 `ct_rst_n` 低 10 ms 且 50 ms 内不起事务、开漏物理层（无人灌高、SDA 只在 SCL 低时变、tBUF 满足）。结尾的**非空断言**要求至少一个场景的切口不同于编译期常量（否则分不清"校准生效"和"回退"），并要求五场景共 12 次成功校准读。**第 11 节之后**：位序断言改用**字面量 NES 方向字节**（`0x10/0x20/0x40/0x80`，从该字节高半字节取期望，不从 RTL 推导；反向拼接会 `$fatal`），并新增**空 poll 分支**（建立有效报点 → 恰好一次无新样本 poll → 按钮必须扛过；持续缺失才释放），两者都非空洞。
 - `tools/sim_all.ps1`：目标 id `touch-input-tb`，`peripheral` 组，`Standard = 2001`，`Run = $true`。模块没有该目标就等于没有回归保护。
