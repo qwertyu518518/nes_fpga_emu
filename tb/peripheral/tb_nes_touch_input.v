@@ -11,6 +11,21 @@
 // substitution off touch_valid made steering with the screen and firing with a key
 // mutually exclusive, which is the defect that was found on the board.
 //
+// THE BUTTON ORDER IS CHECKED AGAINST THE NES CONVENTION, NOT AGAINST THE RTL.
+// The region checks pass the expected single-direction NES byte (0x10 up, 0x20
+// down, 0x40 left, 0x80 right) and take the expected dpad code from that byte's
+// high nibble, so a reversed concatenation inside the driver cannot satisfy them.
+// The first version of this bench compared the driver's own dpad output against
+// the same order the RTL built it in, so it was internally consistent and passed
+// while every direction was reversed on the board.
+//
+// AN EMPTY POLL IS CHECKED TOO.  The panel may report more slowly than the poll,
+// so a poll that finds status[7] clear is not a finger lift.  empty_poll_hold
+// stages a valid report, then exactly one no-new-sample poll, and requires the
+// buttons to survive it; a sustained absence must still release.  The old RTL
+// cleared on the first empty poll and a bench with no empty-poll arm could not see
+// it.
+//
 // THE CALIBRATION IS THE POINT OF THIS BENCH.  The driver now asks the controller
 // what frame it is reporting in instead of assuming 800x480, so the I2C model here
 // answers those reads out of per-scenario register values and every scenario is a
@@ -55,6 +70,22 @@ module tb_nes_touch_input;
     localparam [15:0]  CAL_XMAX   = 16'h8048;   // X Output Max, low then high byte
     localparam [15:0]  CAL_YMAX   = 16'h804A;   // Y Output Max, low then high byte
     localparam [15:0]  CAL_SWITCH = 16'h804D;   // Module_Switch1, bit 3 = X2Y
+
+    // The NES controller byte for a single direction, from the button order that
+    // nes_controller.v shifts out ($4016 bit 0 first): bit 0 A, bit 1 B, bit 2
+    // Select, bit 3 Start, bit 4 Up, bit 5 Down, bit 6 Left, bit 7 Right.  A
+    // single direction therefore lands on exactly one of these four literal bytes.
+    //
+    // THESE ARE THE EXPECTATION, AND THEY ARE NOT DERIVED FROM THE RTL.  The
+    // earlier bench checked the driver's dpad output against the same order the
+    // RTL built it in, so a reversed concatenation was internally consistent and
+    // passed while every direction was wrong on the board.  These bytes are the
+    // NES order written down as literals; the only way to satisfy them is for
+    // buttons[7:4] to carry the direction the console actually expects.
+    localparam [7:0]   NES_BTN_UP    = 8'h10;
+    localparam [7:0]   NES_BTN_DOWN  = 8'h20;
+    localparam [7:0]   NES_BTN_LEFT  = 8'h40;
+    localparam [7:0]   NES_BTN_RIGHT = 8'h80;
 
     localparam integer PANEL_W   = 800;
     localparam integer PANEL_H   = 480;
@@ -577,19 +608,23 @@ module tb_nes_touch_input;
     // middle cut.  Reading exp_* rather than the localparams is what makes the
     // sweep follow the calibration; the independent literal expectations in
     // check_region are what stop this from checking the map against itself.
+    //
+    // The return is in the NES button order, which is what the RTL must produce:
+    // bit 3 = Right, bit 2 = Left, bit 1 = Down, bit 0 = Up.  This mapping is the
+    // button order read from nes_controller.v, NOT the RTL's own concatenation.
     function [3:0] derive_dpad;
         input [15:0] x;
         input [15:0] y;
         begin
             derive_dpad = 4'b0000;
             if (x < exp_xl) begin
-                derive_dpad[1] = 1'b1;
-            end else if (x >= exp_xr) begin
-                derive_dpad[0] = 1'b1;
-            end else if (y < exp_ym) begin
-                derive_dpad[3] = 1'b1;
-            end else begin
                 derive_dpad[2] = 1'b1;
+            end else if (x >= exp_xr) begin
+                derive_dpad[3] = 1'b1;
+            end else if (y < exp_ym) begin
+                derive_dpad[0] = 1'b1;
+            end else begin
+                derive_dpad[1] = 1'b1;
             end
         end
     endfunction
@@ -673,21 +708,30 @@ module tb_nes_touch_input;
         end
     endtask
 
+    // The expected single-direction NES byte is passed in, not a dpad code: the
+    // dpad code is taken from the byte's high nibble, i.e. from the button order.
+    // Passing 0x10 / 0x20 / 0x40 / 0x80 is what makes this assertion independent
+    // of the RTL's own concatenation, which is the property the old bench lacked.
     task check_region;
         input [15:0] px;
         input [15:0] py;
-        input [3:0]  want;
+        input [7:0]  nes_byte;
+        reg   [3:0]  want;
         begin
+            want = nes_byte[7:4];
             present_panel(px, py);
+            // The NES-convention check first, so a reversed concatenation is
+            // reported by the assertion that names the required byte and not by a
+            // later dpad comparison.
+            if (buttons[7:4] !== nes_byte[7:4])
+                $fatal(1, "s%d: panel (%0d, %0d) put %b in buttons[7:4], the NES button order requires %b (%02h)",
+                       scen, px, py, buttons[7:4], nes_byte[7:4], nes_byte);
             if (dpad !== want)
                 $fatal(1, "s%d: panel (%0d, %0d) gave dpad %b, %b expected, cuts %0d/%0d/%0d",
                        scen, px, py, dpad, want, exp_xl, exp_xr, exp_ym);
             if (dpad !== derive_dpad(px, py))
                 $fatal(1, "s%d: panel (%0d, %0d) gave dpad %b, the cut formula over %0d/%0d/%0d gives %b",
                        scen, px, py, dpad, exp_xl, exp_xr, exp_ym, derive_dpad(px, py));
-            if (buttons[7:4] !== want)
-                $fatal(1, "s%d: panel (%0d, %0d) put %b in buttons[7:4], %b expected",
-                       scen, px, py, buttons[7:4], want);
             wait_quiet();
             if (dpad !== 4'b0000)
                 $fatal(1, "releasing the touch must clear the dpad, it is %b", dpad);
@@ -695,28 +739,114 @@ module tb_nes_touch_input;
     endtask
 
     // The whole region map, at and around each of the three cuts IN FORCE.  The
-    // literals L/U/D/R are the semantics, which are unchanged by the calibration;
-    // only which panel coordinate lands on them moves.
+    // literals are the NES button bytes, which are the semantics and are unchanged
+    // by the calibration; only which panel coordinate lands on them moves.
     task region_sweep;
         begin
             // left third: x below the left cut, whatever y
-            check_region(16'd0,        16'd0,        4'b0010);
-            check_region(exp_xl - 1'b1, 16'd0,        4'b0010);
-            check_region(exp_xl - 1'b1, exp_ym - 1'b1, 4'b0010);
+            check_region(16'd0,        16'd0,        NES_BTN_LEFT);
+            check_region(exp_xl - 1'b1, 16'd0,        NES_BTN_LEFT);
+            check_region(exp_xl - 1'b1, exp_ym - 1'b1, NES_BTN_LEFT);
             // the left cut is the FIRST pixel of the middle band, so it is already up
-            check_region(exp_xl,        16'd0,        4'b1000);
-            check_region(exp_xl + 1'b1, exp_ym - 1'b1, 4'b1000);
-            check_region(exp_xl + 1'b1, exp_ym,       4'b0100);
-            check_region(exp_xr - 1'b1, exp_ym - 1'b1, 4'b1000);
-            check_region(exp_xr - 1'b1, exp_ym,       4'b0100);
+            check_region(exp_xl,        16'd0,        NES_BTN_UP);
+            check_region(exp_xl + 1'b1, exp_ym - 1'b1, NES_BTN_UP);
+            check_region(exp_xl + 1'b1, exp_ym,       NES_BTN_DOWN);
+            check_region(exp_xr - 1'b1, exp_ym - 1'b1, NES_BTN_UP);
+            check_region(exp_xr - 1'b1, exp_ym,       NES_BTN_DOWN);
             // the right cut is the first pixel of Right
-            check_region(exp_xr,        16'd0,        4'b0001);
-            check_region(exp_xr,        exp_ym - 1'b1, 4'b0001);
-            check_region(exp_xr + 1'b1, exp_ym,       4'b0001);
+            check_region(exp_xr,        16'd0,        NES_BTN_RIGHT);
+            check_region(exp_xr,        exp_ym - 1'b1, NES_BTN_RIGHT);
+            check_region(exp_xr + 1'b1, exp_ym,       NES_BTN_RIGHT);
             // out of range is still one of the five regions, never none
-            check_region(exp_xr + 50,   16'd0,        4'b0001);
-            check_region(16'd0,         exp_ym + 50,  4'b0010);
-            check_region(exp_xl + 10,   exp_ym + 50,  4'b0100);
+            check_region(exp_xr + 50,   16'd0,        NES_BTN_RIGHT);
+            check_region(16'd0,         exp_ym + 50,  NES_BTN_LEFT);
+            check_region(exp_xl + 10,   exp_ym + 50,  NES_BTN_DOWN);
+        end
+    endtask
+
+    // ---- BUG 2 COVERAGE: an empty poll is not a release.
+    //
+    // A panel may report more slowly than a POLL_CYCLES poll, so a poll that finds
+    // status[7] clear means "no new sample yet", not "finger lifted".  This latches
+    // a valid report, then presents no new sample and lets the driver's own timer
+    // poll run: after exactly ONE empty poll the input must still be asserted, and
+    // only a sustained absence may clear it.  The old RTL cleared on the first
+    // empty poll, so the check right after the first poll is the one that sees the
+    // bug; a bench that never stages an empty poll cannot see it at all.
+    task empty_poll_hold;
+        input [15:0] px;
+        input [15:0] py;
+        input [7:0]  nes_byte;
+        integer p0;
+        integer bclr;
+        integer empty_seen;
+        begin
+            // A valid report, so the direction is asserted.
+            present_panel(px, py);
+            if (buttons[7:4] !== nes_byte[7:4])
+                $fatal(1, "s%d: empty-poll setup: buttons[7:4]=%b, %b expected",
+                       scen, buttons[7:4], nes_byte[7:4]);
+
+            // Stop the INT-driven early wake now, while the report's own poll is
+            // still in flight, so the polls from here come one per POLL_CYCLES and
+            // the first no-new-sample poll is a single, countable event rather than
+            // one of a back-to-back burst that could reach RELEASE_POLLS before the
+            // check below.
+            status_val = 8'h00;
+            int_drive  = 1'b1;
+            ct_int     = 1'b1;
+
+            // Let this report's own poll finish (coordinate read and flag clear), so
+            // the empty poll below is a distinct, later cycle and not this one's clear.
+            p0 = poll_cnt;
+            guard = 0;
+            while (poll_cnt <= p0 && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+            end
+            if (poll_cnt <= p0)
+                $fatal(1, "s%d: the report's own poll never completed", scen);
+            if (touch_valid !== 1'b1 || buttons[7:4] !== nes_byte[7:4])
+                $fatal(1, "s%d: the valid report did not hold after its own poll (tv=%b buttons=%b)",
+                       scen, touch_valid, buttons);
+
+            // ONE empty poll, on the driver's own POLL_CYCLES timer.
+            bclr = clr_cnt;
+            guard = 0;
+            while (clr_cnt <= bclr && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+            end
+            if (clr_cnt <= bclr)
+                $fatal(1, "s%d: no empty poll completed", scen);
+
+            // THE ASSERTION: one empty poll must NOT be treated as a release.
+            if (touch_valid !== 1'b1)
+                $fatal(1, "s%d: an empty poll was treated as a release, touch_valid dropped", scen);
+            if (buttons[7:4] !== nes_byte[7:4])
+                $fatal(1, "s%d: an empty poll dropped the buttons, [7:4]=%b, %b expected",
+                       scen, buttons[7:4], nes_byte[7:4]);
+
+            // A SUSTAINED absence must still release.
+            empty_seen = 1;
+            bclr = clr_cnt;
+            guard = 0;
+            while (touch_valid !== 1'b0 && guard < 400000) begin
+                @(negedge clk);
+                guard = guard + 1;
+                if (clr_cnt > bclr) begin
+                    bclr = clr_cnt;
+                    empty_seen = empty_seen + 1;
+                end
+            end
+            if (touch_valid !== 1'b0)
+                $fatal(1, "s%d: a sustained absence of %0d empty polls never released the touch",
+                       scen, empty_seen);
+            if (buttons[7:4] !== 4'b0000)
+                $fatal(1, "s%d: a sustained absence left buttons[7:4]=%b", scen, buttons[7:4]);
+            $display("  s%d empty-poll hold: held through 1 empty poll, released after %0d",
+                     scen, empty_seen);
+            wait_quiet();
         end
     endtask
 
@@ -1029,7 +1159,7 @@ module tb_nes_touch_input;
         run_scenario(1);
 
         base = txn_count;
-        check_region(16'd400, 16'd100, 4'b1000);
+        check_region(16'd400, 16'd100, NES_BTN_UP);
         if (touch_x !== 16'd400 || touch_y !== 16'd100)
             $fatal(1, "the coordinate read produced (%0d, %0d), (400, 100) expected", touch_x, touch_y);
         wait_quiet();
@@ -1050,6 +1180,10 @@ module tb_nes_touch_input;
         // the same byte-level walk of the region map still holds; only the numbers
         // the sweep uses are the calibrated ones.
         region_sweep();
+
+        // BUG 2: the same left region held across empty polls.  (exp_xl, 0) is the
+        // first middle-band pixel, i.e. the up region for this scenario's cuts.
+        empty_poll_hold(exp_xl, 16'd0, NES_BTN_UP);
 
         expect_touch_invalid(8'h86);
         expect_touch_invalid(8'h05);
@@ -1091,23 +1225,23 @@ module tb_nes_touch_input;
         // substitution used to be keyed off touch_valid_q, so touching the screen
         // to steer turned the two keys into Start and Select and firing with a key
         // became impossible.  Both keys are already pressed here and stay pressed
-        // across the whole report, so under the old RTL buttons would be 8'h2c at
-        // this point (dpad 0010 with A and B released and Start and Select set)
-        // instead of 8'h23.
+        // across the whole report, so under the old RTL buttons would be 8'h4c at
+        // this point (dpad 0100 with A and B released and Start and Select set)
+        // instead of 8'h43.
         if (swap_active !== 1'b0)
             $fatal(1, "scenario 1 must not swap the axes");
         present_panel(16'd0, 16'd0);
-        if (dpad !== 4'b0010)
-            $fatal(1, "touch (0, 0) gave dpad %b, 0010 expected", dpad);
-        if (buttons[7:4] !== 4'b0010)
-            $fatal(1, "touch (0, 0) put %b in buttons[7:4], 0010 expected", buttons[7:4]);
+        if (dpad !== 4'b0100)
+            $fatal(1, "touch (0, 0) gave dpad %b, 0100 expected (Left in the NES order)", dpad);
+        if (buttons[7:4] !== 4'b0100)
+            $fatal(1, "touch (0, 0) put %b in buttons[7:4], 0100 expected (0x40, Left)", buttons[7:4]);
         if (buttons[1:0] !== 2'b11)
             $fatal(1, "a screen touch released A and B, buttons[1:0] is %b", buttons[1:0]);
         if (buttons[3:2] !== 2'b00)
             $fatal(1, "a screen touch turned the keys into Start and Select, buttons[3:2] is %b",
                    buttons[3:2]);
-        if (buttons !== 8'h23)
-            $fatal(1, "a screen touch changed what the keys do: buttons %02h, 23 expected", buttons);
+        if (buttons !== 8'h43)
+            $fatal(1, "a screen touch changed what the keys do: buttons %02h, 43 expected", buttons);
 
         // Release the report; exp_btn is the low nibble expected once it is gone.
         x_val = 16'h0000; y_val = 16'h0000; status_val = 8'h00;
@@ -1144,11 +1278,11 @@ module tb_nes_touch_input;
             $fatal(1, "the TPAD must not drive the dpad, dpad is %b", dpad);
 
         // The screen dpad and the TPAD substitution are independent: both held at
-        // once must give dpad 0010 with Start and Select and A and B released.
+        // once must give dpad 0100 with Start and Select and A and B released.
         present_panel(16'd0, 16'd0);
-        if (buttons !== 8'h2C)
-            $fatal(1, "the TPAD held with a reported touch gave buttons %02h, 2c expected", buttons);
-        if (dpad !== 4'b0010)
+        if (buttons !== 8'h4C)
+            $fatal(1, "the TPAD held with a reported touch gave buttons %02h, 4c expected", buttons);
+        if (dpad !== 4'b0100)
             $fatal(1, "the touch dpad must survive the TPAD substitution, dpad is %b", dpad);
 
         wait_quiet();
@@ -1235,7 +1369,7 @@ module tb_nes_touch_input;
         present  = 1'b1;
         settle(4);
 
-        check_region(exp_xr, exp_ym + 240, 4'b0001);
+        check_region(exp_xr, exp_ym + 240, NES_BTN_RIGHT);
         if (touch_error !== 1'b1)
             $fatal(1, "touch_error must stay set once a NACK has been seen");
 

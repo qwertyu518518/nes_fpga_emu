@@ -1096,7 +1096,8 @@ module tb_nes_zynq_top;
 
         // A reported touch has to come back as coordinates and as the dpad half
         // of the button byte.  (100, 120) is left of the calibrated x_left cut at
-        // 199, so dpad is 4'b0010.  The calibration did not move this verdict: the
+        // 199, so dpad is 4'b0100 (Left is bit 6 in the NES order).  The
+        // calibration did not move this verdict: the
         // report was inside the left third before it and it is inside the left
         // third now, and that is the point of testing a coordinate that is not on
         // a boundary.
@@ -1159,8 +1160,8 @@ module tb_nes_zynq_top;
             err("TOUCH_REPORT_NEVER_LATCHED", dut.u_touch.touch_valid, dut.u_touch.touch_x);
         if (dut.u_touch.touch_error !== 1'b0) err("TOUCH_ERROR_ON_A_REPORT", dut.u_touch.touch_error, 0);
         if (sl_coord_rds < 1) err("TOUCH_COORDINATES_NEVER_READ", sl_coord_rds, 1);
-        if (dut.touch_buttons[7:4] !== 4'b0010)
-            err("TOUCH_DPAD_LEFT", dut.touch_buttons[7:4], 4'b0010);
+        if (dut.touch_buttons[7:4] !== 4'b0100)
+            err("TOUCH_DPAD_LEFT", dut.touch_buttons[7:4], 4'b0100);
         $display("TOUCH panel reported (%0d, %0d) status %02h, dpad %b, buttons %02h",
                  dut.u_touch.touch_x, dut.u_touch.touch_y, sl_status,
                  dut.touch_buttons[7:4], dut.touch_buttons);
@@ -1171,18 +1172,18 @@ module tb_nes_zynq_top;
         // expire in.  The substitution used to be keyed off touch_valid_q, so with
         // the report latched the two keys became Start and Select and A and B were
         // released, which is what made steering with the screen and firing with a
-        // key mutually exclusive on the board.  Under that RTL buttons is 8'h2c
-        // here, not 8'h23.
+        // key mutually exclusive on the board.  Under that RTL buttons is 8'h4c
+        // here, not 8'h43.
         if (dut.u_touch.touch_valid !== 1'b1)
             err("TOUCH_REPORT_EXPIRED_BEFORE_THE_KEY_CHECK", dut.u_touch.touch_valid, 1);
         if (dut.touch_buttons[1:0] !== 2'b11)
             err("SCREEN_TOUCH_RELEASED_A_AND_B", dut.touch_buttons[1:0], 2'b11);
         if (dut.touch_buttons[3:2] !== 2'b00)
             err("SCREEN_TOUCH_PROMOTED_KEYS_TO_START_SELECT", dut.touch_buttons[3:2], 0);
-        if (dut.touch_buttons[7:4] !== 4'b0010)
-            err("TOUCH_DPAD_LOST_WHILE_KEYS_HELD", dut.touch_buttons[7:4], 4'b0010);
-        if (dut.touch_buttons !== 8'h23)
-            err("SCREEN_TOUCH_CHANGED_THE_KEYS", dut.touch_buttons, 8'h23);
+        if (dut.touch_buttons[7:4] !== 4'b0100)
+            err("TOUCH_DPAD_LOST_WHILE_KEYS_HELD", dut.touch_buttons[7:4], 4'b0100);
+        if (dut.touch_buttons !== 8'h43)
+            err("SCREEN_TOUCH_CHANGED_THE_KEYS", dut.touch_buttons, 8'h43);
         $display("KEYS screen touch latched, keys still A/B: buttons=%02h (dpad %b, start/select %b, A/B %b)",
                  dut.touch_buttons, dut.touch_buttons[7:4], dut.touch_buttons[3:2],
                  dut.touch_buttons[1:0]);

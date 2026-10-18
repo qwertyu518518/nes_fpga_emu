@@ -91,7 +91,8 @@
 //
 // buttons[7:0] drives nes_controller.v: bit 0 is the first bit shifted out on
 // $4016, so the order is A, B, Select, Start, Up, Down, Left, Right, and
-// buttons[7:4] is exactly the touch dpad {Up, Down, Left, Right}.
+// buttons[7:4] is the touch dpad with Up on bit 4, Down on bit 5, Left on bit 6
+// and Right on bit 7.
 // key[0] and key[1] are the two active low PL keys.  touch_key is the board
 // TPAD, a third discrete button on its own pin.  While it is held the two keys
 // drive Start and Select instead of A and B, because those two pairs of NES
@@ -115,6 +116,12 @@ module nes_touch_input #(
     parameter integer CT_RST_LOW_CYCLES  = 500_000,
     parameter integer CT_RST_WAIT_CYCLES = 2_500_000,
     parameter integer POLL_CYCLES        = 1_000_000,
+    // Consecutive polls that may find no new sample before the last valid report
+    // is treated as a release.  One poll is POLL_CYCLES = 1,000,000 clk = 20 ms
+    // at 50 MHz, so 4 polls is 80 ms: a real lift is reported within 80 ms, while
+    // a panel whose report rate is slower than the 20 ms poll (down to one report
+    // per 80 ms) cannot produce a false release.
+    parameter integer RELEASE_POLLS      = 4,
     parameter integer USE_CT_INT         = 1
 ) (
     input  wire        clk,
@@ -196,6 +203,10 @@ module nes_touch_input #(
     localparam integer DB_CW  = (DB_RAW < 1) ? 1 : DB_RAW;
     localparam [DB_CW-1:0]  DB_M1 = DEBOUNCE_CYCLES - 1;
 
+    localparam integer REL_RAW = clog2(RELEASE_POLLS + 1);
+    localparam integer REL_CW  = (REL_RAW < 1) ? 1 : REL_RAW;
+    localparam [REL_CW-1:0] REL_M1 = RELEASE_POLLS - 1;
+
     localparam [5:0]
         SQ_RST_LO   = 6'd0,
         SQ_RST_HI   = 6'd1,
@@ -268,6 +279,7 @@ module nes_touch_input #(
 
     reg               ct_int_meta_q;
     reg               ct_int_sync_q;
+    reg  [REL_CW-1:0] empty_cnt_q;
 
     reg        req_start;
     reg        req_rep;
@@ -382,6 +394,7 @@ module nes_touch_input #(
             x_left_edge_q  <= X_LEFT_EDGE;
             x_right_edge_q <= X_RIGHT_EDGE;
             y_mid_edge_q   <= Y_MID_EDGE;
+            empty_cnt_q    <= {REL_CW{1'b0}};
         end else begin
             poll_done_q <= 1'b0;
             case (seq_q)
@@ -431,10 +444,26 @@ module nes_touch_input #(
                 SQ_EVAL   : begin
                     if (status_q[7] && (status_q[3:0] >= 4'd1) && (status_q[3:0] <= 4'd5)) begin
                         touch_valid_q <= 1'b1;
+                        empty_cnt_q   <= {REL_CW{1'b0}};
                         seq_q         <= SQ_CO_WR;
                     end else begin
-                        touch_valid_q <= 1'b0;
-                        seq_q         <= SQ_CLR_WR;
+                        // A poll that finds no new sample is NOT a finger lift.
+                        // The controller sets its data-ready flag only when it has
+                        // fresh data, so a panel reporting more slowly than the
+                        // poll leaves alternate (or several) polls empty while the
+                        // touch is still held.  Clearing touch_valid_q here dropped
+                        // the dpad for those polls and the console saw the
+                        // direction only intermittently on the board.  Hold the
+                        // last valid coordinates and the asserted state until the
+                        // controller has reported nothing for RELEASE_POLLS
+                        // consecutive polls; only then is it a release.
+                        if (empty_cnt_q >= REL_M1) begin
+                            touch_valid_q <= 1'b0;
+                            empty_cnt_q   <= REL_M1;
+                        end else begin
+                            empty_cnt_q   <= empty_cnt_q + 1'b1;
+                        end
+                        seq_q <= SQ_CLR_WR;
                     end
                 end
                 SQ_CO_WR  : if (byte_nack) seq_q <= SQ_ABORT; else if (byte_done) seq_q <= SQ_CO_REGH;
@@ -669,10 +698,10 @@ module nes_touch_input #(
     wire       region_middle = ~region_left & ~region_right;
     wire       region_upper  = (touch_y_q <  y_mid_edge_q);
 
-    wire [3:0] touch_dpad    = {touch_valid_q & region_middle &  region_upper,
-                                touch_valid_q & region_middle & ~region_upper,
+    wire [3:0] touch_dpad    = {touch_valid_q & region_right,
                                 touch_valid_q & region_left,
-                                touch_valid_q & region_right};
+                                touch_valid_q & region_middle & ~region_upper,
+                                touch_valid_q & region_middle &  region_upper};
 
     assign buttons     = {touch_dpad, key_start, key_select, btn_b, btn_a};
     assign dpad        = touch_dpad;
