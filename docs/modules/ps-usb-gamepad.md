@@ -271,18 +271,20 @@ its `pl_gamepad` output.
 ## 10. Build result
 
 Rebuilt with this change through the existing scripts (`run_build.ps1 -Mode
-full`, then `run_sdk.ps1`), now including the PL delivery path:
+full`, then `run_sdk.ps1`), now including the PL delivery path. Rebuilt again on
+`master` at `389e365` (2026-10-19) with the HDMI output and the two touch fixes
+present; the figures below are that rebuild:
 
 | Artefact | Value |
 | --- | --- |
 | Block design | validates; synthesis/implementation 0 errors |
-| Routed timing | **WNS +2.626 ns, 0 failing setup endpoints** (of 85,915); WHS +0.065, 0 hold; all user constraints met |
-| Routed utilisation | 42,073 LUT / 40,411 FF / **82 Block RAM Tile / RAMB18 = 0** |
+| Routed timing | **WNS +2.364 ns, 0 failing setup endpoints** (of 85,966); WHS +0.051, 0 hold; all user constraints met |
+| Routed utilisation | 42,120 LUT / 40,434 FF / **82 Block RAM Tile / RAMB18 = 0** |
 | CHR/PRG arrays | still in block RAM: `u_prg_rom` RAMB36 = 16, `u_cart_chr` RAMB36 = 2, RAMB18 = 0 for both |
-| Bitstream `ps_nes.bit` | 4,045,674 bytes |
+| Bitstream `ps_nes.bit` | 4,045,674 bytes, SHA256 `54EFE1DABE226DB227FCAAAC1E5540D333E6F2D7F1676C33FD8010E6E3AA20E7` |
 | FSBL `fsbl.elf` | 537,276 bytes |
-| Application `loader_app.elf` | 492,156 bytes |
-| `BOOT.bin` | **4,215,424 bytes**, SHA256 `0A560ED84682B22EA331D4AD4CD06583E3E47B4EFE5BCFBD760262F93785310F` |
+| Application `loader_app.elf` | 492,240 bytes |
+| `BOOT.bin` | **4,215,424 bytes**, SHA256 `972596583FD21908CB41781CB95FDF457474B99A7087C52C341972C1E3156979` |
 
 `BOOT.bin` is the same three-partition image (FSBL + application + PL bitstream)
 the SD boot flow consumes. The gamepad register crossing adds one
