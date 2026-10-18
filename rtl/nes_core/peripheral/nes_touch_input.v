@@ -30,10 +30,22 @@
 //   configured the controller to do otherwise.  The vendor's only FPGA example
 //   prints the two numbers as digits, in which a transposed frame looks
 //   perfectly correct, so "the vendor passes it through" is not evidence that the
-//   frame arriving on the bus is the frame the code assumes.  The d-pad from a
-//   screen touch was wrong in all four directions on a board that is otherwise
-//   correct, with the region map geometrically right, which is the signature of
-//   the coordinates being in a different frame from the one hardcoded below.
+//   frame arriving on the bus is the frame the code assumes.
+//
+//   THE SYMPTOM THAT STARTED THIS WAS MISATTRIBUTED, AND THE DIAGNOSTIC THAT
+//   SETTLED IT.  The d-pad from a screen touch was wrong in all four directions
+//   on a board that is otherwise correct, with the region map geometrically
+//   right, and that was read here as the signature of the coordinates being in a
+//   different frame.  It was not.  A diagnostic build that drew the RAW reported
+//   coordinate on screen showed it landing exactly where the finger touched, so
+//   the frame was correct all along, and the four directions were wrong because
+//   touch_dpad was concatenated in the REVERSE of the $4016 button order - see
+//   the bit-order note near the vector itself, and docs/modules/touch-input.md
+//   section 11, which records the whole sequence including two earlier wrong
+//   diagnoses that would each have produced a plausible-looking change.  The
+//   calibration below is still worth having on its own terms, but it is NOT what
+//   fixed the d-pad, and no reader should take this paragraph as evidence that
+//   the frame was ever wrong on this board.
 //
 //   The GT9147 does not have to be asked indirectly.  It detects its own module
 //   parameters and generates its own configuration at power up (GT9147 datasheet
