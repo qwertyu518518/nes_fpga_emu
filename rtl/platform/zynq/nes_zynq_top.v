@@ -372,7 +372,11 @@ module nes_zynq_top #(
     // NOT drawn and the pixel is ordinary video: a marker that is present
     // regardless of its signal is exactly the defect the earlier raw-coordinate
     // diagnostic had, where a crosshair sat in the corner from power-up.
-    parameter integer TOUCH_DEBUG_MARKER  = 1
+    // DEFAULT OFF.  Both signals this exists to separate are now hardware-
+    // confirmed: the four d-pad directions were confirmed correct after 73ad2e2,
+    // and the stutter was confirmed gone after d2c0963.  Set this back to 1 to
+    // re-enable the two boxes when diagnosing a fresh touch fault.
+    parameter integer TOUCH_DEBUG_MARKER  = 0
 ) (
     input  wire        sys_clk,
     input  wire        sys_rst_n,
